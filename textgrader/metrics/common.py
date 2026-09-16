@@ -21,12 +21,17 @@ one report describe the same document.
 text (a few hundred thousand words):
 
 ``fast``
-    linear over tokens or sentences; well under a second.
+    linear over tokens or sentences; under half a second.
 ``moderate``
     superlinear or repeated passes; up to a few seconds.
 ``parse``
     needs the spaCy parse, which is tens of seconds for a novel.  Everything
     marked ``parse`` shares one parse, so enabling five of them costs one.
+``model``
+    encodes the text with a sentence-embedding model: tens of seconds for a
+    novel, shared between the metrics that want the same units.  Without the
+    model these still run, on a lexical fallback that is a weaker measurement
+    and says so in every finding.
 
 ``MIN_SAMPLE`` is the manuscript-side sample-size rule.  A passive-voice rate
 from three sentences and one from three thousand do not deserve equal standing,
@@ -44,7 +49,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .. import stats as stats_module
 from ..stats import quantile, summarize
 
-FAST, MODERATE, PARSE = "fast", "moderate", "parse"
+FAST, MODERATE, PARSE, MODEL = "fast", "moderate", "parse", "model"
 
 
 def finding(metric_id: str, name: str, value: Any = None, unit: str | None = None, *,
@@ -140,6 +145,6 @@ def result(metric_id, name, value, unit=None, details=None, warning=None, **extr
     return finding(metric_id, name, value, unit, details=details, warning=warning, **extra)
 
 
-__all__ = ["FAST", "MODERATE", "PARSE", "finding", "unavailable", "shape", "rate",
+__all__ = ["FAST", "MODERATE", "PARSE", "MODEL", "finding", "unavailable", "shape", "rate",
            "rates", "cosine_distance", "top", "option", "tokens", "lengths",
            "result", "quantile", "summarize", "statistics", "stats_module"]

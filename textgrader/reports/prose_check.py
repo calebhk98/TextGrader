@@ -40,9 +40,7 @@ import re
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
+from .. import project as project_config
 
 # Quoted text is the manuscript's, or a character's, so the sheet's own prose
 # rules do not reach it. Sam saying "This is the worst mistake of my life" is
@@ -111,12 +109,18 @@ def main(argv=None):
                     help="character-sheet files (never the manuscript; use --manuscript for that)")
     parser.add_argument("--manuscript", type=Path,
                     help="scan this one manuscript/chapter file's prose instead of a character sheet")
-    parser.add_argument("--root", type=Path, default=HERE)
+    parser.add_argument("--root", type=Path, default=None,
+                        help="project root; defaults to the configuration's directory")
     parser.add_argument("--config", help="path to a config.json "
                     "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--rule", type=int, choices=(1, 2, 3), help="check only this rule")
     parser.add_argument("--show", action="store_true", help="print the whole sentence")
     args = parser.parse_args(argv)
+    # The project root defaults to wherever the configuration lives, so a
+    # --config elsewhere moves the whole project with it.
+    if args.root is None:
+        args.root = Path(project_config.load_config(getattr(args, "config", None))["_config_dir"])
+
 
     config = project_config.load_config(args.config)
     settings = project_config.measure_settings("prose_check", config)

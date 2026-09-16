@@ -2,7 +2,7 @@
   "manuscript": "MANUSCRIPT.md",
   "chapters_dir": "chapters",
   "characters_dir": "characters",
-  "corpus_profile": "prose_reference.json",
+  "corpus_profile": "data/prose_reference.json",
   "analysis": {
     "comparison_unit": "unknown",
     "min_sentences_for_corpus": 40,

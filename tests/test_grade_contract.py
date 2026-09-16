@@ -168,7 +168,7 @@ def test_bundled_measures_get_the_manuscript_not_its_directory():
 
 
 def test_a_custom_config_reaches_the_bundled_reports(tmp_path, monkeypatch):
-    from project_config import CONFIG_ENV_VAR
+    from textgrader.project import CONFIG_ENV_VAR
     recorded = {}
 
     def fake_run(command, **kwargs):

@@ -10,7 +10,7 @@ import pytest
 import grade
 
 ROOT = Path(__file__).resolve().parents[1]
-MEASURES = ROOT / "measures"
+REPORTS = ROOT / "textgrader" / "reports"
 EXAMPLE = ROOT / "examples" / "project_measures.example.json"
 
 # Names and fragments from the one manuscript this repository was extracted
@@ -21,7 +21,7 @@ FORBIDDEN = ["chloe", "kavi", "nadia", "kayleigh", "marisol", "aldana",
              "puts it back down", "both hands", "MANUSCRIPT_FULL"]
 
 
-@pytest.mark.parametrize("path", sorted(MEASURES.glob("*.py")))
+@pytest.mark.parametrize("path", sorted(REPORTS.glob("*.py")))
 def test_no_measure_names_one_manuscript(path):
     body = path.read_text(encoding="utf-8").lower()
     found = [needle for needle in FORBIDDEN if needle.lower() in body]
@@ -74,7 +74,7 @@ def test_every_bundled_report_runs_clean_with_no_policy(name, tmp_path, sample_t
 
     arguments = [part.format(manuscript=str(manuscript)) for part in grade.BUNDLED_MEASURES[name]]
     completed = subprocess.run(
-        [sys.executable, str(MEASURES / f"{name}.py"), *arguments],
+        [sys.executable, "-m", f"textgrader.reports.{name}", *arguments],
         cwd=tmp_path, capture_output=True, text=True, timeout=180,
         env={"PATH": "/usr/bin:/bin", "HALSTEAD_VIA_GRADE": "1",
              "TEXTGRADER_CONFIG": str(config),
@@ -98,7 +98,7 @@ def test_a_bundled_report_reads_the_file_it_was_given(tmp_path):
     target = tmp_path / "given.md"
     target.write_text("The cat sat on the mat and then it left. " * 40, encoding="utf-8")
     completed = subprocess.run(
-        [sys.executable, str(MEASURES / "register.py"), str(target)],
+        [sys.executable, "-m", "textgrader.reports.register", str(target)],
         cwd=tmp_path, capture_output=True, text=True, timeout=120,
         env={"PATH": "/usr/bin:/bin", "HALSTEAD_VIA_GRADE": "1",
              "TEXTGRADER_CONFIG": str(config), "PYTHONPATH": str(ROOT)})

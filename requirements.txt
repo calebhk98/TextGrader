@@ -27,8 +27,12 @@ numpy>=1.24
 # General-language word frequencies, replacing the contaminated bundled table.
 wordfreq>=3.0
 
-# MATTR, MTLD, HD-D and friends.  TextGrader implements MTLD and HD-D itself as
-# a fallback, so this is an agreement check as much as a dependency.
+# MATTR, MTLD, HD-D and friends.  TextGrader implements MTLD and HD-D itself,
+# so this is a cross-check rather than a requirement, and the metrics report
+# which implementation produced the number.
+#
+# Note: as of writing, lexicalrichness fails to build against setuptools 68+
+# ("AttributeError: install_layout"). If that happens, skip it; nothing breaks.
 lexicalrichness>=0.5
 
 # Unicode-aware matching AND a matching timeout, so a user-supplied regex in
@@ -44,7 +48,10 @@ scikit-learn>=1.3
 # Tabular convenience for corpus work.
 pandas>=2.0
 
-# Descriptive statistics, readability and dependency distance on top of spaCy.
+# Descriptive statistics, readability, dependency distance and coherence on top
+# of spaCy.  TextGrader computes these directly from the shared parse, so this
+# is here for users who want its extra features in their own code rather than
+# because a metric needs it.
 textdescriptives>=2.8
 
 # Test runner.  The suite is pytest-based; `unittest discover` silently skipped

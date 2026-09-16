@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
-import importlib.util
 import json
 import os
 import statistics
@@ -42,8 +41,9 @@ SCHEMA_VERSION = 2
 PARSER_VERSION = "2"
 METRIC_DEFINITION_VERSION = "2"
 
+from .core_metrics import measure as core_measure
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing
-from .metrics import REGISTRY
+from .metrics import MODEL_METRICS, REGISTRY
 from .stats import summarize
 
 CORE_METRIC_KEYS = (
@@ -57,18 +57,6 @@ CORE_METRIC_KEYS = (
 #: compare these across different ``comparison_unit`` values.
 SCALE_DEPENDENT = {"_words", "_sentences", "_paragraphs",
                    "word_count", "sentence_count", "paragraph_count"}
-
-
-def _core_module():
-    """Load the core calculator without making ``measures`` a package."""
-
-    path = Path(__file__).resolve().parents[1] / "measures" / "prose_grade.py"
-    spec = importlib.util.spec_from_file_location("textgrader_corpus_prose_grade", path)
-    if spec is None or spec.loader is None:  # pragma: no cover - installation damage
-        raise RuntimeError(f"cannot load core prose metrics from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _source_files(inputs: Iterable[str | Path]) -> list[tuple[int, Path, str]]:
@@ -123,25 +111,19 @@ def _timestamp(value: str | None) -> str:
     return moment.isoformat().replace("+00:00", "Z")
 
 
-def _metric_names(metrics: Mapping[str, Any] | None, include_parse: bool) -> list[str]:
+def _metric_names(include_parse: bool, include_model: bool) -> list[str]:
     """Which registered metrics to precompute for every corpus text.
 
-    Everything dependency-free is profiled regardless of whether it is enabled
-    for grading, because a distribution is only useful if it already exists when
-    somebody turns a metric on.  Parse-based metrics are opt-in: they are tens
-    of seconds per book.
+    Everything cheap is profiled whether or not it is enabled for grading,
+    because a distribution is only useful if it already exists on the day
+    somebody turns a metric on.  Two groups are opt-in because of what they
+    cost per book, not because they are unwanted: the spaCy metrics are tens of
+    seconds each, and the semantic ones download and run an embedding model.
     """
 
-    out = []
-    for name, spec in REGISTRY.items():
-        if spec.needs_parse and not include_parse:
-            continue
-        if spec.requires and not spec.needs_parse:
-            # An optional package may be missing on the machine that grades even
-            # if it is present here; the metric still degrades gracefully.
-            pass
-        out.append(name)
-    return out
+    return [name for name, spec in REGISTRY.items()
+            if (include_parse or not spec.needs_parse)
+            and (include_model or not spec.needs_model)]
 
 
 def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local corpus",
@@ -153,6 +135,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                   comparison_unit: str = "book",
                   include_core_metrics: bool = True,
                   include_parse_metrics: bool = False,
+                  include_model_metrics: bool = False,
                   progress=None) -> dict[str, Any]:
     """Profile local text files without retaining or later requiring raw books."""
 
@@ -169,8 +152,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     processing = TextProcessing.from_config(settings)
     nlp_settings = NlpSettings.from_config(nlp)
     metric_settings = dict(metrics or {})
-    wanted = _metric_names(metric_settings, include_parse_metrics)
-    core_module = _core_module() if include_core_metrics else None
+    wanted = _metric_names(include_parse_metrics, include_model_metrics)
 
     books: list[dict[str, Any]] = []
     used_ids: Counter[str] = Counter()
@@ -211,8 +193,8 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
             "metadata": {key: value for key, value in item_meta.items()
                          if key not in {"id", "filename", "path"}},
         }
-        if core_module is not None:
-            core = core_module.measure(analysis, floor=1)
+        if include_core_metrics:
+            core = core_measure(analysis, floor=1)
             if core:
                 book.update({key: core[key] for key in CORE_METRIC_KEYS
                              if core.get(key) is not None})
@@ -275,6 +257,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "preprocessing": processing.fingerprint(),
         "core_metrics": include_core_metrics,
         "parse_metrics": include_parse_metrics,
+        "model_metrics": include_model_metrics,
         "metric_settings": effective,
         "metric_errors": metric_errors,
         "book_count": len(books), "books": books,
@@ -317,6 +300,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="omit the default core prose distributions")
     parser.add_argument("--parse-metrics", action="store_true",
                         help="also profile the spaCy-parse metrics (tens of seconds per book)")
+    parser.add_argument("--model-metrics", action="store_true",
+                        help="also profile the semantic metrics, which download and run a "
+                             "sentence-embedding model over every book")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8")) if args.manifest else None
@@ -331,7 +317,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         text_processing=config.get("text_processing"), nlp=config.get("nlp"),
         metrics=config.get("metrics", {}), comparison_unit=args.comparison_unit,
         include_core_metrics=not args.no_core_metrics,
-        include_parse_metrics=args.parse_metrics, progress=progress)
+        include_parse_metrics=args.parse_metrics,
+        include_model_metrics=args.model_metrics, progress=progress)
     write_profile(profile, args.output)
     if not args.quiet:
         print(f"\nwrote {profile['book_count']} {args.comparison_unit}(s) to {args.output}")

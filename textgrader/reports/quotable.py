@@ -46,11 +46,8 @@ that needs building, not this one.
 import argparse, glob, re, statistics, sys
 from pathlib import Path
 
-# The measures live in measures/; the manuscript is a level up.
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
-from textgrader.text import strip_gutenberg
+from .. import project as project_config
+from ..text import strip_gutenberg
 
 WORD = re.compile(r"[A-Za-z']+")
 QUOTE = re.compile(r'["“]([^"“”]{25,1500})["”]')

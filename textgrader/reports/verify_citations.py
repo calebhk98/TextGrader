@@ -46,9 +46,7 @@ import re
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
+from .. import project as project_config
 
 
 def norm(text):
@@ -100,12 +98,18 @@ def main(argv=None):
     parser.add_argument("--manuscript", type=Path,
                     help="the manuscript file to search for citations; default: "
                          "the configured manuscript, alongside the configured chapters directory")
-    parser.add_argument("--root", type=Path, default=HERE)
+    parser.add_argument("--root", type=Path, default=None,
+                        help="project root; defaults to the configuration's directory")
     parser.add_argument("--config", help="path to a config.json "
                     "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--min-words", type=int, default=None,
                     help="ignore quotations shorter than this (default: configured, or 5)")
     args = parser.parse_args(argv)
+    # The project root defaults to wherever the configuration lives, so a
+    # --config elsewhere moves the whole project with it.
+    if args.root is None:
+        args.root = Path(project_config.load_config(getattr(args, "config", None))["_config_dir"])
+
 
     config = project_config.load_config(args.config)
     settings = project_config.measure_settings("verify_citations", config)

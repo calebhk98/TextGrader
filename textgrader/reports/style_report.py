@@ -41,9 +41,7 @@ from collections import Counter
 from pathlib import Path
 from statistics import fmean, median, stdev
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
+from .. import project as project_config
 
 ABBR = r'(?:Mrs|Mr|Ms|Dr|St|Jr|Sr|vs|etc|[A-Z])'
 

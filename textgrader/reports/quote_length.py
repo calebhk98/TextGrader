@@ -37,9 +37,7 @@ import statistics
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
+from .. import project as project_config
 
 import re
 

@@ -51,7 +51,7 @@ from collections import Counter, OrderedDict
 from typing import Any, Mapping, Sequence
 
 from ..document import DocumentAnalysis
-from ..optional import require
+from ..optional import on_reset, require
 from ..stats import summarize
 from .common import MODERATE, finding, option, tokens as tokenize
 
@@ -90,6 +90,15 @@ def truncate(text: str, limit: int = EVIDENCE_SNIPPET_CHARS) -> str:
 # ---------------------------------------------------------------- model cache
 
 _MODEL_CACHE: dict[str, tuple[Any, str | None]] = {}
+
+
+def _reset_model_cache() -> None:
+    """Drop the loaded model and any recorded "unavailable" answer."""
+
+    _MODEL_CACHE.clear()
+
+
+on_reset(_reset_model_cache)
 
 
 def _load_model(model_name: str) -> tuple[Any, str | None]:
@@ -181,11 +190,17 @@ def backend_note(backend: str, model_name: str, reason: str | None) -> str:
         return (f"backend=embedding: cosine similarity of {model_name!r} "
                 f"sentence-transformers embeddings")
     detail = f" ({reason})" if reason else ""
+    # Concrete, because "proxy" is easy to skim past. On the pair
+    # "The dog was extremely happy to see her." / "The canine was overjoyed at
+    # her arrival." the embedding backend scores 0.79 and this one scores 0.00,
+    # which is the whole job of the metric going undone.
     return (f"backend=lexical: sentence-transformers unavailable{detail}; used a "
             f"dependency-free TF-IDF content-word cosine fallback instead. This is a "
-            f"lexical-overlap proxy, not semantic similarity: it will miss a paraphrase "
-            f"that changes vocabulary and can over-flag unrelated sentences that share a "
-            f"rare word")
+            f"lexical-overlap proxy, NOT semantic similarity. A paraphrase that changes "
+            f"its content words scores near zero here and near 0.8 with embeddings, so a "
+            f"low value from this backend is not evidence of no repetition. "
+            f"Install sentence-transformers (pip install -r requirements-embeddings.txt) "
+            f"for the measurement this metric is for")
 
 
 # ------------------------------------------------------- per-document caching

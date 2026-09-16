@@ -27,10 +27,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-# The measures live in measures/; the manuscript is a level up.
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
+from .. import project as project_config
 
 WORDS = ("one two three four five six seven eight nine ten eleven twelve thirteen "
          "fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty forty "

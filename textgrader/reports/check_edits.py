@@ -32,10 +32,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
-from textgrader.chapters import chapter_number
+from .. import project as project_config
+from ..chapters import chapter_number
 
 WORD = re.compile(r"[A-Za-z][A-Za-z']*")
 

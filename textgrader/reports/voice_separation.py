@@ -40,10 +40,8 @@ import statistics as st
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
-from textgrader.text import TranscriptConfig, transcript_lines
+from .. import project as project_config
+from ..text import TranscriptConfig, transcript_lines
 
 # Titles, speech verbs and hedge phrases are generic English, not facts about
 # any one manuscript, so they stay as module defaults. A project can still

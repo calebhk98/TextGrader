@@ -23,7 +23,7 @@ import random
 import time
 from pathlib import Path
 
-from project_config import load_config
+from textgrader.project import load_config
 from textgrader.document import DocumentAnalysis, NlpSettings, TextProcessing
 from textgrader.metrics import REGISTRY
 

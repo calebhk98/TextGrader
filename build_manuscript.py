@@ -29,7 +29,7 @@ import re
 import sys
 from pathlib import Path
 
-from project_config import CHAPTERS_DIR, MANUSCRIPT
+from textgrader.project import CHAPTERS_DIR, MANUSCRIPT
 from textgrader.chapters import chapter_number
 
 HERE = Path(__file__).resolve().parent

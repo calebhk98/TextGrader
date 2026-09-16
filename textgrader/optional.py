@@ -36,6 +36,11 @@ PACKAGES: dict[str, tuple[str, str]] = {
 
 _lock = threading.Lock()
 _cache: dict[str, tuple[Any, str | None]] = {}
+#: Modules that keep their own cache of something built from an optional
+#: package register a callback here, so clearing this cache really does restore
+#: a first-run state.  Without it a test that simulates a missing package
+#: leaves a module holding the "unavailable" answer for the rest of the process.
+_reset_hooks: list = []
 
 
 def _disabled() -> set[str]:
@@ -67,11 +72,22 @@ def have(name: str) -> bool:
     return require(name)[0] is not None
 
 
+def on_reset(callback) -> None:
+    """Register a cache to clear whenever :func:`reset_cache` is called."""
+
+    with _lock:
+        if callback not in _reset_hooks:
+            _reset_hooks.append(callback)
+
+
 def reset_cache() -> None:
     """Forget cached import outcomes; used by tests that toggle availability."""
 
     with _lock:
         _cache.clear()
+        hooks = list(_reset_hooks)
+    for hook in hooks:
+        hook()
 
 
 def installed() -> dict[str, str | None]:

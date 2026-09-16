@@ -18,7 +18,8 @@ import json
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+from .paths import ROOT
+
 DEFAULT_CONFIG_PATH = ROOT / "config.json"
 
 #: Set by ``grade.py`` before it launches a bundled report.

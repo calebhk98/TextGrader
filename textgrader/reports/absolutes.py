@@ -25,24 +25,19 @@ exception.
 """
 
 import argparse
-import importlib.util
 import json
 import re
 import statistics as statistics
 import sys
 from pathlib import Path
 
-# The measures live in measures/; the manuscript is a level up.
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
+from .. import project as project_config
+from ..core_metrics import measure
+from ..paths import ABSOLUTES_REFERENCE
+from ..text import (paragraphs, sentences as sents, strip_gutenberg,
+                    strip_transcript, words)
 
-spec = importlib.util.spec_from_file_location(
-    "pg", Path(__file__).resolve().parent / "prose_grade.py")
-prose_grade = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(prose_grade)
-
-REF = HERE / "absolutes_reference.json"
+REF = ABSOLUTES_REFERENCE
 
 # Strong universals only. "all" and "every" on their own are far too common in
 # ordinary prose to separate signal from noise, so they count only in the
@@ -85,19 +80,19 @@ WINDOW = 3   # sentences after the absolute in which an exception counts
 
 
 def measure(text, side="all"):
-    text, _ = prose_grade.strip_transcript(text)
+    text, _ = strip_transcript(text)
     if side == "narration":
         text = QUOTED.sub(" ", text)
     elif side == "spoken":
         text = " ".join(match.group(0).strip('"') for match in QUOTED.finditer(text))
-    paras = [paragraph for paragraph in prose_grade.paragraphs(text) if paragraph.strip() != "---"]
-    sentences = [sentence for paragraph in paras for sentence in prose_grade.sents(paragraph) if prose_grade.words(sentence)]
+    paras = [paragraph for paragraph in paragraphs(text) if paragraph.strip() != "---"]
+    sentences = [sentence for paragraph in paras for sentence in sents(paragraph) if words(sentence)]
     if len(sentences) < 10:
         return None if side == "all" else {
-            "words": len(prose_grade.words(text)), "sentences": len(sentences),
+            "words": len(words(text)), "sentences": len(sentences),
             "absolutes": 0, "per1000": 0.0, "share": 0.0,
             "pairs": [], "lines": []}
-    word_count = len(prose_grade.words(text))
+    word_count = len(words(text))
     hits = [hit_index for hit_index, sentence in enumerate(sentences) if ABSOLUTE.search(sentence)]
     pairs = []
     for hit_index in hits:
@@ -123,7 +118,7 @@ def build(dirs):
             if "stripped" in text_path.stem:
                 continue
             text = text_path.read_text(encoding="utf-8", errors="replace")
-            text = prose_grade.strip_gutenberg(text) if hasattr(prose_grade, "strip_gutenberg") else text
+            text = strip_gutenberg(text)
             measurements = measure(text)
             if measurements:
                 out[text_path.stem] = {key: measurements[key] for key in ("per1000", "share", "words")}

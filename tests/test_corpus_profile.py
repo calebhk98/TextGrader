@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from corpus_profile import build_profile, load_profile, write_profile
+from textgrader.corpus import build_profile, load_profile, write_profile
 
 
 class CorpusProfileTests(unittest.TestCase):

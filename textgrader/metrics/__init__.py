@@ -24,10 +24,11 @@ class MetricSpec:
     module: str
     #: Style family reported with every finding.
     family: str
-    #: ``fast``, ``moderate`` or ``parse``.  Measured, not guessed: run
-    #: ``python3 benchmark.py`` to reproduce the figures in the README.
-    #: ``fast`` is under half a second on a 300,000-word novel, ``moderate``
-    #: is up to a few seconds, ``parse`` needs the shared spaCy parse.
+    #: ``fast``, ``moderate``, ``parse`` or ``model``.  Measured, not guessed:
+    #: run ``python3 benchmark.py`` to reproduce the README's figures.
+    #: ``fast`` is under half a second on a 300,000-word novel, ``moderate`` is
+    #: up to a few seconds, ``parse`` needs the shared spaCy parse, and
+    #: ``model`` encodes the text with a sentence-embedding model.
     cost: str = "fast"
     #: Optional packages the metric uses; absence degrades it, not the run.
     requires: tuple[str, ...] = ()
@@ -39,6 +40,18 @@ class MetricSpec:
     @property
     def needs_parse(self) -> bool:
         return self.cost == "parse" or "spacy" in self.requires
+
+    @property
+    def needs_model(self) -> bool:
+        """True when the metric downloads and runs a neural model.
+
+        Such a metric works without the model, on a clearly-labelled fallback,
+        so it is not "unavailable"; it is expensive enough that nothing should
+        turn it on without being asked, least of all the corpus builder
+        profiling forty books.
+        """
+
+        return "sentence_transformers" in self.requires
 
 
 def _spec(*args: Any, **kwargs: Any) -> tuple[str, MetricSpec]:
@@ -136,17 +149,17 @@ REGISTRY: dict[str, MetricSpec] = dict([
 
     # ------------------------------------------------------------ semantic
     _spec("adjacent_sentence_similarity", "semantic_adjacent", "semantic_repetition",
-          "moderate", ("sentence_transformers",), defaults={"model": "all-MiniLM-L6-v2"},
+          "model", ("sentence_transformers",), defaults={"model": "all-MiniLM-L6-v2"},
           summary="Embedding similarity between neighbouring sentences."),
     _spec("local_similarity_window", "semantic_window", "semantic_repetition",
-          "moderate", ("sentence_transformers",),
+          "model", ("sentence_transformers",),
           defaults={"model": "all-MiniLM-L6-v2", "windows": [3, 5]},
           summary="Similarity to the previous three and five sentences."),
     _spec("paragraph_similarity", "semantic_paragraph", "semantic_repetition",
-          "moderate", ("sentence_transformers",), defaults={"model": "all-MiniLM-L6-v2"},
+          "model", ("sentence_transformers",), defaults={"model": "all-MiniLM-L6-v2"},
           summary="Paragraph-to-paragraph semantic similarity."),
     _spec("duplicate_sentence_clusters", "semantic_clusters", "semantic_repetition",
-          "moderate", ("sentence_transformers",),
+          "model", ("sentence_transformers",),
           defaults={"model": "all-MiniLM-L6-v2", "threshold": 0.85, "max_reported": 30},
           summary="Clusters of sentences that restate one another."),
 
@@ -213,6 +226,9 @@ MODULES = {name: spec.module for name, spec in REGISTRY.items()}
 
 #: Metrics that need a spaCy parse.  They share one parse per document.
 NLP_METRICS = {name for name, spec in REGISTRY.items() if spec.needs_parse}
+
+#: Metrics that will load a sentence-embedding model when one is installed.
+MODEL_METRICS = {name for name, spec in REGISTRY.items() if spec.needs_model}
 
 #: Metrics whose value scales with how much text you supply.
 FAMILIES = sorted({spec.family for spec in REGISTRY.values()})

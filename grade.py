@@ -17,7 +17,6 @@ the short, severity-ordered list an authoring agent should read first.
 
 import argparse
 import importlib
-import importlib.util
 import json
 import os
 import subprocess
@@ -25,36 +24,25 @@ import sys
 import time
 from pathlib import Path
 
-from project_config import CONFIG_ENV_VAR, config_path, load_config
+from textgrader.project import CONFIG_ENV_VAR, config_path, load_config
 from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings,
                                  TextProcessing, resolve_unit, units_comparable)
+from textgrader.core_metrics import measure as core_measure
 from textgrader.metrics import REGISTRY
+from textgrader.reports import REPORTS
 from textgrader.results import Action, MetricResult, Report, StatusType
 from textgrader.rules import compile_rules
 from textgrader import stats
 
 ROOT = Path(__file__).resolve().parent
 
-#: Bundled reports in ``measures/``.  Each row is the argument template.
-#: ``prose_check`` and ``verify_citations`` used to be handed the manuscript as
-#: a bare positional, which those two programs read as a character-sheet file,
-#: and ``dialogue_study`` was handed the manuscript's PARENT DIRECTORY as if it
-#: were a corpus.  Everything here now names what it passes.
-BUNDLED_MEASURES = {
-    "absolutes": ("{manuscript}",),
-    "banned_phrases": ("{manuscript}",),
-    "check_edits": ("{manuscript}",),
-    "dialogue_study": ("{manuscript}",),
-    "number_report": ("{manuscript}",),
-    "prose_check": ("--manuscript", "{manuscript}"),
-    "quotable": ("{manuscript}",),
-    "quote_length": ("{manuscript}",),
-    "register": ("{manuscript}",),
-    "style_report": ("{manuscript}",),
-    "tics": ("{manuscript}",),
-    "verify_citations": ("--manuscript", "{manuscript}"),
-    "voice_separation": ("{manuscript}",),
-}
+#: Bundled project reports, and the arguments each is given.  Defined in
+#: ``textgrader/reports/__init__.py`` so the package that owns them owns their
+#: contract.  ``prose_check`` and ``verify_citations`` used to be handed the
+#: manuscript as a bare positional, which those two programs read as a
+#: character-sheet file, and ``dialogue_study`` was handed the manuscript's
+#: PARENT DIRECTORY as if it were a corpus.
+BUNDLED_MEASURES = REPORTS
 
 METRIC_NAMES = {
     "fk": ("Flesch-Kincaid grade", "grade", "readability"),
@@ -84,17 +72,6 @@ METRIC_NAMES = {
     "_paragraphs": ("Paragraph count", "paragraphs", "size"),
     "_transcript": ("Transcript word share", "%", "size"),
 }
-
-
-def _load_prose_module():
-    measures = ROOT / "measures"
-    if str(measures) not in sys.path:
-        sys.path.insert(0, str(measures))
-    spec = importlib.util.spec_from_file_location("textgrader_prose_grade",
-                                                  measures / "prose_grade.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 # --------------------------------------------------------------- corpus access
@@ -289,9 +266,13 @@ def run_bundled_measure(name, manuscript, config, timeout=120):
     arguments = [part.format(manuscript=str(manuscript),
                              manuscript_dir=str(manuscript.parent))
                  for part in BUNDLED_MEASURES[name]]
-    command = [sys.executable, str(ROOT / "measures" / f"{name}.py"), *arguments]
+    command = [sys.executable, "-m", f"textgrader.reports.{name}", *arguments]
     environment = {**os.environ, "HALSTEAD_VIA_GRADE": "1",
-                   CONFIG_ENV_VAR: str(config.get("_config_path", config_path()))}
+                   CONFIG_ENV_VAR: str(config.get("_config_path", config_path())),
+                   # ``-m`` resolves the package from the working directory, and
+                   # the working directory is the project's, not ours.
+                   "PYTHONPATH": os.pathsep.join(
+                       [str(ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep)}
     try:
         completed = subprocess.run(command, cwd=config.get("_config_dir", ROOT),
                                    env=environment, capture_output=True, text=True,
@@ -453,7 +434,7 @@ def _core_results(analysis, config, comparator, report):
         # Floor 1 here on purpose: the measurement is descriptive and worth
         # having for a short text.  What tiny documents must NOT get is a pile
         # of confident corpus outliers, and that is the Comparator's job.
-        got = _load_prose_module().measure(analysis, floor=1, lexile_source=lexile_source)
+        got = core_measure(analysis, floor=1, lexile_source=lexile_source)
     except Exception as exc:
         report.results.append(MetricResult("prose.analysis", "Core prose analysis",
                                            status="error",
@@ -609,8 +590,10 @@ def list_metrics():
     for spec in rows:
         print(f"{spec.name:<34}{spec.family:<20}{spec.cost:<10}"
               f"{', '.join(spec.requires) or '-'}")
-    print(f"\n{len(rows)} metrics. cost: fast = well under a second on a novel, "
-          f"moderate = a few seconds, parse = tens of seconds (one shared spaCy parse).")
+    print(f"\n{len(rows)} metrics. cost on a 300,000-word novel: "
+          f"fast = under half a second, moderate = up to a few seconds, "
+          f"parse = tens of seconds sharing one spaCy parse, "
+          f"model = tens of seconds encoding the text with a sentence-embedding model.")
 
 
 def apply_switches(config, enable, disable, families, enable_all):

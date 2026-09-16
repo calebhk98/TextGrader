@@ -19,11 +19,8 @@ import statistics as statistics
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import importlib.util
-spec = importlib.util.spec_from_file_location("pg", Path(__file__).resolve().parent / "prose_grade.py")
-prose_grade = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(prose_grade)
+from ..core_metrics import measure
+from ..text import paragraphs, sentences as sents, strip_gutenberg, strip_transcript, words
 
 QUOTE = re.compile(
     "\u201c([^\u201c\u201d]{2,600})\u201d"   # curly, the Gutenberg default
@@ -66,8 +63,8 @@ def spoken_and_narrated(text):
 
 
 def sent_lengths(text):
-    return [len(prose_grade.words(sentence)) for paragraph in prose_grade.paragraphs(text) for sentence in prose_grade.sents(paragraph)
-            if prose_grade.words(sentence)]
+    return [len(words(sentence)) for paragraph in paragraphs(text) for sentence in sents(paragraph)
+            if words(sentence)]
 
 
 def sources(arguments):
@@ -103,12 +100,12 @@ def main():
                 text = chapter_path.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
-            text = prose_grade.strip_gutenberg(text) if hasattr(prose_grade, "strip_gutenberg") else text
-            match = prose_grade.measure(text)
+            text = strip_gutenberg(text)
+            match = measure(text)
             if not match:
                 continue
             spoken, narrated = spoken_and_narrated(text)
-            spoken_words, narrated_words = len(prose_grade.words(spoken)), len(prose_grade.words(narrated))
+            spoken_words, narrated_words = len(words(spoken)), len(words(narrated))
             if not spoken_words:
                 continue
             spoken_lengths, narrated_lengths = sent_lengths(spoken), sent_lengths(narrated)

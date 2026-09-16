@@ -39,10 +39,8 @@ import statistics as st
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-import project_config
-from textgrader.optional import require
+from .. import project as project_config
+from ..optional import require
 
 DEFAULT_TIMEOUT_SECONDS = 2.0
 
