@@ -34,7 +34,11 @@ from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location("pg", HERE / "prose_grade.py")
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR
+
+spec = importlib.util.spec_from_file_location(
+    "pg", Path(__file__).resolve().parent / "prose_grade.py")
 pg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pg)
 
@@ -161,7 +165,7 @@ def main():
     print("-" * 76)
     tot_a = tot_w = tot_p = 0
     all_pairs = []
-    for p in sorted((HERE / "chapters").glob("*.md")):
+    for p in sorted(CHAPTERS_DIR.glob("*.md")):
         m = measure(p.read_text(encoding="utf-8"))
         if not m:
             continue
@@ -181,7 +185,7 @@ def main():
         print(f"  this book {book:.2f} per 1000 words, "
               f"at the {pct:.0f}th percentile of the corpus")
         cp = sorted(v["pairs"] / (v["words"] / 1000) for v in ref.values())
-        bp = 1000 * tot_p / tot_w
+        bp = 1000 * tot_p / tot_w if tot_w else 0.0
         print(f"\n  absolute followed within {WINDOW} sentences by an exception:")
         print(f"  corpus  low {min(cp):.3f}   median {st.median(cp):.3f}   "
               f"high {max(cp):.3f}   per 1000 words")
@@ -189,7 +193,7 @@ def main():
 
     for sd, label in (("narration", "narration only"), ("spoken", "dialogue only")):
         w = c = 0
-        for p in sorted((HERE / "chapters").glob("*.md")):
+        for p in sorted(CHAPTERS_DIR.glob("*.md")):
             q = measure(p.read_text(encoding="utf-8"), side=sd)
             if q:
                 w += q["words"]; c += q["absolutes"]

@@ -43,11 +43,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CHAPTERS = sorted((HERE / "chapters").glob("*.md"))
-BOOK = HERE / "HALSTEAD.md"
+from project_config import CHAPTERS_DIR, DIALOGUE_TARGETS, MANUSCRIPT, READING_TARGETS
 
-LEXILE_TARGET = 1000
+HERE = Path(__file__).resolve().parent
+CHAPTERS = sorted(CHAPTERS_DIR.glob("*.md"))
+BOOK = MANUSCRIPT
+
+LEXILE_TARGET = READING_TARGETS["lexile"]
 
 # The reading grade rises with Chloe's age instead of sitting flat across the
 # book. Each band is (first chapter, last chapter, floor, ceiling-of-intent).
@@ -64,14 +66,9 @@ LEXILE_TARGET = 1000
 # Wind in the Willows 7.67, Black Beauty 8.00, Little Women 8.08. This book is
 # at 7.21, above the corpus median and between Treasure Island and Wind in the
 # Willows, which is where it should be.
-FK_BANDS = [
-    (1, 10, 5.5, 9.0),   # ages 6-8, home and the first year
-    (11, 15, 6.0, 9.0),  # ages 8-12
-    (16, 22, 6.5, 9.0),  # ages 13-19
-    (23, 36, 7.2, 9.0),  # adult
-]
-FK_MAX = 9.0
-FK_BOOK_TARGET = 7.0
+FK_BANDS = [tuple(band) for band in READING_TARGETS["chapter_bands"]]
+FK_MAX = READING_TARGETS["fk_max"]
+FK_BOOK_TARGET = READING_TARGETS["fk_book"]
 
 
 def fk_band(stem):
@@ -124,9 +121,9 @@ GOALS = [
     # book is meant to stay around 300 pages: the target is still 2,000-3,000
     # and MEAN_WORD_TARGET below is what the book average is judged on.
     ("_words_all", "word count",                 (2000, 5000), "~",  "author, transcript included"),
-    ("fk",       "reading grade (Flesch-Kincaid)", 9.0,        ">=", "author, see band"),
-    ("lexile",   "Lexile (approx)",               1000,        ">=", "author"),
-    ("ari",      "reading grade (ARI)",           9.0,         ">=", "author, tracks F-K"),
+    ("fk",       "reading grade (Flesch-Kincaid)", FK_MAX,      ">=", "configured, see band"),
+    ("lexile",   "Lexile (approx)",               LEXILE_TARGET, ">=", "configured"),
+    ("ari",      "reading grade (ARI)",           FK_MAX,      ">=", "configured, tracks F-K"),
     ("wps",      "words per sentence",            14.3,        ">=", "corpus median"),
     ("slcv",     "sentence-length variation CV",  85.3,        ">=", "corpus median"),
     ("wpp",      "words per paragraph",           (22, 48),    "~",  "corpus median 33.7"),
@@ -159,7 +156,8 @@ def dialogue_share(path):
     four per cent dialogue. Always read the share and the count beside the mean.
     """
     import statistics as _st
-    spec2 = importlib.util.spec_from_file_location("ds", HERE / "dialogue_study.py")
+    spec2 = importlib.util.spec_from_file_location(
+        "ds", HERE / "measures" / "dialogue_study.py")
     ds = importlib.util.module_from_spec(spec2)
     import sys as _sys
     _argv, _sys.argv = _sys.argv, ["x"]
@@ -241,14 +239,20 @@ def one_chapter(path):
         print("  chapter. Read the transcript itself.")
         d = None
     if d:
+        quoted_min = DIALOGUE_TARGETS["quoted_word_share_min"]
+        spoken_min = DIALOGUE_TARGETS["spoken_sentence_words_min"]
+        short_max = DIALOGUE_TARGETS["short_spoken_lines_max"]
         print("  " + "-" * 84)
-        print(f"  {'dialogue, share of words quoted %':<40}{d['quoted']:9.1f}{'>= 15':>14}  "
-              f"{'pass' if d['quoted'] >= 15 else 'FAIL':<6}corpus talky books 25-39")
+        print(f"  {'dialogue, share of words quoted %':<40}{d['quoted']:9.1f}"
+              f"{f'>= {quoted_min:g}':>14}  "
+              f"{'pass' if d['quoted'] >= quoted_min else 'FAIL':<6}configured")
         if d["spoken"] is not None:
-            print(f"  {'mean spoken sentence, words':<40}{d['spoken']:9.1f}{'>= 16':>14}  "
-                  f"{'pass' if d['spoken'] >= 16 else 'FAIL':<6}author")
-            print(f"  {'spoken lines of 1-3 words %':<40}{d['short']:9.1f}{'<= 8':>14}  "
-                  f"{'pass' if d['short'] <= 8 else 'FAIL':<6}author")
+            print(f"  {'mean spoken sentence, words':<40}{d['spoken']:9.1f}"
+                  f"{f'>= {spoken_min:g}':>14}  "
+                  f"{'pass' if d['spoken'] >= spoken_min else 'FAIL':<6}configured")
+            print(f"  {'spoken lines of 1-3 words %':<40}{d['short']:9.1f}"
+                  f"{f'<= {short_max:g}':>14}  "
+                  f"{'pass' if d['short'] <= short_max else 'FAIL':<6}configured")
         if d["n"] < 20:
             print(f"\n  ** Only {d['n']} spoken sentences in this chapter. The mean above is")
             print("     measured over almost nothing and means almost nothing. A chapter this")
@@ -340,7 +344,7 @@ def targets():
             continue
         avg = sum(r[1] for r in got) / len(got)
         low = sorted((r for r in got if r[1] < floor), key=lambda r: r[1])
-        high = sorted((r for r in got if r[3] > FK_MAX), key=lambda r: -r[3])
+        high = sorted((r for r in got if r[3] > ceil), key=lambda r: -r[3])
         mark = "" if avg >= floor else "  <-- band under floor"
         # Three decimals in the failing list. At 5.496 against a floor of 5.5
         # both the one- and two-decimal forms printed "5.5" under a floor
@@ -352,7 +356,7 @@ def targets():
         if high:
             over = ", ".join(f"{r[0][:2]} ({r[3]:.1f})" for r in high)
             print(f"  {'':<12}{'':<12}{'':>7}{'':>9}   over the "
-                  f"{FK_MAX:.0f} ceiling: {over}")
+                  f"{ceil:.0f} ceiling: {over}")
 
     print("\n  A chapter already above its band is left where it is. The bands are")
     print("  floors for the band average, not per-chapter quotas, and a chapter with")

@@ -8,15 +8,15 @@ so the book and a 70,000-word novel compare directly.
     python3 tics.py                 the manuscript against the corpus
     python3 tics.py --show PATTERN  print every hit for one pattern
 """
-import argparse, glob, json, re, statistics as st
+import argparse, glob, json, re, statistics as st, sys
 from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
-CORPUS = [
-    "/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/scratchpad/agent_gutenberg/raw",
-    "/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/scratchpad/agent_modern/texts",
-]
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR, CORPUS_DIRS
+
+CORPUS = CORPUS_DIRS
 
 # The target is a reasonable rate, not corpus parity. The corpus is 23 books and
 # a voice is made of repetition; the author's instruction is to cut roughly to a
@@ -188,7 +188,7 @@ def measure(text):
     out = {}
     for k, p in PATTERNS.items():
         flags = re.M if k in CASE_SENSITIVE else re.M | re.I
-        out[k] = 100000 * len(re.findall(p, text, flags)) / n
+        out[k] = 100000 * len(re.findall(p, text, flags)) / n if n else 0.0
     return out, n
 
 def main():
@@ -196,11 +196,11 @@ def main():
     ap.add_argument("--show")
     a = ap.parse_args()
 
-    book = "\n".join(Path(f).read_text() for f in sorted(glob.glob(str(HERE/"chapters"/"*.md"))))
+    book = "\n".join(Path(f).read_text() for f in sorted(CHAPTERS_DIR.glob("*.md")))
     if a.show:
         pat = PATTERNS.get(a.show) or a.show
         flags = 0 if a.show in CASE_SENSITIVE else re.I
-        for f in sorted(glob.glob(str(HERE/"chapters"/"*.md"))):
+        for f in sorted(CHAPTERS_DIR.glob("*.md")):
             for i, line in enumerate(Path(f).read_text().split("\n"), 1):
                 for m in re.finditer(pat, line, flags):
                     s = max(0, m.start()-60)
@@ -216,22 +216,29 @@ def main():
             if n > 20000: ref.append(r)
 
     print(f"\n{len(ref)} reference books. Rates per 100,000 words.\n")
+    if not ref:
+        print("  No readable reference books found. Add .txt files to a configured")
+        print("  corpus directory or edit corpus_dirs in config.json. Book rates and")
+        print("  configured targets are still shown below.\n")
     print(f"  {'construction':<32}{'book':>8}{'target':>9}{'corpus med':>12}{'corpus max':>12}{'':>3}")
     print("  " + "-"*78)
     rows, over = [], 0
     for k in PATTERNS:
         vals = sorted(r[k] for r in ref)
-        med, mx = st.median(vals), max(vals)
+        med = st.median(vals) if vals else None
+        mx = max(vals) if vals else None
         t = TARGETS.get(k)
         excess = bk[k]/t if t else 0
         rows.append((excess, k, bk[k], t, med, mx))
     for excess, k, b, t, med, mx in sorted(rows, reverse=True):
+        med_text = f"{med:.1f}" if med is not None else "n/a"
+        max_text = f"{mx:.1f}" if mx is not None else "n/a"
         if t is None:
-            print(f"  {k:<32}{b:>8.1f}{'-':>9}{med:>12.1f}{mx:>12.1f}")
+            print(f"  {k:<32}{b:>8.1f}{'-':>9}{med_text:>12}{max_text:>12}")
             continue
         ok = b <= t
         over += 0 if ok else 1
-        print(f"  {k:<32}{b:>8.1f}{t:>9.1f}{med:>12.1f}{mx:>12.1f}"
+        print(f"  {k:<32}{b:>8.1f}{t:>9.1f}{med_text:>12}{max_text:>12}"
               f"{'  pass' if ok else '  CUT ' + f'{100*(1-t/b):.0f}%'}")
     print(f"\n  {over} of {len(TARGETS)} still over target.")
     print("  The target is a reasonable rate, not the corpus. Several of these stay")

@@ -30,6 +30,8 @@ from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR
 DATELINE = re.compile(r"^\*[A-Z][a-z]+ \d{4}(?:\s*[–-]\s*[A-Z][a-z]+ \d{4})?\*$")
 WORD = re.compile(r"[A-Za-z][A-Za-z']*")
 
@@ -59,7 +61,7 @@ def main():
                     help="number prefixes, e.g. 01 02 or 01,02")
     a = ap.parse_args()
 
-    files = sorted((HERE / "chapters").glob("*.md"))
+    files = sorted(CHAPTERS_DIR.glob("*.md"))
     if a.chapters:
         # Both "--chapters 01 02" and "--chapters 01,02" have to work. The
         # comma form used to match nothing, print an empty table and report

@@ -17,13 +17,11 @@ import os
 import re
 import statistics
 import sys
+from pathlib import Path
 
-CORPUS_DIRS = [
-    "/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/"
-    "scratchpad/agent_gutenberg/raw",
-    "/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/"
-    "scratchpad/agent_modern/texts",
-]
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR, CORPUS_DIRS, DIALOGUE_TARGETS
 
 # ---------------------------------------------------------------------------
 # TARGETS. Read this before changing any number below.
@@ -62,13 +60,13 @@ CORPUS_DIRS = [
 # edges of the peer group where he did not specify.
 PEER_BOOKS = ("tom_sawyer", "treasure_island", "little_women", "wind_in_willows")
 
-TARGET_MEAN = 1.30            # sentences per quotation, peer-consistent
-TARGET_THREE_PLUS = 6.0
-TARGET_WORD_MEAN = (18.0, 24.0)
-TARGET_WORD_CV = (115.0, 135.0)
-TARGET_SHORT_SHARE = (20.0, 25.0)
-TARGET_SHORT_HARD_MAX = 30.0
-TARGET_LONG_SHARE = (18.0, 26.0)
+TARGET_MEAN = DIALOGUE_TARGETS["sentences_per_quotation_min"]
+TARGET_THREE_PLUS = DIALOGUE_TARGETS["three_plus_sentences_min"]
+TARGET_WORD_MEAN = tuple(DIALOGUE_TARGETS["quotation_word_mean"])
+TARGET_WORD_CV = tuple(DIALOGUE_TARGETS["quotation_word_cv"])
+TARGET_SHORT_SHARE = tuple(DIALOGUE_TARGETS["short_quotation_share"])
+TARGET_SHORT_HARD_MAX = DIALOGUE_TARGETS["short_quotation_hard_max"]
+TARGET_LONG_SHARE = tuple(DIALOGUE_TARGETS["long_quotation_share"])
 
 
 def _check_bands_are_possible():
@@ -146,9 +144,9 @@ def corpus():
 
 
 def main():
-    files = sorted(glob.glob("chapters/*.md"))
+    files = sorted(glob.glob(str(CHAPTERS_DIR / "*.md")))
     if not files:
-        sys.exit("run from the halstead directory")
+        sys.exit(f"no chapters found in {CHAPTERS_DIR}")
     book = profile("\n".join(open(f).read() for f in files))
     ref = corpus()
 

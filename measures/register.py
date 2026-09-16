@@ -29,6 +29,8 @@ from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR
 
 WORD = re.compile(r"[A-Za-z']+")
 LONG = 9
@@ -71,7 +73,7 @@ def main():
     a = ap.parse_args()
 
     rows = []
-    for f in sorted(glob.glob(str(HERE / "chapters" / "*.md"))):
+    for f in sorted(glob.glob(str(CHAPTERS_DIR / "*.md"))):
         pct, longs, n = profile(f)
         rows.append((Path(f).stem, pct, longs, n))
     if not rows:

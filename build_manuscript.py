@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build HALSTEAD.md from chapters/. One direction only.
+"""Build the configured manuscript file from chapters/. One direction only.
 
 chapters/ is the source of truth. Every edit is made there, one file per
 chapter, so agents and people can work on different chapters without
@@ -10,7 +10,7 @@ manuscript file has been deleted, because running it discarded work: it reverts
 every chapter to whatever the manuscript last held, and the manuscript is
 always the stale copy.
 
-    python3 build_manuscript.py            write HALSTEAD.md
+    python3 build_manuscript.py            write the configured manuscript
     python3 build_manuscript.py --check    say what would change, write nothing
 
 **Order comes from the filenames and nothing else.** chapters/NN_slug.md sorts
@@ -27,22 +27,30 @@ import re
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CHAPTERS = HERE / "chapters"
-OUT = HERE / "HALSTEAD.md"
+from project_config import CHAPTERS_DIR, MANUSCRIPT
 
-WORDS = ("One Two Three Four Five Six Seven Eight Nine Ten Eleven Twelve "
-         "Thirteen Fourteen Fifteen Sixteen Seventeen Eighteen Nineteen Twenty"
-         ).split()
+HERE = Path(__file__).resolve().parent
+CHAPTERS = CHAPTERS_DIR
+OUT = MANUSCRIPT
+
+ONES = ("Zero One Two Three Four Five Six Seven Eight Nine Ten Eleven Twelve "
+        "Thirteen Fourteen Fifteen Sixteen Seventeen Eighteen Nineteen").split()
+TENS = ("", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy",
+        "Eighty", "Ninety")
 
 
 def number_word(n):
-    """1 -> 'One', 21 -> 'Twenty-One'. The manuscript spells chapter numbers."""
-    if n <= 20:
-        return WORDS[n - 1]
-    tens, ones = divmod(n, 10)
-    stem = {2: "Twenty", 3: "Thirty", 4: "Forty"}[tens]
-    return stem if ones == 0 else f"{stem}-{WORDS[ones - 1]}"
+    """Return a spelled cardinal number suitable for a chapter heading."""
+    if not 0 < n < 1000:
+        raise ValueError("chapter numbers must be between 1 and 999")
+    if n < 20:
+        return ONES[n]
+    if n < 100:
+        tens, ones = divmod(n, 10)
+        return TENS[tens] if not ones else f"{TENS[tens]}-{ONES[ones]}"
+    hundreds, rest = divmod(n, 100)
+    stem = f"{ONES[hundreds]} Hundred"
+    return stem if not rest else f"{stem} {number_word(rest)}"
 
 
 def chapters():
