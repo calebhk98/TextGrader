@@ -113,3 +113,40 @@ and prose bans are not defaults.
 ```console
 python3 -m unittest discover -s tests -v
 ```
+
+### Opt-in style and "AI-ish" diagnostics
+
+All additional style diagnostics are **off by default**. They do not claim to
+identify authorship or produce a human-likeness score: they expose inspectable
+signals that an authoring AI (or a person) can use to review repetitive or
+uncharacteristic prose. Enable only the measurements useful to your project:
+
+```json
+{
+  "metrics": {
+    "repeated_ngrams": {"enabled": true, "sizes": [3, 4, 5, 6]},
+    "mattr": {"enabled": true, "window": 100},
+    "length_quantiles": {"enabled": true},
+    "passive_voice": {"enabled": true}
+  },
+  "nlp": {"model": "en_core_web_sm"}
+}
+```
+
+Available switches are `repeated_ngrams`, `sentence_openings`,
+`local_repetition`, `function_words`, `mattr`, `punctuation`,
+`length_quantiles`, `pov_pronouns`, `dialogue_contractions`, `dialogue_tags`,
+`passive_voice`, `clause_structure`, `pos_distribution`, `tense_consistency`,
+`nominalizations`, and `character_voice`. Each implementation lives in its own
+module under `textgrader/metrics/`. Corpus profiles include distributions for
+dependency-free scalar metrics and function-word profiles, so new profiles can
+compare an enabled manuscript metric to the corpus rather than to a hard-coded
+threshold. Rebuild older profiles to add these distributions.
+
+The five grammatical metrics require the optional spaCy package and an English
+model. Install them, for example, with `pip install spacy` followed by
+`python -m spacy download en_core_web_sm`. If they are enabled without a usable
+model, their results remain visible as unavailable warnings; core operation has
+no third-party dependency. Character voice distance currently recognizes
+transcript-style `Speaker: dialogue` lines and reports when there are not enough
+speakers to compare.

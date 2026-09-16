@@ -8,6 +8,7 @@ configuration.  Use ``--json`` for the stable machine-readable representation.
 
 import argparse
 import importlib.util
+import importlib
 import json
 import statistics
 import subprocess
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from project_config import CONFIG, CONFIG_PATH, MANUSCRIPT, PROJECT_RULES, load_config
 from textgrader.results import MetricResult, Report, StatusType
+from textgrader.metrics import MODULES, NLP_METRICS
 
 ROOT = Path(__file__).resolve().parent
 METRIC_NAMES = {
@@ -168,6 +170,51 @@ def analyze(path, config):
             continue
         report.results.append(_corpus_result(key, value, profile))
     report.results.extend(_rules(text, config.get("project_rules", {})))
+    # Every advanced measurement is deliberately opt-in.  Modules are loaded
+    # independently so one optional dependency or metric cannot hide the rest.
+    metric_config = config.get("metrics", {})
+    def metric_enabled(name):
+        setting = metric_config.get(name, {})
+        return setting is True or (isinstance(setting, dict) and setting.get("enabled", False))
+
+    def metric_options(name):
+        setting = metric_config.get(name, {})
+        return setting if isinstance(setting, dict) else {}
+
+    enabled = [name for name in MODULES if metric_enabled(name)]
+    nlp = None
+    if any(name in NLP_METRICS for name in enabled):
+        try:
+            import spacy
+            nlp = spacy.load(config.get("nlp", {}).get("model", "en_core_web_sm"))
+        except (ImportError, OSError):
+            nlp = None
+    for name in enabled:
+        try:
+            module = importlib.import_module(f"textgrader.metrics.{MODULES[name]}")
+            findings = module.measure(text, config=metric_options(name), profile=profile, nlp=nlp)
+            for finding in findings:
+                metric_id = finding["metric_id"]
+                value = finding.get("value")
+                # Scalar measures use exactly the same corpus machinery as the
+                # longstanding prose metrics when a profile has that feature.
+                if value is not None and _distribution(profile, metric_id):
+                    item = _corpus_result(metric_id, value, profile)
+                    item.metric_id, item.name = metric_id, finding["name"]
+                    item.unit = finding.get("unit")
+                    item.details = finding.get("details", [])
+                    item.warning = finding.get("warning")
+                else:
+                    unavailable = value is None and finding.get("warning")
+                    item = MetricResult(metric_id, finding["name"], value, finding.get("unit"),
+                                        status="unavailable" if unavailable else "available",
+                                        status_type=StatusType.UNAVAILABLE if unavailable else StatusType.INFORMATIONAL,
+                                        details=finding.get("details", []), warning=finding.get("warning"))
+                report.results.append(item)
+        except Exception as exc:
+            report.results.append(MetricResult(f"metric.{name}", name.replace("_", " ").title(),
+                                               status="error", status_type=StatusType.INTERNAL_ERROR,
+                                               error=f"{type(exc).__name__}: {exc}"))
     for item in config.get("metric_commands", []):
         command = [part.format(manuscript=str(path)) for part in item["command"]]
         report.results.extend(run_metric_process(item["id"], command))

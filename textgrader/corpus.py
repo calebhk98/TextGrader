@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import statistics
+import importlib
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ PARSER_VERSION = "1"
 METRIC_DEFINITION_VERSION = "1"
 
 from .text import paragraphs, sentences, strip_gutenberg, words
+from .metrics import MODULES, NLP_METRICS
 
 
 def _words(text: str) -> list[str]:
@@ -94,6 +96,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     books: list[dict[str, Any]] = []
     used_ids: Counter[str] = Counter()
     frequency: Counter[str] = Counter()
+    feature_profiles: dict[str, list[dict[str, float]]] = {"function_words": []}
 
     for input_index, path, relative_name in files:
         raw_bytes = path.read_bytes()
@@ -115,7 +118,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         used_ids[base_id] += 1
         source_id = base_id if used_ids[base_id] == 1 else f"{base_id}-{used_ids[base_id]}"
         frequency.update(words)
-        books.append({
+        book = {
             "source_id": source_id, "source_filename": path.name,
             "source_path": relative_name, "source_hash": f"sha256:{digest}",
             "word_count": len(words), "sentence_count": len(sentences),
@@ -125,7 +128,19 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
             "mean_word_characters": statistics.fmean(map(len, words)) if words else None,
             "metadata": {key: value for key, value in item_meta.items()
                          if key not in {"id", "filename", "path"}},
-        })
+        }
+        # Dependency-free opt-in metrics are precomputed so enabling one at
+        # grading time can compare like with like without retaining raw books.
+        for metric_name, module_name in MODULES.items():
+            if metric_name in NLP_METRICS or metric_name in {"character_voice", "function_words"}:
+                continue
+            module = importlib.import_module(f"textgrader.metrics.{module_name}")
+            for finding in module.measure(clean, config={}, profile=None, nlp=None):
+                if isinstance(finding.get("value"), (int, float)):
+                    book[finding["metric_id"]] = finding["value"]
+        function_words = importlib.import_module("textgrader.metrics.function_words")
+        feature_profiles["function_words"].append(function_words.vector(clean))
+        books.append(book)
 
     metric_keys = ("word_count", "sentence_count", "paragraph_count", "mean_sentence_words",
                    "mean_paragraph_words", "mean_word_characters")
@@ -142,6 +157,9 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "_sentences": distributions["sentence_count"],
         "_paragraphs": distributions["paragraph_count"],
     })
+    advanced_keys = sorted({key for book in books for key in book if key.startswith(("style.", "nlp."))})
+    distributions.update({key: _distribution([book[key] for book in books if key in book])
+                          for key in advanced_keys})
     return {
         "schema_version": SCHEMA_VERSION,
         "textgrader_version": "0.1.0",
@@ -154,6 +172,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "distributions": distributions,
         "word_frequency": {word: frequency[word] for word in sorted(frequency)},
         "word_frequency_total": sum(frequency.values()),
+        "feature_profiles": feature_profiles,
     }
 
 
