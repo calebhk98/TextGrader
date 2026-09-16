@@ -1,20 +1,38 @@
 #!/usr/bin/env python3
-"""Flag banned constructions, negative framing, and book references in the sheets.
+"""Flag configured banned constructions in character sheets or a manuscript.
 
-PROSE_RULES.md rules 1 and 2 ban two families of construction. Rule 1 covers
-sentences whose work is a verdict on correctness or ranking. Rule 2 covers
-sentences that define a thing by what it is not, or undercut a claim in the
-breath that makes it.
+Every construction this scans for is project prose policy, not something
+this script should know on its own, so it comes entirely from
+``project_measures.prose_check`` in the user's config. With nothing
+configured there is nothing to flag, and the script says so and exits 0.
 
-    python3 prose_check.py
-    python3 prose_check.py characters/RUTH.md --show
-    python3 prose_check.py --rule 2
+Config (``project_measures.prose_check``), all default to ``[]``/``{}``:
 
-A first version of this check used loose patterns and reported "the sentence
-that is correcting them" as a verdict phrase and "narrow rather than broad" as
-negation. Both patterns below are written to avoid that: the verdict list
-requires a word boundary after the adjective, and the negation list looks for
-a denial of an interpretation rather than any ordinary contrast.
+    "verdict_patterns":        [{"pattern": "...", "label": "verdict"}, ...]
+    "negation_patterns":       [{"pattern": "...", "label": "..."}, ...]
+    "book_reference_patterns": [{"pattern": "...", "label": "..."}, ...]
+    "skip_files": ["_TEMPLATE.md", ...]
+
+Each pattern entry may also be written as a two-element ``[pattern, label]``
+list for brevity.
+
+ARGUMENT CONTRACT (read this before wiring up a caller):
+
+    python3 prose_check.py                       every *.md in the configured
+                                                   characters directory
+    python3 prose_check.py characters/RUTH.md     explicit character sheet(s)
+    python3 prose_check.py --manuscript FILE.md   scan one manuscript/chapter
+                                                   file's prose instead of any
+                                                   character sheet
+    python3 prose_check.py --rule 2               only the negation patterns
+
+A positional argument is always a CHARACTER SHEET. Passing the manuscript
+path positionally used to be silently accepted and scanned as if it were a
+sheet, which is wrong: a manuscript chapter is prose, not a character
+description, and grade.py was doing exactly that. A positional path that
+resolves inside the configured chapters directory is now a hard error
+instead, naming ``--manuscript`` as the fix. Callers that want to check the
+manuscript's own prose (e.g. grade.py) must pass ``--manuscript PATH``.
 """
 
 import argparse
@@ -22,77 +40,41 @@ import re
 import sys
 from pathlib import Path
 
-# The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import CHARACTERS_DIR
-SKIP = {"_TEMPLATE.md", "_CALIBRATION.md", "_ALLOCATIONS.md", "_DIFFERENTIATION.md",
-        "_SHEET_RULES.md", "_APPEARANCES.md"}
-
-# Rule 1. A verdict standing in for a reason. The trailing boundary keeps
-# "that is correcting" and "this is rightly famous for" out of the results.
-VERDICT = [
-    (r"\b(?:that|this|it|which|he|she|they)(?:'s| is| was)\s+(?:the\s+)?"
-     r"(?:correct|right|wrong|best|worst|strongest|weakest)\b(?!\w)", "verdict"),
-    (r"\bI (?:was|am) wrong\b", "verdict"),
-    (r"\b(?:you|you're|youre)\s+right\b", "verdict"),
-    (r"\bthat is a better\b", "verdict"),
-    (r"\bthe (?:correct|right) (?:answer|way|version|reading|call)\b", "verdict"),
-    (r"\bwhich is the good part\b", "verdict"),
-    (r"\b(?:correctly|rightly)\s+(?:identifies|reads|sees|says|notes|calls)\b", "verdict"),
-]
-
-# Rule 2. A denial of a reading nobody asserted, or a claim undercut as it lands.
-NEGATION = [
-    (r"\bnever as\b", "denies a reading"),
-    (r"\bnot (?:as )?(?:modesty|arrogance|stoicism|cruelty|kindness|pity|weakness)\b",
-     "denies a reading"),
-    (r"\bit (?:is|isn't|is not|was|wasn't)\s+n?o?t?\s*(?:modesty|stoicism|arrogance)\b",
-     "denies a reading"),
-    (r"\bthat (?:reads|looks|sounds) (?:like|as) \w+ from outside\.? It (?:isn't|is not)\b",
-     "denies a reading"),
-    (r"\brather than (?:as )?(?:modesty|humility|arrogance|stoicism|a performance)\b",
-     "denies a reading"),
-    (r"\bnot because \w+,? but because\b", "not-A-but-B"),
-    (r"\bnot (?:a|an|the) \w+ (?:but|so much as) (?:a|an|the)\b", "not-A-but-B"),
-    (r"\b(?:which|that) is not (?:to say|the same as)\b", "undercut"),
-    (r"\bwithout (?:being|reading as) \w+ about it\b", "undercut"),
-]
-
-
-# Rule 3. A sheet is about the person, not about this book. The author: "you
-# can't use characters/DAVE.md in a ghost book, if it mentions this book." A
-# surname or a birth month survives being moved to a haunted house; a chapter
-# number does not. Twenty sheets carried a navigation block naming chapters
-# before this check existed, permitted by an older version of _SHEET_RULES.md
-# and caught by nothing. They are in _APPEARANCES.md now.
-BOOK_REFERENCE = [
-    (r"\bchapters?\s+\d", "chapter reference"),
-    (r"\bchapters?\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|"
-     r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
-     r"nineteen|twenty)\b", "chapter reference"),
-    (r"\bappears in\b", "navigation"),
-    (r"\bthe (?:camp|school) chapters\b", "chapter reference"),
-    (r"\b(?:his|her|their) viewpoint chapters?\b", "chapter reference"),
-]
-
+import project_config
 
 # Quoted text is the manuscript's, or a character's, so the sheet's own prose
 # rules do not reach it. Sam saying "This is the worst mistake of my life" is
-# dialogue, not the sheet handing the reader a verdict.
-QUOTED = re.compile(r'"[^"]*"|\u201c[^\u201d]*\u201d')
+# dialogue, not the sheet handing the reader a verdict. This guard, and the
+# two below, are generic to the "verdict" rule shape rather than facts about
+# any manuscript, so they stay fixed rather than moving into config.
+QUOTED = re.compile(r'"[^"]*"|“[^”]*”')
 
 # The verdict family only fires when the sheet is passing judgement. These
-# lead-ins turn the same words into ordinary description: somebody telling her
-# when she is wrong, a section asking what she is wrong about.
+# lead-ins turn the same words into ordinary description: somebody telling
+# her when she is wrong, a section asking what she is wrong about.
 DESCRIBES = re.compile(
     r"\b(?:when|whether|if|tell(?:s|ing)?|told|admit(?:s|ting)?|about|knows?|"
     r"knew|say(?:s|ing)?|said|thinks?|believes?|assumes?|being|been|prove|"
     r"proved|turns? out)\s+(?:\w+\s+){0,3}$")
 
-# _TEMPLATE.md asks every sheet for a "What they are wrong about" section, so
-# the heading and its opening clause are the structure rather than a verdict.
+# A heading like "What she is wrong about" is the sheet's own structure, not
+# a verdict, whatever pattern happens to fire on its opening clause.
 SECTION = re.compile(r"^-?\s*What (?:he|she|they)(?:'s| is| are)? wrong about\b", re.I)
+
+
+def _rule_list(raw):
+    """Normalise configured rules to a list of (pattern, label) pairs."""
+    if not isinstance(raw, list):
+        return []
+    rules = []
+    for entry in raw:
+        if isinstance(entry, dict) and "pattern" in entry:
+            rules.append((entry["pattern"], entry.get("label", "rule")))
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            rules.append((entry[0], entry[1]))
+    return rules
 
 
 def sentences(text):
@@ -122,28 +104,59 @@ def scan(path, rules):
     return hits
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("sheets", nargs="*", type=Path)
+    parser.add_argument("sheets", nargs="*", type=Path,
+                    help="character-sheet files (never the manuscript; use --manuscript for that)")
+    parser.add_argument("--manuscript", type=Path,
+                    help="scan this one manuscript/chapter file's prose instead of a character sheet")
     parser.add_argument("--root", type=Path, default=HERE)
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--rule", type=int, choices=(1, 2, 3), help="check only this rule")
     parser.add_argument("--show", action="store_true", help="print the whole sentence")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    rules = VERDICT + NEGATION + BOOK_REFERENCE
+    config = project_config.load_config(args.config)
+    settings = project_config.measure_settings("prose_check", config)
+    characters_dir = project_config.project_path("characters_dir", "characters", config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    skip_files = set(settings.get("skip_files", []))
+
+    verdict = _rule_list(settings.get("verdict_patterns", []))
+    negation = _rule_list(settings.get("negation_patterns", []))
+    book_reference = _rule_list(settings.get("book_reference_patterns", []))
+
+    if not (verdict or negation or book_reference):
+        print("no project_measures.prose_check patterns configured "
+              "(verdict_patterns, negation_patterns, book_reference_patterns); nothing to flag.")
+        return 0
+
+    rules = verdict + negation + book_reference
     if args.rule == 1:
-        rules = VERDICT
+        rules = verdict
     elif args.rule == 2:
-        rules = NEGATION
+        rules = negation
     elif args.rule == 3:
-        rules = BOOK_REFERENCE
+        rules = book_reference
 
-    files = args.sheets or sorted((args.root / CHARACTERS_DIR.relative_to(HERE)).glob("*.md"))
-    files = [path if path.is_absolute() else args.root / path for path in files]
+    files = []
+    if args.manuscript:
+        files = [args.manuscript if args.manuscript.is_absolute() else args.root / args.manuscript]
+    elif args.sheets:
+        for sheet_path in args.sheets:
+            resolved = sheet_path if sheet_path.is_absolute() else args.root / sheet_path
+            if chapters_dir and chapters_dir.is_dir() and resolved.resolve().is_relative_to(chapters_dir.resolve()):
+                sys.exit(f"error: {sheet_path} is a manuscript chapter, not a character sheet; "
+                         f"pass it with --manuscript instead")
+            files.append(resolved)
+    else:
+        files = sorted(characters_dir.glob("*.md")) if characters_dir and characters_dir.is_dir() else []
+
     total = 0
     for sheet_path in files:
-        if sheet_path.name in SKIP or not sheet_path.is_file():
+        if sheet_path.name in skip_files or not sheet_path.is_file():
             continue
         hits = scan(sheet_path, rules)
         if not hits:
@@ -155,15 +168,13 @@ def main():
             if args.show:
                 print(f"       {sentence[:150]}")
 
-    print(f"\n{total} flagged across {len(files)} files.")
+    print(f"\n{total} flagged across {len(files)} file(s).")
     return 1 if total else 0
 
 
 # Run from grade.py, not on its own. Each script in measures/ reports one
 # diagnostic; grade.py assembles enabled checks and is the interface that says
-# whether a pass helped. Running one of these alone is for reading the
-# individual hits during a fix, which is what --show and the per-file
-# arguments are for, and it is never how a pass gets judged.
+# whether a pass helped.
 def _solo_notice():
     import sys, os
     if os.environ.get("HALSTEAD_VIA_GRADE"):

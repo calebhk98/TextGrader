@@ -70,14 +70,34 @@ def sent_lengths(text):
             if prose_grade.words(sentence)]
 
 
+def sources(arguments):
+    """Accept files as readily as directories.
+
+    ``grade.py`` used to hand this program the manuscript's PARENT DIRECTORY,
+    as if any sibling of the manuscript were a corpus text. It now passes the
+    manuscript itself, so a single file has to be a legitimate input.
+    """
+
+    found = []
+    for item in arguments:
+        path = Path(item)
+        if path.is_file():
+            found.append(path)
+        elif path.is_dir():
+            found.extend(sorted(child for child in path.rglob("*") if child.is_file()))
+        else:
+            print(f"  no such file or directory: {path}", file=sys.stderr)
+    return found
+
+
 def main():
-    dirs = [Path(data) for data in sys.argv[1:]]
-    if not dirs:
+    paths = sources(sys.argv[1:])
+    if not paths:
         sys.exit(__doc__)
     rows = []
-    for data in dirs:
-        for chapter_path in sorted(data.iterdir()):
-            if not chapter_path.is_file() or "stripped" in chapter_path.name:
+    if True:
+        for chapter_path in paths:
+            if "stripped" in chapter_path.name:
                 continue
             try:
                 text = chapter_path.read_text(encoding="utf-8", errors="ignore")
@@ -97,7 +117,7 @@ def main():
                 "quoted": 100 * spoken_words / (spoken_words + narrated_words),
                 "spoken": statistics.fmean(spoken_lengths) if spoken_lengths else 0,
                 "narr": statistics.fmean(narrated_lengths) if narrated_lengths else 0,
-                "fk": match["fk"], "lexile": match["lexile"], "wps": match["wps"],
+                "fk": match["fk"], "lexile": match.get("lexile"), "wps": match["wps"],
                 "slcv": match["slcv"], "u10": match["u10"],
             })
 
@@ -109,9 +129,13 @@ def main():
         print(f"  {'book':<36}{'quoted':>8}{'spoken':>8}{'narr':>7}"
               f"{'w/sent':>8}{'slCV':>7}{'u10':>7}{'F-K':>6}{'Lexile':>8}")
         for row in rows_to_show:
+            # Approximate Lexile is off unless a frequency source is configured,
+            # so it is routinely None. Formatting None as a float raised a
+            # TypeError that killed the whole report; a dash is the honest cell.
+            lexile = f"{row['lexile']:8.0f}" if row["lexile"] is not None else f"{'-':>8}"
             print(f"  {row['name']:<36}{row['quoted']:7.1f}%{row['spoken']:8.1f}"
                   f"{row['narr']:7.1f}{row['wps']:8.1f}{row['slcv']:7.1f}"
-                  f"{row['u10']:7.1f}{row['fk']:6.1f}{row['lexile']:8.0f}")
+                  f"{row['u10']:7.1f}{row['fk']:6.1f}{lexile}")
 
     print(f"{len(rows)} books, {len(talky)} of them at least a quarter dialogue.")
     show("HIGHEST reading grade among the talky books", talky[:4])

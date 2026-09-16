@@ -30,14 +30,12 @@ time, and the author did, keeping three and cutting seven:
                  everybody else has to have."
     kept    30  "Who paid for the steel is somebody else's question."
 
-The seven cut were rewritten to end on a particular instead of a general
-claim: Priya's cousin still thinks a pony is a baby horse, the teacher will
-show Chloe the room on the way out, the bank man has nothing on his desk that
-changes it. Chapter 2's is still standing because chapters 1 and 2 are locked.
-The book now sits at 0.55%, under the corpus median.
+The fix for a flagged line is to end it on a particular instead of a general
+claim: name the cousin who still thinks a pony is a baby horse, rather than
+asserting what children believe. A rate under the corpus median is the target.
 
 What the detector cannot see is the symmetry itself - "you can hand somebody a
-month, you cannot hand somebody a street" - because in this book it is rare. A
+month, you cannot hand somebody a street" - because it is rare in most prose. A
 clause-alignment scan over the whole manuscript found three instances, inside
 the corpus range too. If the complaint outlives these cuts, it is that scan
 that needs building, not this one.
@@ -51,7 +49,7 @@ from pathlib import Path
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import CHAPTERS_DIR, CORPUS_DIRS
+import project_config
 from textgrader.text import strip_gutenberg
 
 WORD = re.compile(r"[A-Za-z']+")
@@ -139,9 +137,22 @@ def measure_text(text, source="text"):
     return hits, len(candidates)
 
 
-def corpus_rates():
+def resolve_paths(explicit, default_dir):
+    if not explicit:
+        return sorted(default_dir.glob("*.md")) if default_dir and default_dir.is_dir() else []
+    paths = []
+    for item in explicit:
+        item = Path(item)
+        if item.is_dir():
+            paths.extend(sorted(item.glob("*.md")))
+        elif item.is_file():
+            paths.append(item)
+    return paths
+
+
+def corpus_rates(corpus_dirs):
     rows = []
-    for directory in CORPUS_DIRS:
+    for directory in corpus_dirs:
         for text_path in sorted(glob.glob(str(directory / "*"))):
             # The corpus carries a stripped copy of each modern book; counting
             # both would weight those authors twice.
@@ -159,10 +170,20 @@ def corpus_rates():
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("paths", nargs="*", type=Path,
+                    help="chapter files or directories; default: the configured chapters directory")
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--corpus", action="store_true", help="the per-book corpus table")
     args = parser.parse_args()
 
-    rows = corpus_rates()
+    config = project_config.load_config(args.config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    corpus_dirs = tuple((Path(config["_config_dir"]) / value).resolve()
+                        for value in config.get("corpus_dirs", []))
+    chapters = resolve_paths(args.paths, chapters_dir)
+
+    rows = corpus_rates(corpus_dirs)
     if not rows:
         print("  corpus texts not readable; nothing to compare against")
         return 0
@@ -175,7 +196,10 @@ def main():
         print(f"\n  median {median:.2f}%   maximum {ceiling:.2f}%   {len(rows)} books")
         return 0
 
-    hits, total = measure(sorted(glob.glob(str(CHAPTERS_DIR / "*.md"))))
+    if not chapters:
+        print("  no chapters found")
+        return 0
+    hits, total = measure(chapters)
     pct = len(hits) / total * 100 if total else 0.0
 
     print(f"  {len(hits)} of {total} multi-sentence speeches end on a maxim: "

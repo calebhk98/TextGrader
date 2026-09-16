@@ -18,7 +18,13 @@ from typing import Iterable, Pattern
 # library. Apostrophes are retained only when surrounded by letters.
 WORD_RE = re.compile(r"[^\W\d_]+(?:['\u2019][^\W\d_]+)*", re.UNICODE)
 HEADING_RE = re.compile(r"(?m)^\s{0,3}#{1,6}(?:\s+|$).*?(?:\n|$)")
-SETEXT_HEADING_RE = re.compile(r"(?m)^.*\S.*\n\s{0,3}(?:=+|-+)\s*(?:\n|$)")
+# A Setext underline must sit on the line immediately below its heading.
+# ``\s`` here would match the blank line before a ``---`` scene break and
+# silently delete the paragraph above it, which is prose, not a heading.
+SETEXT_HEADING_RE = re.compile(
+    r"(?m)^[ \t]{0,3}(?![ \t]*$)(?![ \t]*(?:=+|-+)[ \t]*$)[^\n]*\n"
+    r"[ \t]{0,3}(?:=+|-+)[ \t]*(?:\n|$)"
+)
 GUTENBERG_START_RE = re.compile(
     r"(?im)^\s*\*{0,3}\s*START OF (?:THE|THIS) PROJECT GUTENBERG\b.*$"
 )
@@ -70,9 +76,13 @@ def sentences(text: str) -> list[str]:
 
 
 def remove_markdown_headings(text: str) -> str:
-    """Remove ATX and Setext Markdown headings, retaining surrounding prose."""
+    """Remove ATX and Setext Markdown headings, retaining surrounding prose.
 
-    return HEADING_RE.sub("", SETEXT_HEADING_RE.sub("", text))
+    Each heading becomes a blank line rather than nothing, so removing a
+    heading between two paragraphs cannot merge them into one.
+    """
+
+    return HEADING_RE.sub("\n", SETEXT_HEADING_RE.sub("\n", text))
 
 
 def normalize_quotes(text: str, *, single: bool = True) -> str:

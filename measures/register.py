@@ -1,101 +1,119 @@
 #!/usr/bin/env python3
 """Chapters that have drifted more formal than the rest of the book.
 
-Readers found this before any script did. Two of them read chapters 25 and 26
-and said the prose had gone formal in a way the first twenty-four had not:
-"possesses a voice built for open ground", "in the manner of somebody settling
-in", "the particular variety of cold that reaches the fingers a considerable
-time before it reaches anything else". They were right, and the thing they were
-hearing turned out to be countable.
+The count is words of nine letters or more as a share of all words. It is a
+crude proxy for register, useful when a manuscript's formality arrives as
+vocabulary rather than as syntax: a plain observation puts on a long coat.
 
-The count is words of nine letters or more as a share of all words. It is crude
-and it works, because the formality in this book arrives as vocabulary rather
-than as syntax: a plain observation puts on a long coat. Chapter 25 came in at
-5.55% against a book median of 2.54%, the highest of all thirty-six chapters
-and more than double the middle of the book.
+The judgement, when one is configured, is against the book's own median
+rather than against a corpus, which is the point for this measure: the
+question is not whether the prose is ornate for a novel, it is whether a
+chapter reads as though a different person wrote it.
 
-The judgement is against the book's own median rather than against the corpus,
-which is the point. The question is not whether the prose is ornate for a
-novel, it is whether a chapter reads as though a different person wrote it. A
-chapter is flagged at more than 1.6 times the median, which lets the later
-chapters sit where they already sit, since the book does get denser as Chloe
-gets older and that rise is wanted.
+Every number below is descriptive until a policy is configured. With no
+``project_measures.register.ratio`` set there is no basis to fail a chapter
+for its distance from the book's own median, so this prints the table and
+exits 0.
 
-    python3 register.py            report
-    python3 register.py --words N  the long words in the worst chapters
+    python3 register.py                    report, configured chapters dir
+    python3 register.py chapters/*.md      report, explicit files
+    python3 register.py --words N          the long words in the worst chapters
 """
-import argparse, glob, re, statistics as statistics, sys
+import argparse
+import re
+import statistics
+import sys
 from pathlib import Path
 
-# The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import CHAPTERS_DIR
+import project_config
 from textgrader.chapters import chapter_number
 
 WORD = re.compile(r"[A-Za-z']+")
-LONG = 9
-# A chapter may sit this far above the book's own middle before it reads as
-# somebody else's prose. Set from the observed spread: with 25 excluded the
-# rest of the book tops out around 1.6, so this flags the outlier and leaves
-# the ordinary late-chapter rise alone.
-RATIO = 1.6
-
-# A chapter whose long words are its subject rather than its manner. The count
-# below cannot tell ornament from vocabulary, and one chapter in the book is
-# about paperwork: its long words are registrar, signature, percentage,
-# contracts, coordinator, documents, translates. That is what a translation
-# office is called, not a costume the prose has put on, and plaining it would
-# mean renaming the job.
-#
-# A sharper measure was tried and is worse. Counting only words that are long
-# AND rare in the book flags nine to twelve chapters instead of one, because it
-# detects "a later chapter" rather than "an ornate chapter" - the vocabulary
-# widens as Chloe ages, which is wanted. Do not reach for that again.
-EXEMPT = {
-    "28_nineteen": "long words are the job: registrar, signature, contracts, coordinator",
-}
+DEFAULT_LONG_WORD_LETTERS = 9
 
 
-def profile(path):
-    text = re.sub(r"^#.*$", "", Path(path).read_text(), flags=re.M)
-    words = WORD.findall(text)
-    if not words:
+def resolve_paths(explicit, default_dir):
+    if not explicit:
+        return sorted(default_dir.glob("*.md")) if default_dir and default_dir.is_dir() else []
+    paths = []
+    for item in explicit:
+        item = Path(item)
+        if item.is_dir():
+            paths.extend(sorted(item.glob("*.md")))
+        elif item.is_file():
+            paths.append(item)
+    return paths
+
+
+def profile(path, long_word_letters):
+    text = re.sub(r"^#.*$", "", Path(path).read_text(encoding="utf-8"), flags=re.M)
+    tokens = WORD.findall(text)
+    if not tokens:
         return 0.0, [], 0
-    long_words = [word for word in words if len(word) >= LONG]
-    return len(long_words) / len(words) * 100, long_words, len(words)
+    long_words = [word for word in tokens if len(word) >= long_word_letters]
+    return len(long_words) / len(tokens) * 100, long_words, len(tokens)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("paths", nargs="*", type=Path,
+                    help="chapter files or directories; default: the configured chapters directory")
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--words", type=int, metavar="N",
                     help="print the N commonest long words in each flagged chapter")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    rows = []
-    for chapter_path in sorted(glob.glob(str(CHAPTERS_DIR / "*.md"))):
-        pct, longs, word_count = profile(chapter_path)
-        rows.append((Path(chapter_path).stem, pct, longs, word_count))
-    if not rows:
+    config = project_config.load_config(args.config)
+    settings = project_config.measure_settings("register", config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    long_word_letters = settings.get("long_word_letters", DEFAULT_LONG_WORD_LETTERS)
+    ratio = settings.get("ratio")
+    exempt = settings.get("exempt", {}) if isinstance(settings.get("exempt", {}), dict) else {}
+
+    files = resolve_paths(args.paths, chapters_dir)
+    if not files:
         print("  no chapters found")
         return 0
+
+    rows = []
+    for path in files:
+        pct, longs, word_count = profile(path, long_word_letters)
+        rows.append((path.stem, pct, longs, word_count))
 
     median = statistics.median(row[1] for row in rows)
     # When the overall median is zero, compare against the typical non-zero
     # chapter instead of making every occurrence an automatic outlier.
     positive = [row[1] for row in rows if row[1] > 0]
     baseline = median if median > 0 else (statistics.median(positive) if positive else 0.0)
-    ceiling = baseline * RATIO
-    over = [row for row in rows if row[1] > ceiling and row[0] not in EXEMPT]
-    excused = [row for row in rows if row[1] > ceiling and row[0] in EXEMPT]
 
-    print(f"  long words are {LONG} letters or more, as a share of all words")
-    print(f"  book median {median:.2f}%, flag above {ceiling:.2f}% "
-          f"({RATIO} times the median)\n")
+    print(f"  long words are {long_word_letters} letters or more, as a share of all words")
+    print(f"  book median {median:.2f}%")
+
+    if ratio is None:
+        print("  project_measures.register.ratio is not set, so no chapter is flagged as "
+              "formal-drift; the table below is descriptive only.\n")
+        for stem, pct, _, _ in rows:
+            print(f"  {stem[:24]:26s}{pct:6.2f}%")
+        if args.words:
+            from collections import Counter
+            for stem, pct, longs, _ in rows:
+                if longs:
+                    common = Counter(word.lower() for word in longs).most_common(args.words)
+                    print(f"\n  {stem}: " + ", ".join(f"{word} ({count})" for word, count in common))
+        return 0
+
+    ceiling = baseline * ratio
+    over = [row for row in rows if row[1] > ceiling and row[0] not in exempt]
+    excused = [row for row in rows if row[1] > ceiling and row[0] in exempt]
+
+    print(f"  flag above {ceiling:.2f}% ({ratio} times the median)\n")
     for stem, pct, _, _ in rows:
-        if pct > ceiling and stem in EXEMPT:
-            mark = f"  <-- over, and excused: {EXEMPT[stem]}"
+        if pct > ceiling and stem in exempt:
+            mark = f"  <-- over, and excused: {exempt[stem]}"
         elif pct > ceiling:
             mark = "  <-- formal for this book"
         else:
@@ -111,14 +129,13 @@ def main():
     if over:
         names = ", ".join(f"{chapter_number(row[0])} ({row[1]:.2f}%)" for row in over)
         # One verdict line, matching how the scorecard reads every other
-        # measure. The per-chapter rows above are the detail to fix from; the
-        # scorecard has been burned once already by matching a detail line.
+        # measure. The per-chapter rows above are the detail to fix from.
         print(f"\n  FAIL  {len(over)} chapter(s) over: {names}")
         print("  A chapter here reads as though a different person wrote it.\n")
         return 1
     if excused:
-        print(f"\n  {len(excused)} over the line and excused by name in this "
-              f"script, with the reason on the row above.")
+        print(f"\n  {len(excused)} over the line and excused by name in "
+              f"project_measures.register.exempt, with the reason on the row above.")
     print(f"\n  none over {ceiling:.2f}% unexcused: pass\n")
     return 0
 

@@ -1,20 +1,72 @@
 # TextGrader
 
-TextGrader is a lightweight, reproducible English-fiction prose analysis tool.
-It reports measurements as **evidence**, not automatic instructions to rewrite
-prose. It deliberately separates three kinds of result:
+TextGrader measures English prose and reports **evidence**, not instructions to
+rewrite. It is built for authoring agents that draft, measure and revise in a
+loop, so every result carries what such a reader needs to decide whether to act:
+which family of style it belongs to, which way the value is unusual, how
+unusual, how much text it was measured from, and whether the corpus can support
+the claim at all.
 
-* **descriptive and corpus results** locate prose within a reference distribution;
-* **project rules** enforce an author's explicitly configured house choices; and
-* **diagnostics** identify material that deserves human inspection.
+Nothing here produces a quality score. Readability and surface-style measures
+are correlated, unusual prose is not bad prose, and a measurement that lands far
+from a reference corpus is often a deliberate choice. A run never "fails".
 
-There is no “maturity”, “human”, or overall prose-quality score. Readability and
-surface-style measures are correlated, and unusual prose is not necessarily bad.
-Corpus comparisons are two-sided and use median/MAD robust distance.
+Results come in three kinds, which are kept apart on purpose:
+
+* **corpus results** locate prose inside a reference distribution;
+* **project rules** report the author's own configured choices being broken;
+* **diagnostics** point at material that deserves a human look.
+
+## One document, measured once
+
+Every number in a report describes the same text. The pipeline runs once, in
+`textgrader/document.py`, and every metric reads the result:
+
+```
+raw text
+  -> canonical cleanup       Gutenberg boilerplate, Markdown headings,
+  |                          transcript lines, quote normalization
+  -> tokens / sentences / paragraphs      one configured segmenter, not a
+  |                                       regular expression per metric
+  -> quotations / dialogue / narration    dialogue and narration are themselves
+  |                                       DocumentAnalysis objects
+  -> spaCy Doc (optional, chunked, lazy, shared)
+  -> every metric
+```
+
+This is a correctness feature rather than a tidiness one. Core analysis used to
+strip Gutenberg boilerplate and Markdown headings while the optional metrics
+received the raw file, so two numbers in one report could describe two different
+documents; sentence segmentation was a regular expression for most metrics and
+pySBD for one; dialogue was re-parsed, differently, in four places. A metric now
+never decides for itself what a word, a sentence, a quotation or a clean
+manuscript is.
+
+`analysis.dialogue` and `analysis.narration` are ordinary documents, so any
+metric can be pointed at one channel. `analysis.sections` splits on Markdown
+headings and `analysis.windows(n)` on word count, which is what the book-level
+drift metrics compare.
 
 ## Requirements
 
-Python 3.9 or newer. The core has no third-party dependencies.
+Python 3.9 or newer. **No third-party package is required.** Core analysis, the
+corpus builder and most metrics run on the standard library alone.
+
+```console
+pip install -r requirements.txt
+python -m spacy download en_core_web_sm       # for the parse-based metrics
+pip install -r requirements-embeddings.txt    # semantic similarity (pulls torch)
+```
+
+Every optional library is reached through `textgrader/optional.py` and degrades
+to a visible `unavailable` result with the reason and the install command. A
+metric that loses its library does not take the run with it. To prove that on a
+machine that has everything installed:
+
+```console
+TEXTGRADER_DISABLE_OPTIONAL=all python3 grade.py draft.md
+TEXTGRADER_DISABLE_OPTIONAL=spacy,wordfreq python3 grade.py draft.md
+```
 
 ## Analyze a manuscript
 
@@ -22,31 +74,194 @@ Python 3.9 or newer. The core has no third-party dependencies.
 python3 grade.py draft.md
 python3 grade.py draft.md --json
 python3 grade.py draft.md --json-out report.json
+python3 grade.py chapter_07.md --comparison-unit chapter
+python3 grade.py draft.md --enable mtld --enable-family sentence_rhythm
+python3 grade.py --list-metrics
 ```
 
-Every result has a stable `metric_id`, a `status_type`, sample information, and
-optional corpus statistics, details, warnings, or errors. JSON accounting is
-built from these objects rather than terminal words. A failed optional metric
-process becomes an `internal_error`, remains in the result count, and makes the
-command exit 2; it can never silently disappear.
+## Reading the output as an agent
 
-Tiny and empty inputs, missing profiles, and unavailable measures are reported
-as `unavailable` rather than treated as prose findings. Approximate Lexile is
-currently disabled: the old frequency file contained Gutenberg boilerplate and
-its calibration was not reproducible.
-
-## Configuration
-
-Relative paths are resolved from the configuration file, not the current
-working directory. The distributed configuration has no personal style rules.
-Rules only take effect when explicitly added:
+`summary.top_findings` is the short, severity-ordered list to read first.
+Every result looks like this:
 
 ```json
 {
-  "manuscript": "draft.md",
+  "metric_id": "rhythm.in_run_share_short",
+  "family": "sentence_rhythm",
+  "name": "Sentences inside a run of 3+ short ones",
+  "value": 55.0,
+  "unit": "%",
+  "direction": "high",
+  "severity": 4.1,
+  "confidence": "high",
+  "sample_size": 221,
+  "comparison_unit": "chapter",
+  "channel": "narration",
+  "action": "review",
+  "corpus": {"corpus_median": 17.0, "corpus_count": 40, "percentile": 98.8,
+             "method": "median/MAD", "outlier": true},
+  "distribution": {"median": 3, "p10": 1, "p90": 9, "entropy": 1.9,
+                   "lag1_autocorrelation": 0.31, "bimodality": 0.61},
+  "evidence": [{"sentence_index": 412, "run": 7, "text": "He stopped. ..."}]
+}
+```
+
+Branch on `action`:
+
+| `action` | meaning |
+| --- | --- |
+| `review` | far enough from the reference to be worth a look |
+| `informational` | measured, and unremarkable or not comparable |
+| `insufficient_data` | not enough text, or not enough corpus, to say anything |
+| `rule_violation` | an explicitly configured project rule was broken |
+| `unavailable` | the measurement did not happen, and `warning` says why |
+| `error` | the metric crashed; the run continues and the count is visible |
+
+`severity` is the robust distance from the corpus centre, so findings across
+different units are ranked against each other. `channel` says whether the
+number describes the whole text, dialogue only, or narration only.
+
+## Distributions, not averages
+
+A mean is rarely the interesting fact about a text. These two share a mean
+sentence length of fourteen words and are not the same prose:
+
+```
+A: 14, 14, 14, 14, 14, 14
+B:  4,  7, 13, 29,  9, 22
+```
+
+So wherever a metric has a sample, it publishes the sample's shape in
+`distribution`: count, mean, median, std, CV, min, max, p10/p25/p75/p90, IQR,
+MAD, Shannon entropy, lag-1 autocorrelation, skew, a bimodality coefficient,
+and a two-group split with its separation. The headline `value` is normally the
+median, because the mean of a bimodal sample describes neither mode.
+
+Named buckets (`stats.histogram`), band run lengths (`stats.run_lengths`) and
+the first Wasserstein distance between two whole distributions
+(`stats.wasserstein`, SciPy when present and an exact pure-Python fallback
+otherwise) are available to any metric.
+
+**On bimodality specifically**: the bimodality coefficient is a moment-based
+screening statistic, not a test. It says the sample is shaped less like one hump
+than a normal distribution would be. `two_group_split` then does a
+one-dimensional two-means split and reports `separation`, the between-group
+share of total variance, so "this text has two modes at 5 and 27 words" is a
+claim with a number behind it. Neither can name *why* there are two groups.
+Hartigan's dip test would be a stronger screen and is not implemented, because
+it needs a dependency for one number.
+
+## When a difference is a finding
+
+`textgrader/stats.py` chooses an estimator by what the corpus can support, and
+says which it used:
+
+| method | when | why |
+| --- | --- | --- |
+| `median/MAD` | the corpus varies around its median | the default; threshold is a modified-z of 3.5 |
+| `median/IQR` | MAD is zero but the tails differ | a discrete metric over a small corpus (`3, 3, 3, 3, 5, 9`) has MAD 0, which would otherwise make every non-3 infinitely distant |
+| `empirical percentile` | MAD and IQR are both zero | the observed range is all that is left |
+| `insufficient variation` | every observation is identical | **no outlier claim is made** |
+
+Three separate gates can withhold a comparison, and each is reported instead of
+being absorbed:
+
+* **corpus too small.** Below 8 observations no outlier is called at all; below
+  20 the claim is marked `confidence: "low"` because the tails are not
+  determined. Five books do not get the authority of fifty.
+* **manuscript too small.** Each metric declares the sample size it needs
+  (`MIN_SAMPLE`). A passive rate from 3 sentences and one from 3,000 do not
+  deserve equal standing, and the small one becomes `insufficient_data`.
+  Separately, a document under 40 sentences or 500 words gets no corpus
+  comparison at all, so a two-word file can no longer collect a pile of
+  confident outliers.
+* **unit mismatch.** See below.
+
+## Books, chapters and scenes
+
+A corpus profile records `comparison_unit`: `book`, `chapter`, `scene` or
+`passage`. Scale-dependent metrics (word count, sentence count, paragraph count)
+are refused across a mismatch, because a chapter "failing" document length
+against a shelf of novels is a fact about how books are divided, not about the
+chapter. Rates and ratios are never refused: that is what expressing a
+measurement as a rate is for.
+
+An unspecified unit resolves to `book` on both sides, so the common case of one
+whole document against a corpus of whole documents still compares. Declaring
+`analysis.comparison_unit: "chapter"` is what turns the protection on.
+
+## Performance, for agents that run this in a loop
+
+`python3 benchmark.py` times every step on your machine and your text. Figures
+below are one core, 309,000 words, 17,654 sentences, pySBD segmentation.
+
+Anything over a second is called out, per the cost column in
+`--list-metrics`, and `grade.py` attaches a warning to any metric that takes
+more than a second on the document in front of it.
+
+| shared pipeline step | seconds | note |
+| --- | ---: | --- |
+| cleanup, words, paragraphs, quotations | 0.4 | linear |
+| **sentence segmentation (pySBD)** | **5.3** | `text_processing.segmenter: "builtin"` does the same job in **0.25s** with cruder abbreviation handling |
+| dialogue view | 1.3 | segmenting the spoken channel |
+| narration view | 3.7 | segmenting the narrated channel |
+| **spaCy parse** | **27.7** | `en_core_web_sm`, `ner` disabled; shared by all 13 parse metrics |
+
+Individual metrics, once the pipeline is warm: 37 of 57 are under half a second.
+The ones that are not:
+
+| metric | seconds |
+| --- | ---: |
+| `chapter_zscores` | 2.2 (the other two `book_drift` metrics then cost ~0) |
+| `repeated_ngrams` | 3.5 |
+| `dialogue_turn_lengths` | 1.5 |
+| `duplicate_sentence_clusters` | 1.4 |
+| `word_rarity`, `punctuation_profile`, `tense_consistency` | ~1.0 |
+
+Practical guidance:
+
+* A full run with everything except the parse metrics is roughly **20 seconds**
+  on a 300,000-word novel, most of it segmentation.
+* Turning on any parse metric adds the 28-second parse once, not once per
+  metric. Enabling all 13 costs about 35 seconds in total.
+* For a fast revision loop, use `--comparison-unit chapter` on one chapter at a
+  time, or set `text_processing.segmenter: "builtin"`.
+* `nlp.max_words` refuses a parse above a size you choose, rather than stalling.
+
+
+## Configuration
+
+Relative paths resolve from the configuration file, not the working directory.
+The distributed `config.json` contains no personal style rules and names no
+book. `--config other.json` reaches the bundled reports too, through the
+`TEXTGRADER_CONFIG` environment variable; it used to reach only the new metrics
+while every legacy report silently kept using the repository's own file.
+
+```json
+{
   "corpus_profile": "my-corpus.json",
+  "analysis": {
+    "comparison_unit": "chapter",
+    "min_sentences_for_corpus": 40,
+    "min_words_for_corpus": 500,
+    "lexile_frequency_source": "none"
+  },
+  "text_processing": {
+    "strip_gutenberg": true,
+    "strip_markdown_headings": true,
+    "strip_transcript": true,
+    "drop_marker_paragraphs": true,
+    "normalize_quotes": false,
+    "segmenter": "auto",
+    "language": "en",
+    "transcript": null
+  },
+  "nlp": {"model": "en_core_web_sm", "disable": ["ner"], "max_words": null},
+  "regex": {"engine": "auto", "timeout_seconds": 2.0},
+  "metrics": {"mtld": {"enabled": true}},
   "project_rules": {
     "em_dash": "forbid",
+    "quote_style": "straight",
     "banned_phrases": [
       {"id": "filter_word", "name": "Filter-word check", "pattern": "\\bI noticed\\b"}
     ]
@@ -54,159 +269,411 @@ Rules only take effect when explicitly added:
 }
 ```
 
-An empty `project_rules` object means no violations are possible. Rules are not
-corpus observations and do not turn diagnostics into failures.
+`text_processing` is no longer decorative: it is applied by `grade.py`, recorded
+in every corpus profile, and compared between the two. Grading a manuscript
+against a corpus prepared differently produces a visible warning naming the
+fields that differ.
 
-Advanced users can configure external structured metrics with
-`metric_commands`. Each command must exit zero and print one result object or a
-list of objects as JSON. `{manuscript}` in an argument is replaced with the
-input path. Non-zero exits and invalid JSON become visible internal errors.
-Commands are never run unless `allow_external_metric_commands` is explicitly
-set to `true`; only enable this for a configuration you trust.
+An unknown key under `text_processing` or `nlp` is an error rather than a silent
+no-op, so a typo cannot quietly disable a cleanup step.
 
-The earlier reports in `measures/` use the same `metrics` configuration as the
-newer metric modules. They are enabled in the checked-in defaults while the
-newer optional metrics are disabled. Toggle any report individually, for
-example `{"metrics": {"number_report": false, "mattr": true}}`. Bundled
-reports run as fixed Python commands without a
-shell, have a 60-second timeout, and place their textual output in the result's
-`details`. Project-wide reports still use the paths and policies in the project
-configuration.
+### Project rules and user-supplied patterns
 
-The dependency-free sentence splitter remains the default. Enable the optional
-`sentence_segmentation` metric and install `pysbd` to report sentence count and
-mean sentence length from a library designed to handle abbreviations and other
-boundaries that punctuation-plus-whitespace cannot distinguish.
+Rules are the only thing reported as a violation, and they are off until
+configured. Every pattern is compiled once at load: a pattern that does not
+compile becomes an `unavailable` result naming the rule instead of an exception
+mid-run, and a pattern that compiles but backtracks catastrophically is cut off
+by the `regex` package's matching timeout (`regex.timeout_seconds`). Without
+that package installed there is no timeout available, so scanning is bounded by
+input size instead and the result says so.
 
-## Build a self-contained corpus profile
+### External metric commands
 
-Corpus acquisition is a separate, dependency-free step. The downloader has a
-small provider interface and can search Gutenberg, Standard Ebooks, Internet
-Archive, Wikisource, Google Books, and the Library of Congress. A failed source
-does not prevent the remaining configured sources from being searched:
+`metric_commands` runs your own programs and reads one JSON result object, or a
+list of them, from stdout. `{manuscript}` is substituted. Non-zero exits and
+invalid JSON become visible internal errors. Commands never run unless
+`allow_external_metric_commands` is explicitly `true`.
+
+## The metrics
+
+`python3 grade.py --list-metrics` prints this table with the costs measured on
+your machine. Cost is `fast` (under half a second on a 300,000-word novel),
+`moderate` (up to a few seconds) or `parse` (needs the shared spaCy parse).
+
+The nine metrics on by default are the ones that are fast, dependency-free,
+generic, and meaningful without any project-specific configuration. Everything
+else is opt-in, including all thirteen of the bundled project reports in
+`measures/`, which enforce an author's own house policy and mean nothing without
+it.
+
+### sentence rhythm
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `length_quantiles` | fast | - | yes | Sentence and paragraph length quantiles. |
+| `sentence_length_autocorrelation` | fast | - | no | Lag-1..n autocorrelation of sentence length: catches metronomic prose. |
+| `sentence_length_deltas` | fast | - | no | Distribution of the change in length between adjacent sentences. |
+| `sentence_length_entropy` | fast | - | no | Entropy of the sentence-length distribution, normalized for range. |
+| `sentence_run_lengths` | fast | - | no | Run-length distribution of short/medium/long sentence bands. |
+| `sentence_segmentation` | fast | pysbd | no | Which segmenter was used, and how much it disagrees with the built-in one. |
+
+### paragraph rhythm
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `paragraph_rhythm` | fast | - | no | Paragraph length dispersion, quantiles and autocorrelation. |
+| `single_sentence_paragraph_runs` | fast | - | no | Runs of consecutive one-sentence paragraphs. |
+
+### syntax
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `clause_structure` | parse | spacy | no | Mean token depth in the dependency tree (not per-sentence tree depth). |
+| `clause_types` | parse | spacy | no | Relative, adverbial and complement clause rates. |
+| `coordination_ratio` | parse | spacy | no | Coordination against subordination. |
+| `dependency_distance` | parse | spacy | no | Mean and SD of dependency distance, a real syntactic-complexity measure. |
+| `finite_clauses` | parse | spacy | no | Finite clauses per sentence. |
+| `opening_patterns` | parse | spacy | no | POS/dependency sentence-opening shapes, with no hard-coded vocabulary. |
+| `parse_depth` | parse | spacy | no | Per-sentence maximum dependency-tree depth. |
+| `passive_voice` | parse | spacy | no | Share of clauses in the passive voice. |
+| `pos_distribution` | parse | spacy | no | Share of each open-class part of speech. |
+| `tense_consistency` | parse | spacy | no | Rate of sentence-to-sentence tense changes in narration. |
+
+### lexical
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `hdd` | moderate | lexicalrichness | no | HD-D, a hypergeometric length-resistant diversity measure. |
+| `mattr` | moderate | - | yes | Moving-average type-token ratio, length-resistant lexical diversity. |
+| `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
+| `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
+| `word_rarity` | moderate | wordfreq | no | Zipf word-rarity distribution from general-language frequencies. |
+
+### repetition
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `lemma_repetition` | parse | spacy | no | Repetition measured over lemmas, so walk/walked/walking cannot hide. |
+| `local_repetition` | moderate | - | yes | Content-word reuse inside sliding windows. |
+| `repeated_ngrams` | moderate | - | yes | Repeated word sequences, scored by excess occurrences rather than by type count. |
+| `repetition_distance` | moderate | - | no | How soon a content word is reused, in tokens. |
+| `sentence_openings` | fast | - | yes | How often a sentence starts with the same few words as another. |
+
+### semantic repetition
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `adjacent_sentence_similarity` | moderate | sentence_transformers | no | Embedding similarity between neighbouring sentences. |
+| `duplicate_sentence_clusters` | moderate | sentence_transformers | no | Clusters of sentences that restate one another. |
+| `local_similarity_window` | moderate | sentence_transformers | no | Similarity to the previous three and five sentences. |
+| `paragraph_similarity` | moderate | sentence_transformers | no | Paragraph-to-paragraph semantic similarity. |
+
+### dialogue
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `character_voice` | fast | - | no | Pairwise distance between transcript speakers' function-word profiles. |
+| `dialogue_attribution` | fast | - | no | Speech tag against action beat against untagged turn. |
+| `dialogue_channels` | moderate | - | no | Every core shape measured separately for dialogue and for narration. |
+| `dialogue_contractions` | fast | - | yes | Contraction rate inside spoken text, excluding possessives. |
+| `dialogue_runs` | fast | - | no | Consecutive spoken turns with no narration between them. |
+| `dialogue_tags` | fast | - | yes | Speech-tag density and how elaborate the tags are. |
+| `dialogue_turn_lengths` | moderate | - | no | Distribution of spoken turn lengths in words and sentences. |
+| `speaker_function_words` | fast | - | no | Per-speaker function-word profile and pairwise distance. |
+| `speaker_style` | fast | - | no | Questions, exclamations and contractions per identified speaker. |
+
+### discourse
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `causal_connectives` | fast | - | no | Causal and explanatory connective rates. |
+| `hedges_boosters` | fast | - | no | Hedge, booster and modal rates. |
+| `rhetorical_constructions` | moderate | - | no | Repeated rhetorical templates, discovered rather than listed. |
+| `sentence_initial_connectives` | fast | - | no | Rate of sentences opening on However, Indeed, Moreover and the like. |
+
+### pov
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `entity_pronoun_ratio` | parse | spacy | no | Named entities against pronouns: over-naming or pronoun saturation. |
+| `narration_pov` | fast | - | no | Person-marking rates measured in narration only, free of dialogue. |
+| `pov_block_confidence` | fast | - | no | Per-block POV call with an explicit evidence count; no evidence means no call. |
+| `pov_pronouns` | fast | - | yes | Person-marking pronoun rates and block-by-block POV evidence. |
+
+### punctuation
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `punctuation` | fast | - | yes | Rate of each punctuation mark per 1,000 words. |
+| `punctuation_entropy` | moderate | - | no | Entropy of the punctuation mix, a regularity signal. |
+| `punctuation_patterns` | moderate | - | no | Repeated punctuation shapes across consecutive sentences and paragraphs. |
+| `punctuation_profile` | moderate | - | no | Full per-mark distribution, per sentence and per 1,000 words. |
+
+### book drift
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `change_points` | moderate | ruptures | no | Where the style changes abruptly. |
+| `chapter_zscores` | moderate | - | no | Which section looks unlike the rest of this book, and on which measures. |
+| `rolling_drift` | moderate | - | no | Gradual style drift from the opening to the close. |
+
+### authorial
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `function_words` | fast | - | no | Burrows's Delta against the corpus function-word profiles. |
+
+### sentence rhythm
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `length_quantiles` | fast | - | yes | Sentence and paragraph length quantiles. |
+| `sentence_length_autocorrelation` | fast | - | no | Lag-1..n autocorrelation of sentence length: catches metronomic prose. |
+| `sentence_length_deltas` | fast | - | no | Distribution of the change in length between adjacent sentences. |
+| `sentence_length_entropy` | fast | - | no | Entropy of the sentence-length distribution, normalized for range. |
+| `sentence_run_lengths` | fast | - | no | Run-length distribution of short/medium/long sentence bands. |
+| `sentence_segmentation` | fast | pysbd | no | Which segmenter was used, and how much it disagrees with the built-in one. |
+
+### paragraph rhythm
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `paragraph_rhythm` | fast | - | no | Paragraph length dispersion, quantiles and autocorrelation. |
+| `single_sentence_paragraph_runs` | fast | - | no | Runs of consecutive one-sentence paragraphs. |
+
+### syntax
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `clause_structure` | parse | spacy | no | Mean token depth in the dependency tree (not per-sentence tree depth). |
+| `clause_types` | parse | spacy | no | Relative, adverbial and complement clause rates. |
+| `coordination_ratio` | parse | spacy | no | Coordination against subordination. |
+| `dependency_distance` | parse | spacy | no | Mean and SD of dependency distance, a real syntactic-complexity measure. |
+| `finite_clauses` | parse | spacy | no | Finite clauses per sentence. |
+| `opening_patterns` | parse | spacy | no | POS/dependency sentence-opening shapes, with no hard-coded vocabulary. |
+| `parse_depth` | parse | spacy | no | Per-sentence maximum dependency-tree depth. |
+| `passive_voice` | parse | spacy | no | Share of clauses in the passive voice. |
+| `pos_distribution` | parse | spacy | no | Share of each open-class part of speech. |
+| `tense_consistency` | parse | spacy | no | Rate of sentence-to-sentence tense changes in narration. |
+
+### lexical
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `hdd` | moderate | lexicalrichness | no | HD-D, a hypergeometric length-resistant diversity measure. |
+| `mattr` | moderate | - | yes | Moving-average type-token ratio, length-resistant lexical diversity. |
+| `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
+| `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
+| `word_rarity` | moderate | wordfreq | no | Zipf word-rarity distribution from general-language frequencies. |
+
+### repetition
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `lemma_repetition` | parse | spacy | no | Repetition measured over lemmas, so walk/walked/walking cannot hide. |
+| `local_repetition` | moderate | - | yes | Content-word reuse inside sliding windows. |
+| `repeated_ngrams` | moderate | - | yes | Repeated word sequences, scored by excess occurrences rather than by type count. |
+| `repetition_distance` | moderate | - | no | How soon a content word is reused, in tokens. |
+| `sentence_openings` | fast | - | yes | How often a sentence starts with the same few words as another. |
+
+### semantic repetition
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `adjacent_sentence_similarity` | moderate | sentence_transformers | no | Embedding similarity between neighbouring sentences. |
+| `duplicate_sentence_clusters` | moderate | sentence_transformers | no | Clusters of sentences that restate one another. |
+| `local_similarity_window` | moderate | sentence_transformers | no | Similarity to the previous three and five sentences. |
+| `paragraph_similarity` | moderate | sentence_transformers | no | Paragraph-to-paragraph semantic similarity. |
+
+### dialogue
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `character_voice` | fast | - | no | Pairwise distance between transcript speakers' function-word profiles. |
+| `dialogue_attribution` | fast | - | no | Speech tag against action beat against untagged turn. |
+| `dialogue_channels` | moderate | - | no | Every core shape measured separately for dialogue and for narration. |
+| `dialogue_contractions` | fast | - | yes | Contraction rate inside spoken text, excluding possessives. |
+| `dialogue_runs` | fast | - | no | Consecutive spoken turns with no narration between them. |
+| `dialogue_tags` | fast | - | yes | Speech-tag density and how elaborate the tags are. |
+| `dialogue_turn_lengths` | moderate | - | no | Distribution of spoken turn lengths in words and sentences. |
+| `speaker_function_words` | fast | - | no | Per-speaker function-word profile and pairwise distance. |
+| `speaker_style` | fast | - | no | Questions, exclamations and contractions per identified speaker. |
+
+### discourse
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `causal_connectives` | fast | - | no | Causal and explanatory connective rates. |
+| `hedges_boosters` | fast | - | no | Hedge, booster and modal rates. |
+| `rhetorical_constructions` | moderate | - | no | Repeated rhetorical templates, discovered rather than listed. |
+| `sentence_initial_connectives` | fast | - | no | Rate of sentences opening on However, Indeed, Moreover and the like. |
+
+### pov
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `entity_pronoun_ratio` | parse | spacy | no | Named entities against pronouns: over-naming or pronoun saturation. |
+| `narration_pov` | fast | - | no | Person-marking rates measured in narration only, free of dialogue. |
+| `pov_block_confidence` | fast | - | no | Per-block POV call with an explicit evidence count; no evidence means no call. |
+| `pov_pronouns` | fast | - | yes | Person-marking pronoun rates and block-by-block POV evidence. |
+
+### punctuation
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `punctuation` | fast | - | yes | Rate of each punctuation mark per 1,000 words. |
+| `punctuation_entropy` | moderate | - | no | Entropy of the punctuation mix, a regularity signal. |
+| `punctuation_patterns` | moderate | - | no | Repeated punctuation shapes across consecutive sentences and paragraphs. |
+| `punctuation_profile` | moderate | - | no | Full per-mark distribution, per sentence and per 1,000 words. |
+
+### book drift
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `change_points` | moderate | ruptures | no | Where the style changes abruptly. |
+| `chapter_zscores` | moderate | - | no | Which section looks unlike the rest of this book, and on which measures. |
+| `rolling_drift` | moderate | - | no | Gradual style drift from the opening to the close. |
+
+### authorial
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `function_words` | fast | - | no | Burrows's Delta against the corpus function-word profiles. |
+
+### What these metrics do not claim
+
+Honesty about the limits is part of the output, not a footnote:
+
+* `clause_structure` averages ancestor count over every token. That is **mean
+  token depth**, not tree depth. It is named that way now, and
+  `syntax.max_parse_depth` in the `parse_depth` module is the real per-sentence
+  maximum depth.
+* `nominalizations` is **suffix matching** on parsed nouns, not derivational
+  morphology. The metric name, the docstring and every finding say so.
+* The `subord` / `relcl` / `simple` core metrics are **lexical proxies** that
+  match cue words with a regular expression. The `clause_types` module is the
+  parse-based replacement.
+* `discourse_causal` cannot separate causal `since` from temporal `since`, and
+  `discourse_hedges` cannot separate the hedge `seemed` from a literal one.
+  These are surface counts and are labelled as such.
+* `dialogue_contractions` excludes bare `'s` entirely, because `"she's happy"`
+  and `"the dog's bowl"` are indistinguishable without a parse. The excluded
+  mass is reported separately as `style.dialogue_ambiguous_s_rate` rather than
+  guessed at.
+* Speaker attribution in prose is a **biased sample**: only tagged turns can be
+  attributed, and a two-hander drops the tag once established. Compare speakers
+  with each other, never read a per-speaker zero as a fact about a character.
+* Without `sentence-transformers`, the four `semantic_*` metrics fall back to a
+  TF-IDF lexical overlap. That is a different quantity from an embedding
+  similarity, so both the warning and every evidence row name the backend.
+  The fallback will miss a true paraphrase that changes every content word.
+* Single-quote dialogue is not parsed. An apostrophe and a closing single quote
+  are the same character. The parser reports the limitation rather than
+  guessing.
+
+## Build a corpus profile
+
+Corpus acquisition is a separate, dependency-free step with a small provider
+interface: Gutenberg, Standard Ebooks, Internet Archive, Wikisource, Google
+Books and the Library of Congress. A failed source does not stop the rest.
 
 ```console
 python3 build_corpus.py --list-providers
-python3 build_corpus.py --config corpus_scifi_third.json
 python3 build_corpus.py --config config.json
 python3 build_corpus.py --config config.json --healthcheck
 ```
 
-The last two commands read the `corpus_builder` object in the ordinary project
-configuration, so a second JSON file is optional. API keys and contact details
-can be set there, but secrets should normally be supplied through a private,
-untracked configuration file.
-
-`--work-type` accepts `fiction`, `short_story`, `essay`, `speech`, `poetry`,
-`drama`, or `any`, and can be repeated. These are transparent catalog-metadata
-filters, not claims about literary form. There is no built-in ban on short
-works. Adjust `min_words` and `max_words` when selecting them. Use repeated
-`--include-author` options to allow particular authors, `--max-authors 1` for a
-single-author corpus, and `max_books_per_author: null` in JSON to remove the
-per-author cap. `max_authors` can also constrain a niche corpus to, for example,
-five distinct authors without limiting how many works each contributes.
-
-Providers return a shared candidate/document model and the selector
-deduplicates across sources before download. Open Library and Google Books are
-replaceable metadata enrichers; if one is unavailable, the chain tries the
-next. Plain text, HTML, and EPUB extraction use only the Python standard
-library. Google Books items are acquired only when its API exposes a full EPUB,
-and the other providers likewise skip records without a usable full-text
-format; a search result is not treated as permission or proof of availability.
-
-After acquisition, supply the generated UTF-8 `.txt` files (or directories) to
-the profile builder:
+Then profile the downloaded text:
 
 ```console
-python3 corpus_profile.py books/ another/book.txt \
-  --name "Public-domain fiction sample" -o corpus_profile.json
-python3 corpus_profile.py books/ --manifest corpus-manifest.json -o profile.json
-python3 corpus_profile.py books/ --config config.json -o profile.json
+python3 corpus_profile.py books/ --name "Public-domain fiction" -o corpus.json
+python3 corpus_profile.py chapters/ --comparison-unit chapter -o chapters.json
+python3 corpus_profile.py books/ --config config.json -o corpus.json
+python3 corpus_profile.py books/ --config config.json --parse-metrics -o full.json
 ```
 
-Core prose distributions are built by default; `--no-core-metrics` is the
-explicit opt-out. Pass the same project configuration used for grading so
-option-sensitive metrics (for example, MATTR's window) are computed alike.
-TextGrader records those settings and refuses unlike corpus comparisons.
-The checked-in default configuration uses `prose_reference.json`, the bundled
-23-book reference.
+Pass the same `--config` used for grading. The builder reproduces its
+`text_processing` and its metric options, records both in the profile, and
+`grade.py` refuses a comparison whose options do not match: a MATTR over a
+100-word window and one over a 50-word window are different measurements.
 
-The profile contains its schema/parser/metric versions, corpus name, build
-timestamp, preprocessing settings, source IDs, filenames, SHA-256 hashes,
-per-book counts, optional manifest metadata, robust distributions, and a word
-frequency table. Runtime analysis needs only the profile, never the raw books.
-Duplicate filename stems remain distinct through hash-derived source IDs.
+`--parse-metrics` also profiles the thirteen spaCy metrics. The builder used to
+skip everything needing a parse outright, so passive voice, syntax, tense, POS
+and nominalizations could be measured on a manuscript but never compared with
+anything. They are opt-in because they are slow, not because they are unwanted.
 
-For byte-reproducible output, set `SOURCE_DATE_EPOCH` or build programmatically
-with a fixed `built_at`. Runtime grading uses only the derived profile and does
-not contact acquisition providers.
+A profile contains its schema, parser and metric-definition versions, corpus
+name, comparison unit, build timestamp, text-processing fingerprint, per-source
+IDs, filenames and SHA-256 hashes, per-source metric values, robust
+distributions with their full shape, function-word feature profiles and a word
+frequency table. Runtime grading needs only the profile, never the raw books.
 
-The optional manifest is JSON whose `sources` member is keyed by relative
-filename (or is a list with `filename`/`path` fields). Values can include an
-`id` and arbitrary metadata such as author, publication year, or license.
+For byte-reproducible output set `SOURCE_DATE_EPOCH`, or call `build_profile`
+with a fixed `built_at`.
 
-## Shared text processing
+## Project reports in `measures/`
 
-All new analysis and profile code uses the shared `textgrader.text` layer for
-Unicode-aware words, sentence and paragraph segmentation, Markdown-heading and
-Gutenberg removal, quote/dialogue parsing, and configurable transcript lines.
-Straight and curly double quotes are normalized consistently. Single-quote
-dialogue is not guessed: the parser reports that limitation. Transcript speaker
-names are not limited to a built-in cast or a fixed username length.
+These predate the structured pipeline and are all **off by default**. Each is
+one author's house policy made runnable, so each is now driven entirely by
+`project_measures` in your configuration: cast lists, tic patterns and their
+target rates, register thresholds and chapter exemptions, style target bands,
+formatting policy, citation filename conventions and dialogue peer books. With
+no configuration they print their descriptive table, apply no threshold, and
+exit successfully, because "no configured policy" is not a violation.
 
-The regex-labelled clause measurements are intentionally called **lexical
-proxies**. They do not claim to parse English grammar. A future NLP extra can
-add syntactic analyses without making a heavy dependency mandatory.
+`examples/project_measures.example.json` holds the complete set of values that
+used to be hard-coded, preserved as a worked example of what the configuration
+can express. It describes one specific manuscript and is not a default.
 
-## Chapters and legacy commands
+## Approximate Lexile and the bundled word frequency table
 
-Chapter filenames may begin with an arbitrary-length integer such as
-`100_epilogue.md`; shared parsing does not truncate it to two characters.
-Standalone scripts in `measures/` remain available during migration, but
-`grade.py` is the supported structured entry point. Project-specific character
-sheets, citation filename conventions, cast aliases, chapter bands, targets,
-and prose bans are not defaults.
+`word_frequency.json` was built from Gutenberg text that still contained the
+licence boilerplate, and the Lexile coefficients were fitted against that
+contaminated table rather than a published corpus. It is kept, and it is off.
+`analysis.lexile_frequency_source` chooses:
+
+* `none` (default) - approximate Lexile is unavailable rather than wrong;
+* `bundled` - reproduces every number this repository ever printed, boilerplate
+  and all;
+* `wordfreq` - clean general-language frequencies, on a different scale from the
+  one the coefficients were fitted to.
+
+All three facts are reported with the value. The `word_rarity` metric is the
+honest replacement: a full Zipf distribution rather than one fitted number.
 
 ## Tests
 
 ```console
-python3 -m unittest discover -s tests -v
+python3 -m pytest
 ```
 
-### Opt-in style and "AI-ish" diagnostics
+pytest, not `unittest discover`. The old documented command silently skipped
+every module-level test function in `tests/test_build_corpus.py`, so the suite
+could look green while not running. The suite parametrises over the whole metric
+registry, so every registered metric is checked against the empty string, a
+one-word document, a document with no dialogue and a realistic manuscript, and
+against `TEXTGRADER_DISABLE_OPTIONAL=all`.
 
-All additional style diagnostics are **off by default**. They do not claim to
-identify authorship or produce a human-likeness score: they expose inspectable
-signals that an authoring AI (or a person) can use to review repetitive or
-uncharacteristic prose. Enable only the measurements useful to your project:
+## Extending
 
-```json
-{
-  "metrics": {
-    "repeated_ngrams": {"enabled": true, "sizes": [3, 4, 5, 6]},
-    "mattr": {"enabled": true, "window": 100},
-    "length_quantiles": {"enabled": true},
-    "passive_voice": {"enabled": true}
-  },
-  "nlp": {"model": "en_core_web_sm"}
-}
+A metric is one module under `textgrader/metrics/` plus one row in the registry
+in `textgrader/metrics/__init__.py`:
+
+```python
+FAMILY = "sentence_rhythm"
+COST = FAST
+REQUIRES = ()
+MIN_SAMPLE = 30
+UNIT_SENSITIVE = False
+
+def measure(analysis, config=None, profile=None):
+    return [finding("rhythm.my_metric", "My metric", value, "%",
+                    family=FAMILY, sample_size=n, min_sample=MIN_SAMPLE,
+                    distribution=summarize(values), evidence=rows)]
 ```
 
-Available switches are `repeated_ngrams`, `sentence_openings`,
-`local_repetition`, `function_words`, `mattr`, `punctuation`,
-`length_quantiles`, `pov_pronouns`, `dialogue_contractions`, `dialogue_tags`,
-`sentence_segmentation`,
-`passive_voice`, `clause_structure`, `pos_distribution`, `tense_consistency`,
-`nominalizations`, and `character_voice`. Each implementation lives in its own
-module under `textgrader/metrics/`. Corpus profiles include distributions for
-dependency-free scalar metrics and function-word profiles, so new profiles can
-compare an enabled manuscript metric to the corpus rather than to a hard-coded
-threshold. Rebuild older profiles to add these distributions.
-
-The five grammatical metrics require the optional spaCy package and an English
-model. Install them, for example, with `pip install spacy` followed by
-`python -m spacy download en_core_web_sm`. If they are enabled without a usable
-model, their results remain visible as unavailable warnings; core operation has
-no third-party dependency. Character voice distance currently recognizes
-transcript-style `Speaker: dialogue` lines and reports when there are not enough
-speakers to compare.
+`textgrader/metrics/common.py` documents the contract in full and
+`rhythm_autocorrelation.py` is the worked example. The rules that matter: read
+everything from `analysis`, never raise on degenerate input, publish the shape
+of a sample rather than its mean, keep evidence short, and reach every optional
+package through `textgrader/optional.py`.

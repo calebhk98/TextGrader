@@ -1,36 +1,76 @@
 #!/usr/bin/env python3
-"""Prose statistics and tic scan for a Halstead chapter.
+"""Prose statistics and tic scan for one or more chapters.
 
-This is the script embedded at the end of STYLE_GUIDES.md, reconstructed into a
-runnable file. That copy was pasted through a markdown escaper, which put
-backslashes in front of most operators ("t \\= load(path)") and mangled the
-regex character classes, so it could not run as printed. Thresholds, output
-format and metric definitions are unchanged from it.
-
-Only deliberate change: numpy is replaced with the standard library. np.median,
-np.mean and np.std(ddof=1) are statistics.median, fmean and stdev exactly, so
-the numbers are identical and the script has no dependencies.
+Every band or target printed as PASS/FAIL below comes from
+``project_measures.style_report.targets`` in the user's config. With no
+targets configured, every column is measured and printed and marked
+"not set" instead of PASS or FAIL, since there is no basis to judge a book
+against nobody's stated preference.
 
     python3 style_report.py chapters/01_before.md
     python3 style_report.py chapters/01_before.md "Ch1 draft 3"
     python3 style_report.py chapters/*.md          # one report per file
+    python3 style_report.py --summary chapters/*.md
+
+Config (``project_measures.style_report.targets``), all optional:
+
+    "sentence_mean": [11, 18],
+    "sentence_cv": [68, 100],
+    "sentence_bands": {"under_10": [low, high], "10_20": [...],
+                       "20_35": [...], "over_35": [...]},
+    "quoted_share": [26, 34],
+    "spoken_mean": [8, 10],
+    "narration_mean": [14, 17],
+    "narration_under_10_max": 40,
+    "paragraph_sentence_mean": [2.9, 3.5],
+    "paragraph_sentence_cv_min": 100,
+    "paragraph_distribution_reference": {"1": 36.7, "2": 24.0, ...},
+    "conjunctions": {"and": [2.5, 3.5], "but": [0.25, 0.75], ...},
+    "multi_and_max": 10,
+    "section_breaks": [2, 6]
+
+Only deliberate change from the script this began as: numpy is replaced with
+the standard library. np.median, np.mean and np.std(ddof=1) are
+statistics.median, fmean and stdev exactly, so the numbers are unaffected and
+the script has no third-party dependency.
 """
 
 import re
 import sys
 from collections import Counter
+from pathlib import Path
 from statistics import fmean, median, stdev
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+import project_config
 
 ABBR = r'(?:Mrs|Mr|Ms|Dr|St|Jr|Sr|vs|etc|[A-Z])'
 
+# The four sentence-length buckets and the two paragraph-count buckets are
+# structural: every book has a mode, a median, a mean and some spread of
+# paragraph lengths, whatever they turn out to be. Only the bands judged
+# against are project policy, so only the bands move into config.
+SENTENCE_BUCKETS = [
+    ("under_10", lambda value: value < 10),
+    ("10_20", lambda value: 10 <= value < 20),
+    ("20_35", lambda value: 20 <= value <= 35),
+    ("over_35", lambda value: value > 35),
+]
+PARAGRAPH_BUCKETS = [
+    ("1", lambda value: value == 1), ("2", lambda value: value == 2),
+    ("3", lambda value: value == 3), ("4", lambda value: value == 4),
+    ("5", lambda value: value == 5), ("6-7", lambda value: 6 <= value <= 7),
+    ("8-9", lambda value: 8 <= value <= 9), ("10+", lambda value: value >= 10),
+]
+DEFAULT_CONJUNCTIONS = ("and", "but", "so", "because", "which")
+
 
 def in_ten_to_twenty(word_count):
-    """Return whether a sentence belongs to the 10–under-20 bucket."""
     return 10 <= word_count < 20
 
 
 def in_twenty_to_thirty_five(word_count):
-    """Return whether a sentence belongs to the inclusive 20–35 bucket."""
     return 20 <= word_count <= 35
 
 
@@ -54,15 +94,9 @@ def _clean(blk):
 def paragraphs(text):
     """Split into paragraphs on blank lines AND on markdown hard line breaks.
 
-    The original script split on blank lines only. Chapters 1-6 of the
-    manuscript separate paragraphs with two trailing spaces and a single
-    newline instead, so on those it saw one paragraph per chapter and every
-    per-paragraph number was meaningless (chapter 1: "1 paras", 321
-    sentences/paragraph). Splitting inside each blank-line block, rather than
-    picking one convention per file, also keeps a mixed file honest, which
-    The original manuscript is: chapters 1-6 hard-break, 7-20 blank-line.
-
-    A plain newline is a soft wrap and does not end a paragraph, so
+    Splitting inside each blank-line block, rather than picking one
+    convention for the whole file, keeps a file that mixes both conventions
+    honest. A plain newline is a soft wrap and does not end a paragraph, so
     conventionally wrapped text still measures correctly.
     """
     text = re.sub(r'^#.*$', '', text, flags=re.M)
@@ -90,18 +124,7 @@ def words(text):
 
 
 def quoted_words(body):
-    """Count words inside double quotes, counting curly quotes as quotes.
-
-    The original scanned the whole file with '"[^"]*"'. That regex cannot see
-    the 12 manuscript paragraphs that use curly quotes, so straight
-    quotes on either side of them paired across the intervening narration and
-    counted it as dialogue. The manuscript came out at 38.2% quoted against a
-    ~30% target, a FAIL, when the real figure is 28.1%, a PASS.
-
-    Normalising the curly quotes fixes that. Restarting the scan at each
-    paragraph keeps any future unbalanced quote from inverting dialogue and
-    narration for the whole rest of the file.
-    """
+    """Count words inside double quotes, counting curly quotes as quotes."""
     body = body.replace('“', '"').replace('”', '"')
     return sum(len(words(match))
                for para in body.split('\n')
@@ -122,13 +145,9 @@ def split_speech(paras):
             gap = paragraph[pos:match.start()]
             told.append(gap)
             # A split quote ("A," she says, "B.") is one utterance and must be
-            # rejoined. Two utterances ("A," Ruth says. "B," Sam says.) must not
-            # be. The difference is whether the narration between them closes a
-            # sentence. Joining every quoted span in a paragraph, as this did
-            # until now, glued separate speakers together and inflated the
-            # spoken mean wherever a chapter put several voices in one
-            # paragraph: chapter 6 had single "sentences" 83 words long made of
-            # three people talking.
+            # rejoined. Two utterances ("A," Ruth says. "B," Sam says.) must
+            # not be. The difference is whether the narration between them
+            # closes a sentence.
             if current and re.search(r'[.!?]', gap):
                 utterances.append(' '.join(current))
                 current = []
@@ -144,7 +163,25 @@ def split_speech(paras):
     return spoken, narration
 
 
-def report(path, label):
+def _range(targets, key):
+    value = targets.get(key)
+    return tuple(value) if isinstance(value, (list, tuple)) and len(value) == 2 else None
+
+
+def _status(bounds, value):
+    if bounds is None:
+        return 'not set'
+    lower_bound, upper_bound = bounds
+    return 'PASS' if lower_bound <= value <= upper_bound else 'FAIL'
+
+
+def _max_status(maximum, value, below=True):
+    if maximum is None:
+        return 'not set'
+    return 'PASS' if (value < maximum if below else value >= maximum) else 'FAIL'
+
+
+def report(path, label, targets):
     text = load(path)
     paras = paragraphs(text)
     sentences_per_paragraph = [len(sents(paragraph)) for paragraph in paras]
@@ -154,7 +191,6 @@ def report(path, label):
     total_words = len(words(body))
     quoted_word_count = quoted_words(body)
 
-    # Guards the original lacked: every statistic below divides by one of these.
     if not paras or not sentence_lengths or not total_words:
         print("=" * 66)
         print(f"{label} | {total_words} words | {len(paras)} paras | {len(sentence_lengths)} sentences")
@@ -165,103 +201,103 @@ def report(path, label):
     mode = Counter(sentence_lengths).most_common(1)[0][0]
     sentence_length_deviation = stdev(sentence_lengths) if len(sentence_lengths) > 1 else 0.0
     sentence_length_variation = 100 * sentence_length_deviation / fmean(sentence_lengths)
-
-    def status(condition):
-        return 'PASS' if condition else 'FAIL'
+    sentence_mean_bounds = _range(targets, "sentence_mean")
+    sentence_cv_bounds = _range(targets, "sentence_cv")
 
     print("=" * 66)
     print(f"{label} | {total_words} words | {len(paras)} paras | {len(sentence_lengths)} sentences"
           f"{'  [paragraphs split on hard line breaks]' if hard_breaks(text) else ''}")
     print(f"\nWORDS/SENTENCE  mode {mode}  median {median(sentence_lengths):.0f}  mean {fmean(sentence_lengths):.2f}  "
           f"sd {sentence_length_deviation:.2f}  CV {sentence_length_variation:.1f}%  max {max(sentence_lengths)}")
-    print(f"  mode<median<mean  {status(mode < median(sentence_lengths) < fmean(sentence_lengths))}     "
-          f"mean 11-18  {status(11 <= fmean(sentence_lengths) <= 18)}     "
-          f"CV 68-100%  {status(68 <= sentence_length_variation <= 100)}")
-    for name, predicate, lower_bound, upper_bound in [('<10', lambda value: value < 10, 35, 45),
-                            ('10-20', in_ten_to_twenty, 30, 35),
-                            ('20-35', in_twenty_to_thirty_five, 15, 20),
-                            ('>35', lambda value: value > 35, 0, 5)]:
+    print(f"  mode<median<mean  {'PASS' if mode < median(sentence_lengths) < fmean(sentence_lengths) else 'FAIL'}     "
+          f"mean {'-'.join(map(str, sentence_mean_bounds)) if sentence_mean_bounds else 'not set'}  "
+          f"{_status(sentence_mean_bounds, fmean(sentence_lengths))}     "
+          f"CV {'-'.join(map(str, sentence_cv_bounds)) if sentence_cv_bounds else 'not set'}%  "
+          f"{_status(sentence_cv_bounds, sentence_length_variation)}")
+    sentence_bands = targets.get("sentence_bands", {}) if isinstance(targets.get("sentence_bands"), dict) else {}
+    for name, predicate in SENTENCE_BUCKETS:
         pct = 100 * sum(1 for value in sentence_lengths if predicate(value)) / len(sentence_lengths)
-        print(f"  {name:>6}: {pct:5.1f}%  target {lower_bound}-{upper_bound}%  {status(lower_bound <= pct <= upper_bound)}")
+        bounds = _range(sentence_bands, name)
+        target_text = f"{bounds[0]}-{bounds[1]}%" if bounds else "not set"
+        print(f"  {name:>8}: {pct:5.1f}%  target {target_text:<10}  {_status(bounds, pct)}")
 
-    print(f"\nQUOTED  {quoted_share:.1f}%  target ~30%  {status(26 <= quoted_share <= 34)}")
+    quoted_bounds = _range(targets, "quoted_share")
+    target_text = f"{quoted_bounds[0]}-{quoted_bounds[1]}%" if quoted_bounds else "not set"
+    print(f"\nQUOTED  {quoted_share:.1f}%  target {target_text}  {_status(quoted_bounds, quoted_share)}")
 
-    # Spoken and narration measured separately. STYLE_GUIDES.md section 6 calls
-    # this "the most useful diagnostic in the whole spec" because the combined
-    # number hides which half is broken, but the script never implemented it.
+    # Spoken and narration measured separately, since a combined number hides
+    # which half is broken.
     spoken, narration = split_speech(paras)
     if spoken and narration:
         spoken_mean, narration_mean = fmean(spoken), fmean(narration)
         short_narration_share = 100 * sum(1 for value in narration if value < 10) / len(narration)
+        spoken_bounds = _range(targets, "spoken_mean")
+        narration_bounds = _range(targets, "narration_mean")
+        narration_under_10_max = targets.get("narration_under_10_max")
         print(f"\nSPOKEN vs NARRATION")
         print(f"  spoken     mean {spoken_mean:5.2f} words  ({len(spoken):4d} sentences)  "
-              f"target 8-10   {status(8 <= spoken_mean <= 10)}")
+              f"target {'-'.join(map(str, spoken_bounds)) if spoken_bounds else 'not set'}   "
+              f"{_status(spoken_bounds, spoken_mean)}")
         print(f"  narration  mean {narration_mean:5.2f} words  ({len(narration):4d} sentences)  "
-              f"target 14-17  {status(14 <= narration_mean <= 17)}")
-        print(f"  narration under 10 words  {short_narration_share:.1f}%   target <40%  {status(short_narration_share < 40)}")
+              f"target {'-'.join(map(str, narration_bounds)) if narration_bounds else 'not set'}  "
+              f"{_status(narration_bounds, narration_mean)}")
+        print(f"  narration under 10 words  {short_narration_share:.1f}%   "
+              f"target {'<' + str(narration_under_10_max) + '%' if narration_under_10_max is not None else 'not set'}  "
+              f"{_max_status(narration_under_10_max, short_narration_share)}")
 
     paragraph_length_deviation = stdev(sentences_per_paragraph) if len(sentences_per_paragraph) > 1 else 0.0
     variation = 100 * paragraph_length_deviation / fmean(sentences_per_paragraph)
+    paragraph_mean_bounds = _range(targets, "paragraph_sentence_mean")
+    paragraph_cv_min = targets.get("paragraph_sentence_cv_min")
     print(f"\nSENT/PARA  mean {fmean(sentences_per_paragraph):.2f}  median {median(sentences_per_paragraph):.0f}  "
           f"sd {paragraph_length_deviation:.2f}  CV {variation:.1f}%  max {max(sentences_per_paragraph)}")
-    print(f"  mean 2.9-3.5 {status(2.9 <= fmean(sentences_per_paragraph) <= 3.5)}   CV>=100% {status(variation >= 100)}")
-    print("  bucket  this   YA")
-    for name, predicate, young_adult_rate in [('1', lambda value: value == 1, 36.7),
-                        ('2', lambda value: value == 2, 24.0),
-                        ('3', lambda value: value == 3, 15.1),
-                        ('4', lambda value: value == 4, 8.0),
-                        ('5', lambda value: value == 5, 5.9),
-                        ('6-7', lambda value: 6 <= value <= 7, 5.3),
-                        ('8-9', lambda value: 8 <= value <= 9, 2.2),
-                        ('10+', lambda value: value >= 10, 2.8)]:
-        print(f"   {name:>4} {100 * sum(1 for value in sentences_per_paragraph if predicate(value)) / len(sentences_per_paragraph):6.1f}% {young_adult_rate:6.1f}%")
+    print(f"  mean {'-'.join(map(str, paragraph_mean_bounds)) if paragraph_mean_bounds else 'not set'} "
+          f"{_status(paragraph_mean_bounds, fmean(sentences_per_paragraph))}   "
+          f"CV>={paragraph_cv_min if paragraph_cv_min is not None else 'not set'}% "
+          f"{_max_status(paragraph_cv_min, variation, below=False)}")
+    reference = targets.get("paragraph_distribution_reference", {})
+    reference = reference if isinstance(reference, dict) else {}
+    print(f"  bucket  this   {'reference' if reference else '(no reference configured)'}")
+    for name, predicate in PARAGRAPH_BUCKETS:
+        pct = 100 * sum(1 for value in sentences_per_paragraph if predicate(value)) / len(sentences_per_paragraph)
+        reference_text = f"{reference[name]:6.1f}%" if name in reference else "    n/a"
+        print(f"   {name:>4} {pct:6.1f}% {reference_text}")
 
     print(f"\nWORD LEN  mean {fmean(word_lengths):.2f}   "
           f">=7 chars {100 * sum(1 for length in word_lengths if length >= 7) / len(word_lengths):.1f}%")
 
-    # conjunction rates
-    lowercase_words = [length.lower() for length in words(body)]
+    lowercase_words = [word.lower() for word in words(body)]
     word_counts = Counter(lowercase_words)
     total_words = len(lowercase_words)
+    conjunctions = targets.get("conjunctions", {}) if isinstance(targets.get("conjunctions"), dict) else {}
     print("\nCONJUNCTIONS (% of all words)")
-    for word, lower_bound, upper_bound in [('and', 2.5, 3.5), ('but', 0.25, 0.75), ('so', 0.2, 0.6),
-                      ('because', 0.2, 0.7), ('which', 0.1, 0.4)]:
+    for word in conjunctions or DEFAULT_CONJUNCTIONS:
         pct = 100 * word_counts[word] / total_words
-        flag = 'PASS' if lower_bound <= pct <= upper_bound else 'FAIL'
-        print(f"  {word:<8} {word_counts[word]:4d}  {pct:5.2f}%   target {lower_bound}-{upper_bound}%   {flag}")
+        bounds = _range(conjunctions, word)
+        target_text = f"{bounds[0]}-{bounds[1]}%" if bounds else "not set"
+        print(f"  {word:<8} {word_counts[word]:4d}  {pct:5.2f}%   target {target_text:<10}   {_status(bounds, pct)}")
     multiple_and_count = sum(1 for sentence in [candidate for paragraph in paras for candidate in sents(paragraph)]
                  if len(re.findall(r'\band\b', sentence.lower())) >= 2)
-    print(f"  sentences with 2+ 'and': {100 * multiple_and_count / len(sentence_lengths):.1f}%   target <10%")
+    multi_and_share = 100 * multiple_and_count / len(sentence_lengths)
+    multi_and_max = targets.get("multi_and_max")
+    print(f"  sentences with 2+ 'and': {multi_and_share:.1f}%   "
+          f"target {'<' + str(multi_and_max) + '%' if multi_and_max is not None else 'not set'}  "
+          f"{_max_status(multi_and_max, multi_and_share)}")
 
-    # section breaks
     raw_text = load(path)
-    # The book was unified onto the underscore rule; the old '---' form is gone,
-    # so this counted zero everywhere and reported PASS on every file.
     section_breaks = len([length for length in raw_text.split('\n') if set(length.strip()) == {'_'}])
-    print(f"\nSECTION BREAKS  {section_breaks}   target 2-6   "
-          f"{'PASS' if 2 <= section_breaks <= 6 else 'FAIL'}")
+    breaks_bounds = _range(targets, "section_breaks")
+    target_text = f"{breaks_bounds[0]}-{breaks_bounds[1]}" if breaks_bounds else "not set"
+    print(f"\nSECTION BREAKS  {section_breaks}   target {target_text}   {_status(breaks_bounds, section_breaks)}")
 
-    # tic scan
     # Rule 1 governs the narrator, so quoted spans come out before matching,
-    # exactly as summarise() does it. Without this the per-chapter report hands
-    # a fixing agent every character's own explanatory clause as a violation,
-    # which is how a character's line gets "corrected" into something flatter
-    # than the author wrote.
+    # exactly as summarise() does it. Without this a fixing agent is handed
+    # every character's own explanatory clause as a violation.
     print("\nTIC SCAN, narration only (quoted spans removed)")
-    tic_patterns = [
-        (r'which is (?:the|what|how|why|a|his|her|its)\b', 'narrator evaluation'),
-        (r',\s+which is ', 'trailing explanatory clause'),
-        (r'\b(best|worst|funniest|nicest|only time|never once|for the first time)\b', 'superlative'),
-        (r"it'?s not \w+[,;] it'?s ", 'not-X-but-Y'),
-        (r'—', 'em dash'),
-    ]
     tic_hits = 0
     for paragraph in paras:
-        # Strip at paragraph level, not sentence level. A speech that runs to
-        # several sentences leaves its interior sentences carrying no quote
-        # mark at all, so a per-sentence strip cannot see they are dialogue.
         for sentence in sents(narration_of(paragraph)):
-            for pattern, name in tic_patterns:
+            for pattern, name in TICS:
                 if re.search(pattern, sentence, re.I):
                     print(f"  [{name}] {sentence[:110]}")
                     tic_hits += 1
@@ -269,23 +305,14 @@ def report(path, label):
         print("  none found")
 
 
-
-
 def narration_of(para):
     """A paragraph with everything spoken taken out of it.
 
-    Rule 1 governs the narrator, so both forms of speech come out before any
-    tic is matched. Two things bite here and both have sent fixing agents at
-    lines the narrator never wrote:
-
     Quoted speech is stripped at paragraph level rather than sentence level,
     because a speech that runs to several sentences leaves its interior
-    sentences carrying no quote mark at all.
-
-    Group-chat lines (``priya: does anyone know ...``) carry no quote marks
-    either, and there are several hundred of them across the late chapters.
-    Scanned raw they read as narration, which is how a character's own chat
-    message gets reported as the narrator addressing the reader.
+    sentences carrying no quote mark at all. Group-chat lines
+    (``name: message``) carry no quote marks either, so they are dropped the
+    same way transcript detection elsewhere in the project does it.
     """
     para = re.sub(r'"[^"]*"', ' ', para)
     kept = [line for line in para.split('\n')
@@ -293,37 +320,26 @@ def narration_of(para):
     return '\n'.join(kept)
 
 
+# Generic narrator-voice tics: an evaluative aside, a superlative, a
+# not-X-but-Y construction, an em dash. These are craft heuristics rather
+# than facts about any one manuscript, so unlike the target bands above they
+# stay as module defaults; there is no numeric threshold to configure, only
+# a count to read.
 TICS = [
     (r'which is (?:the|what|how|why|a|his|her|its)\b', 'narrator evaluation'),
     (r',\s+which is ', 'trailing explanatory clause'),
-    # Triage, not a verdict: this catches the author's radiator example
-    # ("...at the far end, so whoever gets there early sits down that end")
-    # along with legitimate causal narration. Read every hit before cutting.
     (r',\s+(?:so|because|since)\s+(?:whoever|anybody|anyone|everybody|everyone|'
      r'nobody|the rest|people|you|it|the)\b',
      'so/because tail (triage, read each)'),
     (r'\b(best|worst|funniest|nicest|only time|never once|for the first time)\b',
      'superlative'),
     (r"it'?s not \w+[,;] it'?s ", 'not-X-but-Y'),
-    (r'\u2014', 'em dash'),
+    (r'—', 'em dash'),
 ]
 
-CONJ_TARGET = [('and', 2.5, 3.5), ('but', 0.25, 0.75), ('so', 0.2, 0.6),
-               ('because', 0.2, 0.7), ('which', 0.1, 0.4)]
 
-# Measured over the 23-book reference corpus, for the two that keep failing.
-CORPUS_NOTE = {'and': 'corpus 2.29 to 5.09, median 3.34',
-               'but': 'corpus 0.19 to 0.78, median 0.39'}
-
-
-def summarise(paths):
-    """Every measure in this script, over the whole book, in one block.
-
-    report() prints the same measures for one chapter and then lists every tic
-    hit, which runs to hundreds of lines across thirty-six chapters. This is
-    the same content with the tics counted rather than listed, so grade.py can
-    carry it.
-    """
+def summarise(paths, targets):
+    """Every measure in this script, over the whole book, in one block."""
     text = '\n'.join(load(path) for path in paths)
     body = '\n'.join(line for line in text.split('\n') if not line.startswith('#'))
     all_paras = paras_of(body)
@@ -335,39 +351,32 @@ def summarise(paths):
     word_count = len(lowercase_words)
     counts = Counter(lowercase_words)
 
-    def verdict(condition):
-        return 'ok' if condition else 'FAIL'
-
     print(f"\n  {len(lowercase_words):,} words   {len(all_paras):,} paragraphs   "
           f"{len(sents_all):,} sentences")
 
     mode = Counter(sentence_lengths).most_common(1)[0][0]
     median_value, mean_value, standard_deviation = median(sentence_lengths), fmean(sentence_lengths), stdev(sentence_lengths)
     variation = 100 * standard_deviation / mean_value
+    sentence_mean_bounds = _range(targets, "sentence_mean")
+    sentence_cv_bounds = _range(targets, "sentence_cv")
     print("\n  WORDS PER SENTENCE")
     print(f"    mode {mode}   median {median_value:g}   mean {mean_value:.2f}   sd {standard_deviation:.2f}   "
           f"CV {variation:.1f}%   max {max(sentence_lengths)}")
-    print(f"    mode<median<mean {verdict(mode < median_value < mean_value):<6}"
-          f"mean 11-18 {verdict(11 <= mean_value <= 18):<6}"
-          f"CV 68-100% {verdict(68 <= variation <= 100)}")
-    # The four bands were carried over from a YA style guide written for a
-    # simpler book, and two of them were wrong here. It set the over-35 share
-    # at 0-5%, but the corpus median is 6.9% and the three reference books
-    # with the highest reading grade are the three with the MOST long
-    # sentences: Black Beauty 18.9%, Wind in the Willows 13.8%, Little Women
-    # 13.7%. Hitting 0-5% would have driven the book toward Peter Pan, which
-    # the author has ruled out. These are the observed range across the
-    # eleven reference novels, with the median printed beside them.
-    for name, predicate, lower_bound, upper_bound, med in [('under 10', lambda value: value < 10, 21.7, 50.7, 42.7),
-                                  ('10-20', in_ten_to_twenty, 26.1, 38.8, 31.0),
-                                  ('20-35', in_twenty_to_thirty_five, 15.2, 30.3, 19.9),
-                                  ('over 35', lambda value: value > 35, 4.9, 18.9, 6.9)]:
+    print(f"    mode<median<mean {'PASS' if mode < median_value < mean_value else 'FAIL':<6}"
+          f"mean {_status(sentence_mean_bounds, mean_value):<6}"
+          f"CV {_status(sentence_cv_bounds, variation)}")
+    sentence_bands = targets.get("sentence_bands", {}) if isinstance(targets.get("sentence_bands"), dict) else {}
+    for name, predicate in SENTENCE_BUCKETS:
         pct = 100 * sum(1 for value in sentence_lengths if predicate(value)) / len(sentence_lengths)
-        print(f"    {name:<10}{pct:>6.1f}%   corpus {lower_bound}-{upper_bound}%  median {med}%   "
-              f"{verdict(lower_bound <= pct <= upper_bound)}")
+        bounds = _range(sentence_bands, name)
+        target_text = f"{bounds[0]}-{bounds[1]}%" if bounds else "not set"
+        print(f"    {name:<10}{pct:>6.1f}%   target {target_text:<12}   {_status(bounds, pct)}")
 
-    quoted_words = sum(len(words(match)) for match in re.findall(r'"([^"]+)"', body))
-    print(f"\n  QUOTED  {100 * quoted_words / word_count:.1f}%   target ~30%")
+    quoted_word_count = sum(len(words(match)) for match in re.findall(r'"([^"]+)"', body))
+    quoted_share = 100 * quoted_word_count / word_count
+    quoted_bounds = _range(targets, "quoted_share")
+    target_text = f"{quoted_bounds[0]}-{quoted_bounds[1]}%" if quoted_bounds else "not set"
+    print(f"\n  QUOTED  {quoted_share:.1f}%   target {target_text}   {_status(quoted_bounds, quoted_share)}")
 
     spoken_lengths = [len(words(sentence)) for sentence in sents_all if sentence.lstrip().startswith('"')]
     narrated_lengths = [len(words(sentence)) for sentence in sents_all if not sentence.lstrip().startswith('"')]
@@ -377,43 +386,45 @@ def summarise(paths):
     if narrated_lengths:
         print(f"    narration  mean {fmean(narrated_lengths):5.2f} words  ({len(narrated_lengths):5d} sentences)")
         short = 100 * sum(1 for value in narrated_lengths if value < 10) / len(narrated_lengths)
-        print(f"    narration under 10 words  {short:.1f}%   target <40%   "
-              f"{verdict(short < 40)}")
+        narration_under_10_max = targets.get("narration_under_10_max")
+        print(f"    narration under 10 words  {short:.1f}%   "
+              f"target {'<' + str(narration_under_10_max) + '%' if narration_under_10_max is not None else 'not set'}   "
+              f"{_max_status(narration_under_10_max, short)}")
 
     print(f"\n  SENTENCES PER PARAGRAPH  mean {fmean(sentences_per_paragraph):.2f}   "
           f"median {median(sentences_per_paragraph):g}   max {max(sentences_per_paragraph)}")
-    print(f"    {'bucket':>8}{'this':>8}{'YA':>8}")
-    for name, predicate, young_adult_rate in [('1', lambda value: value == 1, 36.7), ('2', lambda value: value == 2, 24.0),
-                         ('3', lambda value: value == 3, 15.1), ('4', lambda value: value == 4, 8.0),
-                         ('5', lambda value: value == 5, 5.9),
-                         ('6-7', lambda value: 6 <= value <= 7, 5.3),
-                         ('8-9', lambda value: 8 <= value <= 9, 2.2),
-                         ('10+', lambda value: value >= 10, 2.8)]:
-        print(f"    {name:>8}{100 * sum(1 for value in sentences_per_paragraph if predicate(value)) / len(sentences_per_paragraph):>7.1f}%"
-              f"{young_adult_rate:>7.1f}%")
+    reference = targets.get("paragraph_distribution_reference", {})
+    reference = reference if isinstance(reference, dict) else {}
+    print(f"    {'bucket':>8}{'this':>8}{'reference' if reference else '(none)':>10}")
+    for name, predicate in PARAGRAPH_BUCKETS:
+        pct = 100 * sum(1 for value in sentences_per_paragraph if predicate(value)) / len(sentences_per_paragraph)
+        reference_text = f"{reference[name]:>9.1f}%" if name in reference else "      n/a"
+        print(f"    {name:>8}{pct:>7.1f}%{reference_text}")
 
     print(f"\n  WORD LENGTH  mean {fmean(word_lengths):.2f}   "
           f"7+ chars {100 * sum(1 for word in word_lengths if word >= 7) / len(word_lengths):.1f}%")
 
+    conjunctions = targets.get("conjunctions", {}) if isinstance(targets.get("conjunctions"), dict) else {}
     print("\n  CONJUNCTIONS")
-    for word, lower_bound, upper_bound in CONJ_TARGET:
+    for word in conjunctions or DEFAULT_CONJUNCTIONS:
         pct = 100 * counts[word] / word_count
-        print(f"    {word:<10}{counts[word]:>7}{pct:>9.2f}%   target {lower_bound}-{upper_bound}%   "
-              f"{verdict(lower_bound <= pct <= upper_bound):<6}{CORPUS_NOTE.get(word, '')}")
+        bounds = _range(conjunctions, word)
+        target_text = f"{bounds[0]}-{bounds[1]}%" if bounds else "not set"
+        print(f"    {word:<10}{counts[word]:>7}{pct:>9.2f}%   target {target_text:<10}   "
+              f"{_status(bounds, pct):<6}")
     multi = sum(1 for sentence in sents_all
                 if len(re.findall(r'\band\b', sentence.lower())) >= 2)
     multiple_and_share = 100 * multi / len(sents_all)
-    print(f"    {'2+ and':<10}{multi:>7}{multiple_and_share:>9.1f}%   target <10%    "
-          f"{verdict(multiple_and_share < 10)}")
+    multi_and_max = targets.get("multi_and_max")
+    print(f"    {'2+ and':<10}{multi:>7}{multiple_and_share:>9.1f}%   "
+          f"target {'<' + str(multi_and_max) + '%' if multi_and_max is not None else 'not set':<10}   "
+          f"{_max_status(multi_and_max, multiple_and_share)}")
 
     breaks = len([word for word in text.split('\n') if set(word.strip()) == {'_'}])
-    print(f"\n  SECTION BREAKS  {breaks} across {len(paths)} chapters   "
-          f"target 2-6 each")
+    breaks_bounds = _range(targets, "section_breaks")
+    target_text = f"{breaks_bounds[0]}-{breaks_bounds[1]} each" if breaks_bounds else "not set"
+    print(f"\n  SECTION BREAKS  {breaks} across {len(paths)} chapters   target {target_text}")
 
-    # Rule 1 governs the narrator, so quoted spans come out before matching.
-    # Strip at paragraph level, not sentence level. A speech that runs to
-    # several sentences leaves its interior sentences carrying no quote mark at
-    # all, so a per-sentence strip counts a character's own words as narration.
     narration = [sentence for paragraph in all_paras for sentence in sents(narration_of(paragraph))]
     print("\n  TIC SCAN, narration only (quoted spans removed)")
     for pattern, name in TICS:
@@ -426,30 +437,67 @@ def paras_of(body):
     return [paragraph for paragraph in re.split(r'\n\s*\n', body) if paragraph.strip()]
 
 
+def resolve_paths(explicit, default_dir):
+    if not explicit:
+        return sorted(default_dir.glob("*.md")) if default_dir and default_dir.is_dir() else []
+    paths = []
+    for item in explicit:
+        item = Path(item)
+        if item.is_dir():
+            paths.extend(sorted(item.glob("*.md")))
+        elif item.is_file():
+            paths.append(item)
+    return paths
+
+
 # Run from grade.py, not on its own. Each script in measures/ reports one
 # diagnostic; grade.py assembles enabled checks and is the interface that says
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
 def _solo_notice():
-    import sys, os
+    import os
     if os.environ.get("HALSTEAD_VIA_GRADE"):
         return
     print("  [bundled diagnostic; use grade.py for the structured report]",
           file=sys.stderr)
 
+
+def main(argv):
+    config_path = None
+    if "--config" in argv:
+        index = argv.index("--config")
+        config_path = argv[index + 1]
+        argv = argv[:index] + argv[index + 2:]
+
+    config = project_config.load_config(config_path)
+    settings = project_config.measure_settings("style_report", config)
+    targets = settings.get("targets", {})
+    targets = targets if isinstance(targets, dict) else {}
+    if not targets:
+        print("no project_measures.style_report.targets configured; every band below "
+              "is measured and printed, and marked 'not set' rather than PASS/FAIL.\n")
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+
+    if not argv:
+        sys.exit(f"usage: {sys.argv[0]} <chapter.md> [label]\n"
+                 f"       {sys.argv[0]} --summary [chapters/*.md]")
+    if argv[0] == '--summary':
+        paths = resolve_paths([Path(item) for item in argv[1:]], chapters_dir)
+        if not paths:
+            sys.exit("no chapters found; pass file/directory arguments or set chapters_dir")
+        summarise(paths, targets)
+        return 0
+    # One path plus an optional label, as the original took. More than one
+    # path and they are all treated as files, so a glob reports on each in turn.
+    if len(argv) == 2 and not argv[1].endswith('.md'):
+        report(argv[0], argv[1], targets)
+    else:
+        for item in argv:
+            report(item, item.split('/')[-1], targets)
+    return 0
+
+
 if __name__ == '__main__':
     _solo_notice()
-    if len(sys.argv) < 2:
-        sys.exit(f"usage: {sys.argv[0]} <chapter.md> [label]\n"
-                 f"       {sys.argv[0]} --summary chapters/*.md")
-    if sys.argv[1] == '--summary':
-        summarise(sys.argv[2:] or sorted(__import__('glob').glob('chapters/*.md')))
-        sys.exit(0)
-    # One path plus an optional label, as the original took. More than one path
-    # and they are all treated as files, so a glob reports on each in turn.
-    if len(sys.argv) == 3 and not sys.argv[2].endswith('.md'):
-        report(sys.argv[1], sys.argv[2])
-    else:
-        for _p in sys.argv[1:]:
-            report(_p, _p.split('/')[-1])
+    sys.exit(main(sys.argv[1:]) or 0)

@@ -6,66 +6,60 @@ is a judgement call. This is the measurable version: extract each character's
 lines, compute the same statistics for each speaker, and show how far apart
 they sit. Characters whose numbers coincide have no voice yet.
 
-    python3 voice_separation.py            # both channels
-    python3 voice_separation.py --chat     # group chat only
-    python3 voice_separation.py --prose    # tagged prose dialogue only
+    python3 voice_separation.py                    both channels, configured chapters dir
+    python3 voice_separation.py MANUSCRIPT.md       both channels, one explicit file
+    python3 voice_separation.py --chat chapters/    group chat only, an explicit directory
 
 Two channels, measured separately because they are attributable with very
 different confidence.
 
-CHAT is exact. Messages are "name: text", so every line has a known speaker
-and none are missed.
+CHAT is exact when a cast list is configured. Messages are "name: text", so
+every line has a known speaker and none are missed.
 
 PROSE IS A BIASED SAMPLE and its numbers must be read with that in mind. Only
-lines carrying an explicit "<name> says" tag can be attributed, and the book
-drops the tag once a two-hander is established, which is the style guide's own
-advice. Tagged lines therefore skew towards the openings of exchanges, which
-run short. Treat the prose figures as comparable BETWEEN characters, since the
-bias hits every character alike, and not as an estimate of that character's
-true average line length.
+lines carrying an explicit "<name> says" tag can be attributed, and a book
+that drops the tag once a two-hander is established will skew tagged lines
+towards the openings of exchanges, which run short. Treat the prose figures
+as comparable BETWEEN characters, since the bias hits every character alike,
+and not as an estimate of that character's true average line length.
+
+Every fact about who is in the cast lives in
+``project_measures.voice_separation.speakers`` in the user's own config, not
+in this file. With no cast configured, speakers are DISCOVERED instead:
+chat speakers from generic "name: message" lines (the same shape
+``textgrader.text.transcript_lines`` already knows how to find), and prose
+speakers from a capitalised token sitting next to a speech verb. Discovery is
+a much cruder net than a named cast and will over- and under-generate on
+ambiguous prose; supplying ``speakers`` explicitly is the reliable path.
 """
 
 import argparse
 import collections
 import re
 import statistics as st
+import sys
 from pathlib import Path
 
-# The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+import project_config
+from textgrader.text import TranscriptConfig, transcript_lines
 
-# The group chat is not in files of its own. It is written inside the ordinary
-# chapters, as name-prefixed lines, across eleven of them from chapter 24 on.
-# This was an empty list, so collect_chat() iterated over nothing and the group
-# chat reported "nothing with at least 8 lines" every time it was run - several
-# hundred lines of the back third of the book, unmeasured, in the one instrument
-# built to answer whether the cast sounds alike.
-CHAT_FILES = []
-# Only these seven ever post in the group chat.
-CAST = ["chloe", "ruth", "sam", "kavi", "nadia", "eli", "theo"]
+# Titles, speech verbs and hedge phrases are generic English, not facts about
+# any one manuscript, so they stay as module defaults. A project can still
+# override them (a formal book might add "Professor", a slangier one more
+# hedges) through the same config keys.
+DEFAULT_TITLES = ["Mrs.", "Mr.", "Ms.", "Dr.", "Coach", "Sergeant"]
+DEFAULT_SPEECH_VERBS = ["says", "said", "asks", "asked", "tells", "told",
+                        "shouts", "screams", "whispers"]
+DEFAULT_HEDGES = ["i think", "maybe", "probably", "idk", "i dont know",
+                  "i don't know", "kind of", "sort of", "i guess"]
+DEFAULT_MIN_LINES = 8
 
-# Everyone who is ever tagged as speaking in prose. This list started as the
-# seven chat names plus the parents, which made every other character invisible
-# to the measurement: Priya speaks in ten scenes across six chapters and scored
-# nothing at all. Titles are matched separately so "Mrs. Aldana says" is found.
-SPEAKERS = ["Chloe", "Ruth", "Sam", "Kavi", "Nadia", "Eli", "Theo", "Odile", "Priya",
-            "Fen", "Owen", "Kayleigh", "Bryce", "Marisol",
-            "Aldana", "Vance", "Prahl", "Baptiste", "Bell", "Hearn", "Kowalczyk",
-            "Doyle", "Pruitt", "Sinclair", "Amberg", "Sandoval",
-            "Prentice", "Ammons", "Whitaker", "Deb", "Ruiz"]
-TAGGED = r"(?:Mrs\.? |Mr\.? |Ms\.? |Dr\.? |Coach |Sergeant )?(%s|her mom|her mother|her dad|her father)" % "|".join(SPEAKERS)
-# The bias is directional, not just short, and one character sheet was built on
-# the wrong end of it. In a two-hander the tag usually rides on the ANSWER, so
-# the question is the turn most likely to go untagged. Counting questions off
-# tagged lines therefore undercounts them systematically. RUTH.md carried
-# "0% questions, never a question mark" as a law of the character on that
-# basis; reading her turns by hand gives 41 questions in 191 turns, about 21%,
-# with 16 spoken turns ending in a question mark. Never take a zero from this
-# script as a fact about a person. Compare speakers with each other, and read
-# the scenes before writing any rule into a sheet.
-
-SAYS = r"(?:says|said|asks|asked|tells|told|shouts|screams|whispers)"
-HEDGE = r"\b(i think|maybe|probably|idk|i dont know|i don't know|kind of|sort of|i guess)\b"
+# A capitalised run of one or two words, used only when no explicit speaker
+# list is configured. It is deliberately loose: discovery trades precision
+# for not requiring the user to type out a cast list first.
+GENERIC_NAME = r"[A-Z][a-z']+(?:\s[A-Z][a-z']+)?"
 
 
 def words(text):
@@ -76,41 +70,86 @@ def normalise(text):
     return text.replace('“', '"').replace('”', '"')
 
 
-def chat_sources(root):
-    """Every file the chat is actually written in."""
-    files = sorted((root / "chapters").glob("*.md"))
-    files += [root / name for name in CHAT_FILES if (root / name).is_file()]
-    return files
+def resolve_paths(explicit, default_dir):
+    """Expand file/dir positional arguments into a sorted list of files.
+
+    An explicit argument may be a single manuscript file (what grade.py
+    passes) or a directory of chapter files. Only with nothing explicit do
+    we fall back to the configured chapters directory, so this script never
+    scans a directory the caller did not ask for.
+    """
+    if not explicit:
+        if default_dir and default_dir.is_dir():
+            return sorted(default_dir.glob("*.md"))
+        return []
+    paths = []
+    for item in explicit:
+        item = Path(item)
+        if item.is_dir():
+            paths.extend(sorted(item.glob("*.md")))
+        elif item.is_file():
+            paths.append(item)
+    return paths
 
 
-def collect_chat(root):
+def _title_part(titles):
+    if not titles:
+        return ""
+    group = "|".join(re.escape(title) for title in titles)
+    return rf"(?:(?:{group})\s*)?"
+
+
+def tagged_pattern(speakers, titles):
+    """The name-matching half of a speaker tag.
+
+    With ``speakers`` configured this only ever matches that cast, which is
+    exact. Empty, it falls back to any capitalised token, which is the
+    discovery mode described in the module docstring.
+    """
+    name_group = "|".join(re.escape(name) for name in speakers) if speakers else GENERIC_NAME
+    return rf"{_title_part(titles)}({name_group}|her mom|her mother|her dad|her father)"
+
+
+def collect_chat(paths, speakers):
     out = collections.defaultdict(list)
-    for source_path in chat_sources(root):
-        if not source_path.is_file():
-            continue
-        for line in source_path.read_text(encoding="utf-8").split("\n"):
-            match = re.match(r"^\s*(%s):\s*(.+)$" % "|".join(CAST), line.strip(), re.I)
-            if match:
-                out[match.group(1).lower()].append(match.group(2).strip())
+    if speakers:
+        pattern = re.compile(r"^\s*(%s):\s*(.+)$" % "|".join(re.escape(name) for name in speakers), re.I)
+        for source_path in paths:
+            for line in source_path.read_text(encoding="utf-8").split("\n"):
+                match = pattern.match(line.strip())
+                if match:
+                    out[match.group(1).lower()].append(match.group(2).strip())
+        return out
+    # Discovery: any generic "name: message" line. This is the same shape a
+    # real chat transcript has, so it costs nothing to look for it everywhere
+    # rather than only in files the user has separately told us are chat.
+    config = TranscriptConfig(ignore_case=True)
+    for source_path in paths:
+        text = source_path.read_text(encoding="utf-8")
+        for match in transcript_lines(text, config):
+            username = match.group("username").strip()
+            message = match.group("message").strip()
+            if username and message:
+                out[username.lower()].append(message)
     return out
 
 
-def collect_prose(root):
+def collect_prose(paths, speakers, titles, speech_verbs):
     """Lines with an explicit speaker tag. See the module docstring on bias."""
     out = collections.defaultdict(list)
-    files = sorted((root / "chapters").glob("*.md")) + [root / name for name in CHAT_FILES]
-    # The book attributes far more often with an action beat than with a speech
-    # verb: '"Chloe." Mrs. Aldana is standing at the end of her desk.' Matching
-    # only "<name> says" missed most of the cast, so the first pattern accepts
-    # any sentence that opens with the speaker's name straight after a quote.
+    tagged = tagged_pattern(speakers, titles)
+    says = "(?:%s)" % "|".join(re.escape(verb) for verb in speech_verbs)
+    # Much fiction attributes with an action beat more often than with a
+    # speech verb: '"Wait." Mrs. Hale is standing at the end of the desk.'
+    # Matching only "<name> says" misses most tagged dialogue, so the first
+    # pattern also accepts any sentence that opens with the speaker's name
+    # straight after a quote.
     patterns = [
-        (rf'"([^"]+)"[,.!?]?\s+{TAGGED}\b', 0, 1),
-        (rf'"([^"]+)"[,]?\s+{SAYS}\s+{TAGGED}', 0, 1),
-        (rf'{TAGGED}\s+{SAYS}[,:]?\s+"([^"]+)"', 1, 0),
+        (rf'"([^"]+)"[,.!?]?\s+{tagged}\b', 0, 1),
+        (rf'"([^"]+)"[,]?\s+{says}\s+{tagged}', 0, 1),
+        (rf'{tagged}\s+{says}[,:]?\s+"([^"]+)"', 1, 0),
     ]
-    for source_path in files:
-        if not source_path.is_file():
-            continue
+    for source_path in paths:
         for line in normalise(source_path.read_text(encoding="utf-8")).split("\n"):
             for pat, tag_index, words_index in patterns:
                 for match in re.finditer(pat, line):
@@ -121,7 +160,9 @@ def collect_prose(root):
     return out
 
 
-def profile(lines):
+def profile(lines, hedge_pattern=None):
+    if hedge_pattern is None:
+        hedge_pattern = r"\b(%s)\b" % "|".join(re.escape(hedge) for hedge in DEFAULT_HEDGES)
     tokens = [words(line) for line in lines]
     flat = [word.lower() for tokens in tokens for word in tokens]
     if not flat:
@@ -140,12 +181,15 @@ def profile(lines):
         "q": 100 * sum(1 for line in lines if "?" in line) / len(lines),
         "short": 100 * sum(1 for tokens in tokens if len(tokens) <= 3) / len(lines),
         "long": 100 * sum(1 for tokens in tokens if len(tokens) > 15) / len(lines),
-        "hedge": 100 * sum(1 for line in lines if re.search(HEDGE, line, re.I)) / len(lines),
+        "hedge": 100 * sum(1 for line in lines if re.search(hedge_pattern, line, re.I)) / len(lines),
     }
 
 
-def show(title, data, floor, note):
-    rows = {speaker: speaker_profile for speaker, lines in data.items() if (speaker_profile := profile(lines)) and speaker_profile["n"] >= floor}
+def show(title, data, floor, note, hedges=None):
+    hedges = DEFAULT_HEDGES if hedges is None else hedges
+    hedge_pattern = r"\b(%s)\b" % "|".join(re.escape(hedge) for hedge in hedges)
+    rows = {speaker: speaker_profile for speaker, lines in data.items()
+           if (speaker_profile := profile(lines, hedge_pattern)) and speaker_profile["n"] >= floor}
     if not rows:
         print(f"\n{title}: nothing with at least {floor} lines")
         return
@@ -165,21 +209,48 @@ def show(title, data, floor, note):
               f"{'   <- speakers barely differ' if spread < 0.5 else ''}")
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--root", type=Path, default=HERE)
+    parser.add_argument("paths", nargs="*", type=Path,
+                    help="chapter files or directories to scan; default: the "
+                         "configured chapters directory")
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--chat", action="store_true")
     parser.add_argument("--prose", action="store_true")
-    parser.add_argument("--min-lines", type=int, default=8)
-    args = parser.parse_args()
+    parser.add_argument("--min-lines", type=int, default=None)
+    args = parser.parse_args(argv)
+
+    config = project_config.load_config(args.config)
+    settings = project_config.measure_settings("voice_separation", config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    paths = resolve_paths(args.paths, chapters_dir)
+
+    speakers = [name for name in settings.get("speakers", []) if isinstance(name, str)]
+    titles = settings.get("titles", DEFAULT_TITLES)
+    speech_verbs = settings.get("speech_verbs", DEFAULT_SPEECH_VERBS)
+    hedges = settings.get("hedges", DEFAULT_HEDGES)
+    min_lines = args.min_lines if args.min_lines is not None else settings.get("min_lines", DEFAULT_MIN_LINES)
+
+    if not paths:
+        print("no chapter files found; pass file/directory arguments or set chapters_dir")
+        return 0
+
+    note_suffix = "" if speakers else ("  (no project_measures.voice_separation.speakers "
+                                       "configured; speakers were auto-discovered and may be noisy)")
     both = not (args.chat or args.prose)
     if args.chat or both:
-        show("GROUP CHAT", collect_chat(args.root), args.min_lines,
-             "exact attribution, every message counted")
+        show("GROUP CHAT", collect_chat(paths, speakers), min_lines,
+             "exact attribution, every message counted" + note_suffix, hedges)
     if args.prose or both:
-        show("PROSE DIALOGUE", collect_prose(args.root), args.min_lines,
-             "tagged lines only, biased short AND against questions - never read a 0 as real")
+        show("PROSE DIALOGUE", collect_prose(paths, speakers, titles, speech_verbs), min_lines,
+             "tagged lines only, biased short AND against questions - never read a 0 as real" + note_suffix,
+             hedges)
+    if not speakers:
+        print("\n  project_measures.voice_separation.speakers would turn discovery into exact "
+              "attribution for both channels above.")
+    return 0
 
 
 # Run from grade.py, not on its own. Each script in measures/ reports one
@@ -196,4 +267,4 @@ def _solo_notice():
 
 if __name__ == "__main__":
     _solo_notice()
-    main()
+    sys.exit(main() or 0)

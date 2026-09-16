@@ -1,249 +1,252 @@
 #!/usr/bin/env python3
-"""Count the repeated constructions outside readers flagged, against the corpus.
+"""Count configured repeated constructions against a reference corpus.
 
-Reviewers reported a set of habits by feel. Most of them are countable, and a
-count settles whether a habit is a voice or a tic. Rates are per 100,000 words
-so the book and a 70,000-word novel compare directly.
+Every construction this script looks for, and every target rate, comes from
+``project_measures.tics`` in the user's own config. There is nothing to scan
+for until that is populated: a habit worth tracking is specific to one
+manuscript, and hard-coding somebody else's tics here would just make this
+script silently measure the wrong book. Rates are per 100,000 words so a
+70,000-word novel and a 300,000-word one compare directly.
+
+Config (``project_measures.tics`` in config.json):
+
+    "patterns": {
+        "<label>": {"pattern": "<regex>", "target_per_100k": <number-or-null>}
+    },
+    "number_words": false,
+    "number_targets": {"<word>": <target_per_100k>}
+
+``patterns`` is checked against every reference book too, so a target of
+``null`` still reports the book's own rate and the corpus spread; only a
+number turns a row into a pass/fail. ``number_words``/``number_targets`` add
+one row per tracked number word, built the same way, so a project that wants
+to watch "one" through "fifteen" does not have to spell out the regex for
+each.
+
+Every user regex is compiled once, at load time, so a typo in a pattern fails
+loudly with the label attached instead of quietly matching nothing. When the
+optional ``regex`` package is installed, matching runs under a timeout
+(``regex.timeout_seconds`` in config, default 2.0) so a catastrophic pattern
+cannot hang the run; without it, matching falls back to the standard library
+``re`` module and a warning is printed once, since ``re`` has no timeout.
 
     python3 tics.py                 the manuscript against the corpus
-    python3 tics.py --show PATTERN  print every hit for one pattern
+    python3 tics.py --show LABEL    print every hit for one configured pattern
 """
-import argparse, glob, json, re, statistics as st, sys
+import argparse
+import re as std_re
+import statistics as st
+import sys
 from pathlib import Path
 
-# The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import CHAPTERS_DIR, CORPUS_DIRS
+import project_config
+from textgrader.optional import require
 
-CORPUS = CORPUS_DIRS
-
-# The target is a reasonable rate, not corpus parity. The corpus is 23 books and
-# a voice is made of repetition; the author's instruction is to cut roughly to a
-# third of the current rate on the worst offenders and stop there. Several of
-# these will still sit far above every reference book afterwards, on purpose.
-# Every number word from one to fifteen sits above the highest-numbered book in
-# the corpus, so this is a habit of precision rather than three unlucky numbers.
-# The target for each is that corpus maximum: no more numerous than the most
-# number-heavy of twenty-three published novels. Substituting one number for
-# another does not help and only moves the problem, so the fix is to delete the
-# precision wherever it is not doing work.
-NUMBER_TARGET = {
-    "one": 515.7, "two": 282.1, "three": 172.7, "four": 119.3, "five": 112.4,
-    "six": 57.3, "seven": 45.9, "eight": 45.9, "nine": 31.2, "ten": 73.4,
-    "eleven": 10.3, "twelve": 18.9, "thirteen": 9.7, "fourteen": 11.3,
-    "fifteen": 14.5, "forty": 30.0,
-}
-TARGETS = {
-    "habit stated for the reader": 0.0,
-    "reads it twice": 3.5,
-
-    "the word 'same'": 125.0,
-    "sentence opens She/He + verb": 120.0,
+DEFAULT_TIMEOUT_SECONDS = 2.0
 
 
-    "the word 'flat'": 35.0,
+def words(text):
+    return std_re.findall(r"[A-Za-z']+", text)
 
-    "'the way you/she would'": 20.0,
-    "hedged exact (about N)": 18.0,
-    "eyes on / eyes down": 12.0,
-    "hand(s) flat": 10.0,
-    # Same target as its sibling gesture above, on the docstring's rule of
-    # roughly a third of the current rate. 37 uses across 22 chapters, 31.4 per
-    # 100,000, against a corpus median of zero and a maximum of 7.2: the book
-    # uses it four times as often as the most hand-heavy of 23 novels, and the
-    # median novel never uses it at all.
-    "both hands": 10.0,
-    # A cap at a quarter of the rate it was found at, on the author's call.
-    # That lands under the corpus maximum of 3.3 as well, in a corpus where the
-    # median novel never uses the formula once. The bare word 'rather' is
-    # deliberately left untargeted - at 95.8 against a corpus median of 72.6 it
-    # is ordinary English, and it is the formula rather than the word that the
-    # author can hear.
-    "'I'd rather X than Y'": 2.0,
-    # 142.8 per 100,000 against a corpus median of 0.0 and a maximum of 50.5:
-    # nearly three times the most explanation-heavy of 23 novels, in a corpus
-    # where the median novel never does it. Target is a third of the measured
-    # rate, per the rule above, which lands just under that maximum.
-    "', because' inside speech": 48.0,
 
-    # Declining to act. These three are CAPS, not targets: the author's ruling
-    # is "about 2x more passive than they should be, and I don't want to
-    # increase it," so each is set at half the rate it was found at. Do not
-    # read a number under the cap as room to add more. The other three shapes
-    # that were measured came back fine and are not tracked: says nothing ran
-    # at a fifth of the corpus maximum, so the characters are not quiet - it is
-    # the physical and decision beats that had narrowed, not the talking.
-    "cap: leaves it / lets it go": 13.3,
-    "cap: puts it back down": 29.4,
-    "cap: does X instead": 53.5,
-    "'the whole/rest of it'": 10.0,
-
-    # The author found this one by reading, not by measuring, which is the
-    # usual order in this project. The book ran 28 instances at 22.1 per
-    # 100,000 against a corpus median of 1.4 and a maximum of 8.8, so it was
-    # sixteen times the median and two and a half times the most in-order-
-    # heavy book in the reference set. It is the narrator's tell for
-    # competence: everybody in this book recounts things in order, gives the
-    # figures by name and in order, reads the column in order. The target is
-    # the corpus maximum, as everywhere else here.
-    "'in order' (not 'in order to')": 8.8,
-    "turning an object": 6.0,
-    "announced withholding": 3.0,
-    "'that's not X, that's Y'": 2.0,
-}
-
-PATTERNS = {
-    # The author, on "He says it the way he says everything": this is done
-    # constantly, for different people for different actions, and it is talking
-    # to the reader. It tells you an action is characteristic instead of letting
-    # the repetition do it. Target 0: there is no good instance of it.
-    # Thirteen instances at 10.5 per 100,000, against a corpus median of zero
-    # and a maximum of 1.58. A whole-book reader stopped counting past twenty
-    # and called it a house tell rather than observed behaviour. Target is
-    # roughly twice the corpus maximum, which leaves room for the beats where
-    # re-reading is the point.
-    "reads it twice":
-        r"read(?:s|)\s+(?:it|them|the\s+\w+)\s+(?:twice|a\s+(?:second|third)\s+time)",
-    "habit stated for the reader":
-        r"\b(?:the way|as)\s+(?:he|she|they)\s+"
-        r"(?:(?:always|normally|usually|invariably|generally)\s+\w+"
-        r"|(?:says?|said|does?|did|answers?|handles?|takes?|reads?)\s+"
-        r"(?:everything|anything|it all|all of it|every\s+\w+|each\s+\w+)"
-        r"|does\s+with\b)",
-
-    "hedged exact (about N)": r"\babout (?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|a hundred)\b",
-    "hand(s) flat":          r"\bhands? (?:flat|pressed flat)\b|\bflat on the (?:table|counter|desk|bench|wall|floor)\b",
-    # The sibling gesture. hand(s) flat got a row and a target and was cut back
-    # to it; this one was never measured and stands at 37 uses across 22
-    # chapters. Nothing measures anything unless it is in this report.
-    "both hands":            r"\bboth hands\b",
-    # The author, by ear: "I'd rather tell you that plainly than X. IDK how to
-    # search for that, but everytime I see it, I can tell." It is a stated
-    # preference with the rejected alternative attached, and it is spread across
-    # speakers, which is what makes it read as house voice rather than anyone's
-    # character. Counted two ways: the whole word, and the formula itself.
-    "the word 'rather'":     r"\brather\b",
-    # Characters explaining themselves inside their own speech. Found
-    # independently by three scene-audit agents in three different chapters,
-    # each naming it a top-three item, and shared across the mother, the
-    # librarian, a teacher, Sam and Chloe - which is house voice reaching into
-    # dialogue rather than anybody's character. The narration-only tic scan in
-    # style_report.py could never see it: it strips quoted spans first, which
-    # is correct for rule 1 and blind to exactly this.
-    # Matches both punctuations on purpose: splitting a compound question turns
-    # ", because" into "? Because" and moved five instances out of sight of this
-    # row without removing one word of the habit.
-    #
-    # It also requires a CLOSING quote with no quote mark in between, so the
-    # because has to be inside one spoken span. Without that the pattern ran
-    # from any quote character forward and swept up narration after a short line
-    # of dialogue: it read 124 where the hand catalogue, reading each one,
-    # counted 78. The row was reporting the tic plus a slice of house rule 1.
-    "', because' inside speech":
-        r'"[^"]{10,400}?[,?]\s+[Bb]ecause\b[^"]{0,400}?"',
-    "cap: leaves it / lets it go":
-        r"\b(?:leaves?|left)\s+(?:it|that|them|the\s+\w+)\s+(?:there|alone|where|at\s+that|be)\b"
-        r"|\blets?\s+(?:it|that|them)\s+(?:go|sit|stand|lie|drop|rest)\b"
-        r"|\blet\s+(?:it|that|them)\s+(?:go|sit|stand|lie|drop|rest)\b",
-    "cap: puts it back down":
-        r"\b(?:puts?|put|sets?|set|lays?|laid|places?)\s+(?:it|them|the\s+\w+|his\s+\w+|her\s+\w+)"
-        r"\s+(?:back\s+)?down\b"
-        r"|\b(?:puts?|put|sets?|set)\s+(?:it|them|the\s+\w+)\s+back\b",
-    "cap: does X instead":   r"\binstead\b",
-    "'I'd rather X than Y'": r"\b(?:I'?d|I would|he'?d|she'?d|they'?d)\s+rather\b[^.;!?]{0,80}\bthan\b",
-    "the word 'flat'":       r"\bflat(?:ly)?\b",
-    "'the way you/she would'": r"\bthe way (?:you|she|he|they|somebody|a person|anybody)\b",
-    "announced withholding": r"\bkeeps? (?:it|that|the rest of it|them) to (?:him|her|them)sel(?:f|ves)\b|\bkept (?:it|that) to (?:him|her)self\b",
-    "'that's not X, that's Y'": r"\b(?:that|this|it)'s not [^.,;!?]{1,40}, (?:that|it)'s\b",
-    "'the whole/rest of it'": r"\bthe (?:whole|rest|entire) of it\b",
-    "'in order' (not 'in order to')": r"\bin order\b(?!\s+to\b)",
-    "the word 'same'":       r"\bsame\b",
-    "'though' at clause end": r",\s+though\b",
-    "'except' as connector": r",\s+except\b",
-    "turning an object":     r"\bturn(?:s|ing|ed)? (?:it|the \w+) over\b",
-    "eyes on / eyes down":   r"\beyes (?:on|down|still on)\b|\bnot looking up\b",
-    "sentence opens She/He + verb": r"(?:^|(?<=[.!?]\s))(?:She|He) [a-z]+s\b",
-}
-
-def words(text): return re.findall(r"[A-Za-z']+", text)
-
-def strip_gut(text):
-    match = re.search(r"\*\*\* ?START OF.*?\*\*\*(.*?)\*\*\* ?END OF", text, re.S)
+def strip_gutenberg(text):
+    match = std_re.search(r"\*\*\* ?START OF.*?\*\*\*(.*?)\*\*\* ?END OF", text, std_re.S)
     return match.group(1) if match else text
 
-# Every pattern is matched case-insensitively except the sentence-opening one,
-# which needs the capital to find a sentence start. Without this the counter
-# silently missed every instance that began a sentence: the "that's not X,
-# that's Y" row read six book-wide when the true figure was nine.
-CASE_SENSITIVE = {"sentence opens She/He + verb"}
 
-for _n, _t in NUMBER_TARGET.items():
-    PATTERNS[f"number: {_n}"] = r"\b" + _n + r"\b"
-    TARGETS[f"number: {_n}"] = _t
+def resolve_paths(explicit, default_dir):
+    if not explicit:
+        return sorted(default_dir.glob("*.md")) if default_dir and default_dir.is_dir() else []
+    paths = []
+    for item in explicit:
+        item = Path(item)
+        if item.is_dir():
+            paths.extend(sorted(item.glob("*.md")))
+        elif item.is_file():
+            paths.append(item)
+    return paths
 
 
-def measure(text):
+def corpus_dirs_of(config):
+    return tuple((Path(config["_config_dir"]) / value).resolve()
+                for value in config.get("corpus_dirs", []))
+
+
+def pick_engine(config):
+    """Return (engine module, whether it supports timeout=, timeout seconds).
+
+    A user-supplied pattern is arbitrary regex and arbitrary regex can be
+    catastrophically slow to backtrack. The ``regex`` package's timeout
+    argument turns that into a warning instead of a hang; plain ``re`` has no
+    such argument, so a pattern that hangs under ``re`` still hangs, and that
+    is why "regex" is preferred whenever it is installed.
+    """
+    regex_config = config.get("regex", {}) if isinstance(config.get("regex"), dict) else {}
+    timeout = regex_config.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+    requested = regex_config.get("engine", "auto")
+    if requested in ("auto", "regex"):
+        module, reason = require("regex")
+        if module is not None:
+            return module, True, timeout
+        if requested == "regex":
+            print(f"  warning: regex.engine=\"regex\" requested but unavailable ({reason}); "
+                  f"falling back to re, which cannot time out a pattern", file=sys.stderr)
+        else:
+            print("  warning: the optional 'regex' package is not installed; falling back to "
+                  "re, which cannot time out a pattern. A hung user pattern will hang this run.",
+                  file=sys.stderr)
+    return std_re, False, timeout
+
+
+def build_pattern_config(settings):
+    """Merge configured construction patterns with the number-word rows.
+
+    Returns a plain ``{label: {"pattern": ..., "target_per_100k": ..., "case_sensitive": ...}}``
+    mapping, still uncompiled, so callers can validate every entry themselves.
+    """
+    patterns = dict(settings.get("patterns", {})) if isinstance(settings.get("patterns"), dict) else {}
+    number_targets = settings.get("number_targets", {})
+    if settings.get("number_words") and isinstance(number_targets, dict):
+        for word, target in number_targets.items():
+            patterns[f"number: {word}"] = {"pattern": rf"\b{std_re.escape(str(word))}\b",
+                                           "target_per_100k": target}
+    return patterns
+
+
+def compile_patterns(patterns_config, engine):
+    """Compile every configured pattern, failing loudly on the first bad one."""
+    ignorecase, multiline = engine.IGNORECASE, engine.MULTILINE
+    compiled, targets = {}, {}
+    for label, entry in patterns_config.items():
+        if not isinstance(entry, dict) or "pattern" not in entry:
+            sys.exit(f"project_measures.tics.patterns[{label!r}] must be an object with "
+                     f"a 'pattern' key")
+        raw_pattern = entry["pattern"]
+        flags = multiline | (0 if entry.get("case_sensitive") else ignorecase)
+        try:
+            compiled[label] = engine.compile(raw_pattern, flags)
+        except Exception as exc:
+            sys.exit(f"project_measures.tics.patterns[{label!r}]: invalid regex "
+                     f"{raw_pattern!r}: {exc}")
+        targets[label] = entry.get("target_per_100k")
+    return compiled, targets
+
+
+def count_matches(compiled, text, use_timeout, timeout, label):
+    try:
+        if use_timeout:
+            return sum(1 for _ in compiled.finditer(text, timeout=timeout))
+        return sum(1 for _ in compiled.finditer(text))
+    except Exception as exc:
+        print(f"  warning: pattern {label!r} failed or timed out ({exc}); counted as 0",
+              file=sys.stderr)
+        return 0
+
+
+def measure(text, compiled, use_timeout, timeout):
     word_count = len(words(text))
     out = {}
-    for name, pattern in PATTERNS.items():
-        flags = re.M if name in CASE_SENSITIVE else re.M | re.I
-        out[name] = 100000 * len(re.findall(pattern, text, flags)) / word_count if word_count else 0.0
+    for label, pattern in compiled.items():
+        hits = count_matches(pattern, text, use_timeout, timeout, label)
+        out[label] = 100000 * hits / word_count if word_count else 0.0
     return out, word_count
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--show")
-    args = parser.parse_args()
 
-    book = "\n".join(Path(chapter_path).read_text() for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")))
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("paths", nargs="*", type=Path,
+                    help="chapter files or directories; default: the configured chapters directory")
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
+    parser.add_argument("--show", help="a configured label, or a literal regex")
+    args = parser.parse_args(argv)
+
+    config = project_config.load_config(args.config)
+    settings = project_config.measure_settings("tics", config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    corpus_dirs = corpus_dirs_of(config)
+
+    patterns_config = build_pattern_config(settings)
+    if not patterns_config:
+        print("no project_measures.tics.patterns configured (and number_words is off).")
+        print("set project_measures.tics.patterns, or number_words + number_targets, "
+              "to enable this report.")
+        return 0
+
+    engine, use_timeout, timeout = pick_engine(config)
+    compiled, targets = compile_patterns(patterns_config, engine)
+
+    paths = resolve_paths(args.paths, chapters_dir)
+    if not paths:
+        print("no chapters found")
+        return 0
+    book_text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
     if args.show:
-        pat = PATTERNS.get(args.show) or args.show
-        flags = 0 if args.show in CASE_SENSITIVE else re.I
-        for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
-            for line_number, line in enumerate(Path(chapter_path).read_text().split("\n"), 1):
-                for match in re.finditer(pat, line, flags):
-                    sentence = max(0, match.start()-60)
-                    print(f"{Path(chapter_path).stem}:{line_number}  ...{line[sentence:match.end()+60]}...")
-        return
+        pattern_source = patterns_config.get(args.show, {}).get("pattern") if args.show in patterns_config else args.show
+        case_sensitive = patterns_config.get(args.show, {}).get("case_sensitive", False)
+        flags = engine.MULTILINE | (0 if case_sensitive else engine.IGNORECASE)
+        try:
+            show_pattern = engine.compile(pattern_source, flags)
+        except Exception as exc:
+            sys.exit(f"invalid regex {pattern_source!r}: {exc}")
+        for chapter_path in paths:
+            for line_number, line in enumerate(chapter_path.read_text(encoding="utf-8").split("\n"), 1):
+                for match in show_pattern.finditer(line):
+                    start = max(0, match.start() - 60)
+                    print(f"{chapter_path.stem}:{line_number}  ...{line[start:match.end() + 60]}...")
+        return 0
 
-    book_count, book_rate = measure(book)
+    book_rates, book_words = measure(book_text, compiled, use_timeout, timeout)
     ref = []
-    for directory in CORPUS:
-        for chapter_path in sorted(Path(directory).rglob("*.txt")):
-            if "stripped" in chapter_path.stem: continue
-            row, word_count = measure(strip_gut(chapter_path.read_text(encoding="utf-8", errors="replace")))
-            if word_count > 20000: ref.append(row)
+    for directory in corpus_dirs:
+        if not directory.is_dir():
+            continue
+        for chapter_path in sorted(directory.rglob("*.txt")):
+            if "stripped" in chapter_path.stem:
+                continue
+            cleaned = strip_gutenberg(chapter_path.read_text(encoding="utf-8", errors="replace"))
+            row, word_count = measure(cleaned, compiled, use_timeout, timeout)
+            if word_count > 20000:
+                ref.append(row)
 
     print(f"\n{len(ref)} reference books. Rates per 100,000 words.\n")
     if not ref:
         print("  No readable reference books found. Add .txt files to a configured")
-        print("  corpus directory or edit corpus_dirs in config.json. Book rates and")
+        print("  corpus directory or set corpus_dirs in config.json. Book rates and")
         print("  configured targets are still shown below.\n")
     print(f"  {'construction':<32}{'book':>8}{'target':>9}{'corpus med':>12}{'corpus max':>12}{'':>3}")
-    print("  " + "-"*78)
+    print("  " + "-" * 78)
     rows, over = [], 0
-    for name in PATTERNS:
-        vals = sorted(row[name] for row in ref)
+    for label in compiled:
+        vals = sorted(row[label] for row in ref)
         med = st.median(vals) if vals else None
         corpus_maximum = max(vals) if vals else None
-        total = TARGETS.get(name)
-        excess = book_count[name]/total if total else 0
-        rows.append((excess, name, book_count[name], total, med, corpus_maximum))
-    for excess, name, benchmark, total, med, corpus_maximum in sorted(rows, reverse=True):
+        target = targets.get(label)
+        excess = book_rates[label] / target if target else 0
+        rows.append((excess, label, book_rates[label], target, med, corpus_maximum))
+    for excess, label, benchmark, target, med, corpus_maximum in sorted(rows, reverse=True):
         med_text = f"{med:.1f}" if med is not None else "n/a"
         max_text = f"{corpus_maximum:.1f}" if corpus_maximum is not None else "n/a"
-        if total is None:
-            print(f"  {name:<32}{benchmark:>8.1f}{'-':>9}{med_text:>12}{max_text:>12}")
+        if target is None:
+            print(f"  {label:<32}{benchmark:>8.1f}{'not set':>9}{med_text:>12}{max_text:>12}")
             continue
-        within_range = benchmark <= total
+        within_range = benchmark <= target
         over += 0 if within_range else 1
-        print(f"  {name:<32}{benchmark:>8.1f}{total:>9.1f}{med_text:>12}{max_text:>12}"
-              f"{'  pass' if within_range else '  CUT ' + f'{100*(1-total/benchmark):.0f}%'}")
-    print(f"\n  {over} of {len(TARGETS)} still over target.")
-    print("  The target is a reasonable rate, not the corpus. Several of these stay")
-    print("  above every reference book after the cut, which is intended: a voice is")
-    print("  made of repetition and the corpus is only twenty-three books.")
+        print(f"  {label:<32}{benchmark:>8.1f}{target:>9.1f}{med_text:>12}{max_text:>12}"
+              f"{'  pass' if within_range else '  CUT ' + f'{100 * (1 - target / benchmark):.0f}%'}")
+
+    configured_targets = sum(1 for target in targets.values() if target is not None)
+    if configured_targets:
+        print(f"\n  {over} of {configured_targets} configured target(s) still over target.")
+    else:
+        print("\n  no target_per_100k values configured; every row above is descriptive only.")
+        print("  set project_measures.tics.patterns[label].target_per_100k to enable pass/fail.")
+    return 1 if over else 0
+
 
 # Run from grade.py, not on its own. Each script in measures/ reports one
 # diagnostic; grade.py assembles enabled checks and is the interface that says
@@ -259,4 +262,4 @@ def _solo_notice():
 
 if __name__ == "__main__":
     _solo_notice()
-    main()
+    sys.exit(main() or 0)

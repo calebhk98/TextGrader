@@ -25,8 +25,18 @@ class TextProcessingTests(unittest.TestCase):
         self.assertEqual(sentences(text), ["One soft line.", '"Two?"', "Three!", "Tail"])
 
     def test_markdown_headings(self):
-        self.assertEqual(remove_markdown_headings("# Title\nText\n### Part\nSubhead\n---\nMore"),
-                         "Text\nMore")
+        # Each heading becomes a blank line rather than nothing, so removing one
+        # between two paragraphs cannot merge them.  "Subhead\n---" is a real
+        # Setext heading: the underline is on the line immediately below.
+        self.assertEqual(
+            remove_markdown_headings("# Title\nText\n### Part\nSubhead\n---\nMore"),
+            "\nText\n\n\nMore")
+
+    def test_a_scene_break_is_not_a_setext_underline(self):
+        # A blank line between the paragraph and "---" makes it a thematic
+        # break, not a heading.  Treating it as one deleted the paragraph above
+        # every scene break in the manuscript.
+        self.assertIn("Kept.", remove_markdown_headings("Kept.\n\n---\n\nAfter."))
 
     def test_quote_normalization(self):
         self.assertEqual(normalize_quotes("\u201cIt\u2019s so,\u201d"), '"It\'s so,"')

@@ -1,103 +1,99 @@
 #!/usr/bin/env python3
 """How many sentences a character gets to say before the quotation marks close.
 
-The book was written with a strong one-line-per-turn habit, and the habit is
-measurable: 82% of its quotations were a single sentence against a corpus
-median of 76%, and only 6% ran to three or more against a median of 12%. That
-puts it at the clipped end of the corpus, beside Peter Pan and Alice, when the
-prose everywhere else is at the other end. Characters should be able to say
-"What? No. We can't do that, it hurts us. We should do X instead." in one
-breath, and mostly they cannot.
+Two related shapes are measured: how many sentences a quotation runs to
+before it closes, and how many words. Chat transcripts are excluded: they
+follow their own unpunctuated convention, so counting sentences in them is
+meaningless.
 
-Chat transcripts are excluded: they are lowercase, unpunctuated and follow
-their own convention, so counting sentences in them is meaningless.
+Nothing here is a target until ``project_measures.quote_length`` supplies
+one. With no targets configured this prints the book's own numbers, against
+whatever peer-book corpus rows are configured, and does not fail.
+
+Config (``project_measures.quote_length``):
+
+    "peer_books": ["<corpus source id>", "<corpus source id>", ...],
+    "targets": {
+        "sentences_per_quotation_min": <number>,
+        "three_plus_sentences_min": <number>,
+        "quotation_word_mean": [low, high],
+        "quotation_word_cv": [low, high],
+        "short_quotation_share": [low, high],
+        "short_quotation_hard_max": <number>,
+        "long_quotation_share": [low, high]
+    }
+
+READ THIS BEFORE CHANGING ANY BAND: ``short_quotation_share`` and
+``long_quotation_share`` are two of three buckets that must sum with the
+unnamed middle bucket to 100% (every quotation falls in exactly one). Picking
+independent percentile targets for each column can produce bands whose
+implied middle bucket is negative or absurdly large - a statistically
+impossible book. ``_check_bands_are_possible()`` catches that arithmetic
+error whenever bands are configured; it does not judge whether the bands are
+otherwise a good idea.
 """
-import glob
-import os
-import re
+import argparse
 import statistics
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import CHAPTERS_DIR, CORPUS_DIRS, DIALOGUE_TARGETS
+import project_config
 
-# ---------------------------------------------------------------------------
-# TARGETS. Read this before changing any number below.
-#
-# These bands come from FOUR NAMED BOOKS, not from percentiles, and that is
-# deliberate. A reviewer caught the repository building an impossible target
-# out of column-wise percentiles, twice:
-#
-#   "You cannot combine the 75th percentile of mean (20.4), the 75th percentile
-#    of <=4w (35.9%), the 75th percentile of 5-29w (60.7%) and the 75th
-#    percentile of >=30w (18.8%). If you sum those bucket percentages you get
-#    115.4%. It creates a statistically impossible book, because the columns
-#    are coupled: every turn falls in exactly one bin and they sum to 100."
-#
-# Worse, the coupling runs the OPPOSITE way from what mixing the columns
-# assumes. Across the corpus, a longer mean goes with FEWER short lines, not
-# more: Black Beauty has the longest mean at 37.3 and one of the lowest short
-# shares at 14.5%, while Men Without Women has the shortest mean at 6.5 and the
-# highest short share at 43.7%. Aiming at p75 of the mean AND p75 of the short
-# share aims at two different books at once.
-#
-# **The rule for anyone editing this file: pick real books whose profile you
-# want and use their whole rows. Never mix percentiles across these columns.**
-#
-# The author's chosen references, and their actual measured rows:
-#
-#   book                mean   CV%   <=4w   5-29w   >=30w    sum
-#   tom_sawyer          17.0   148   26.2    58.4    15.4   100.0
-#   treasure_island     22.2   148   25.6    52.1    22.3   100.0
-#   little_women        23.4   113   13.4    61.1    25.5   100.0
-#   wind_in_willows     27.8   152   20.4    50.8    28.8   100.0
-#
-# and his stated aims within that group: a mean "of like 20ish, plus or minus a
-# bit", a CV "of like 125, or like 115-135", and short replies at "a max of
-# ~30, goal closer to 20-25". The bands below are those, widened only to the
-# edges of the peer group where he did not specify.
-PEER_BOOKS = ("tom_sawyer", "treasure_island", "little_women", "wind_in_willows")
-
-TARGET_MEAN = DIALOGUE_TARGETS["sentences_per_quotation_min"]
-TARGET_THREE_PLUS = DIALOGUE_TARGETS["three_plus_sentences_min"]
-TARGET_WORD_MEAN = tuple(DIALOGUE_TARGETS["quotation_word_mean"])
-TARGET_WORD_CV = tuple(DIALOGUE_TARGETS["quotation_word_cv"])
-TARGET_SHORT_SHARE = tuple(DIALOGUE_TARGETS["short_quotation_share"])
-TARGET_SHORT_HARD_MAX = DIALOGUE_TARGETS["short_quotation_hard_max"]
-TARGET_LONG_SHARE = tuple(DIALOGUE_TARGETS["long_quotation_share"])
+import re
 
 
-def _check_bands_are_possible():
-    """A bucket target that cannot sum to 100 is the error this file exists to
-    prevent, so it is asserted rather than trusted."""
-    lower_bound = TARGET_SHORT_SHARE[0] + TARGET_LONG_SHARE[0]
-    upper_bound = TARGET_SHORT_SHARE[1] + TARGET_LONG_SHARE[1]
-    assert lower_bound < 100 and upper_bound < 100, "short+long bands leave no room for the middle"
-    assert 40 <= 100 - upper_bound and 100 - lower_bound <= 70, (
-        f"implied middle band {100 - upper_bound:.0f}-{100 - lower_bound:.0f}% is outside the "
-        f"peer range of 50.8-61.1%")
+def resolve_paths(explicit, default_dir):
+    if not explicit:
+        return sorted(default_dir.glob("*.md")) if default_dir and default_dir.is_dir() else []
+    paths = []
+    for item in explicit:
+        item = Path(item)
+        if item.is_dir():
+            paths.extend(sorted(item.glob("*.md")))
+        elif item.is_file():
+            paths.append(item)
+    return paths
 
 
-_check_bands_are_possible()
+def corpus_dirs_of(config):
+    return tuple((Path(config["_config_dir"]) / value).resolve()
+                for value in config.get("corpus_dirs", []))
+
+
+def check_bands_are_possible(targets):
+    """A bucket target that cannot sum to 100 is the error this exists to catch.
+
+    Raised rather than asserted: ``assert`` disappears under ``python -O``,
+    which would silently let an impossible book back in.
+    """
+    short_bounds = targets.get("short_quotation_share")
+    long_bounds = targets.get("long_quotation_share")
+    if not (isinstance(short_bounds, (list, tuple)) and isinstance(long_bounds, (list, tuple))):
+        return
+    lower_bound = short_bounds[0] + long_bounds[0]
+    upper_bound = short_bounds[1] + long_bounds[1]
+    if not (lower_bound < 100 and upper_bound < 100):
+        raise ValueError(
+            "project_measures.quote_length.targets: short_quotation_share + "
+            "long_quotation_share leaves no room for the middle bucket")
 
 
 def quotations(text):
     """Spoken turns, with parse failures excluded.
 
-    A regex over straight quotes cannot tell a closing mark from an apostrophe
-    or an unmatched one, so in a Gutenberg text a single span can swallow pages
-    of narration between two stray marks. Hemingway produced a 2,993-word
-    "quotation" that way and This Side of Paradise a 1,899-word one, and those
-    wrecked the standard deviation the corpus targets were built on. A real
-    spoken turn does not cross a paragraph break: a genuine multi-paragraph
-    speech reopens the quotation mark on each paragraph. So spans containing a
-    blank line are dropped, on both sides of the comparison.
+    A regex over straight quotes cannot tell a closing mark from an
+    apostrophe or an unmatched one, so a single span can swallow pages of
+    narration between two stray marks in an unedited source text, wrecking
+    any standard deviation computed from it. A real spoken turn does not
+    cross a paragraph break: a genuine multi-paragraph speech reopens the
+    quotation mark on each paragraph. So spans containing a blank line are
+    dropped, on both sides of any comparison.
     """
     text = re.sub(r"(?m)^#.*$", "", text)
     text = re.sub(r"(?m)^[a-z]+: .*$", "", text)   # chat transcript lines
-    text = text.replace("\u201c", '"').replace("\u201d", '"')
+    text = text.replace("“", '"').replace("”", '"')
     return [quotation for quotation in re.findall(r'"([^"]{2,})"', text) if "\n\n" not in quotation]
 
 
@@ -126,38 +122,76 @@ def profile(text):
     }
 
 
-def corpus():
+def corpus(corpus_dirs, peer_books):
     rows = []
-    for directory in CORPUS_DIRS:
-        if not os.path.isdir(directory):
+    for directory in corpus_dirs:
+        if not directory.is_dir():
             continue
-        for name in sorted(os.listdir(directory)):
+        for name in sorted(p.name for p in directory.iterdir()):
             try:
-                text = open(os.path.join(directory, name), encoding="utf-8",
-                            errors="ignore").read()
+                text = (directory / name).read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            text_path = profile(text)
-            if text_path and text_path["quotes"] >= 200:
-                rows.append((name.replace("_stripped", "")[:24], text_path))
+            text_profile = profile(text)
+            if text_profile and text_profile["quotes"] >= 200:
+                rows.append((name.replace("_stripped", "")[:24], text_profile))
+    if peer_books:
+        # Named peer books, not percentiles: comparing against a chosen set of
+        # real books is deliberate (see the module docstring), so a name that
+        # matches nothing in the corpus is dropped rather than silently
+        # widening the comparison back out to the whole corpus.
+        rows = [row for row in rows if row[0].split(".")[0] in peer_books]
     return rows
 
 
-def main():
-    files = sorted(glob.glob(str(CHAPTERS_DIR / "*.md")))
+def band(value, bounds):
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+        return "not set"
+    lower_bound, upper_bound = bounds
+    return "ok" if lower_bound <= value <= upper_bound else "FAIL"
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("paths", nargs="*", type=Path,
+                    help="chapter files or directories; default: the configured chapters directory")
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
+    args = parser.parse_args(argv)
+
+    config = project_config.load_config(args.config)
+    settings = project_config.measure_settings("quote_length", config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    corpus_dirs = corpus_dirs_of(config)
+    peer_books = settings.get("peer_books", [])
+    targets = settings.get("targets", {})
+    targets = targets if isinstance(targets, dict) else {}
+
+    if targets:
+        check_bands_are_possible(targets)
+    else:
+        print("no project_measures.quote_length.targets configured; the measurements below "
+              "are descriptive only, and no dialogue-length policy is enforced.\n")
+
+    files = resolve_paths(args.paths, chapters_dir)
     if not files:
-        sys.exit(f"no chapters found in {CHAPTERS_DIR}")
-    book = profile("\n".join(open(chapter_path).read() for chapter_path in files))
-    ref = corpus()
+        print(f"no chapters found")
+        return 0
+    book = profile("\n".join(path.read_text(encoding="utf-8") for path in files))
+    if not book:
+        print("no quotations found; nothing to measure")
+        return 0
+    ref = corpus(corpus_dirs, peer_books)
 
     print(f"\n  {'chapter':<26}{'quotes':>7}{'mean':>7}{'1 sent %':>10}{'3+ %':>7}")
     print("  " + "-" * 57)
     for chapter_path in files:
-        chapter_profile = profile(open(chapter_path).read())
+        chapter_profile = profile(chapter_path.read_text(encoding="utf-8"))
         if not chapter_profile or chapter_profile["quotes"] < 15:
             continue
         flag = "  <-- clipped" if chapter_profile["mean"] < 1.25 else ""
-        print(f"  {os.path.basename(chapter_path)[:-3]:<26}{chapter_profile['quotes']:>7}"
+        print(f"  {chapter_path.stem[:26]:<26}{chapter_profile['quotes']:>7}"
               f"{chapter_profile['mean']:>7.2f}{chapter_profile['one']:>10.1f}{chapter_profile['three']:>7.1f}{flag}")
 
     print("  " + "-" * 57)
@@ -173,46 +207,55 @@ def main():
               f"{med_three:>7.1f}   ({len(ref)} books)")
         print(f"  {'corpus low  ' + lower_bound[0]:<26}{'':>7}{lower_bound[1]['mean']:>7.2f}")
         print(f"  {'corpus high ' + upper_bound[0]:<26}{'':>7}{upper_bound[1]['mean']:>7.2f}")
-    print(f"\n  sentences per quotation: target mean {TARGET_MEAN}, "
-          f"target 3+ {TARGET_THREE_PLUS}%: "
-          f"{'ok' if book['mean'] >= TARGET_MEAN else 'UNDER'}")
 
-    lower_bound, upper_bound = TARGET_WORD_MEAN
-    cvlo, cvhi = TARGET_WORD_CV
-    slo, shi = TARGET_SHORT_SHARE
-    llo, lhi = TARGET_LONG_SHARE
+    sentence_target = targets.get("sentences_per_quotation_min")
+    three_plus_target = targets.get("three_plus_sentences_min")
+    if sentence_target is None:
+        print(f"\n  sentences per quotation: mean {book['mean']:.2f}, target not set")
+    else:
+        print(f"\n  sentences per quotation: target mean {sentence_target}, "
+              f"target 3+ {three_plus_target if three_plus_target is not None else 'not set'}%: "
+              f"{'ok' if book['mean'] >= sentence_target else 'UNDER'}")
+
+    word_mean_bounds = targets.get("quotation_word_mean")
+    word_cv_bounds = targets.get("quotation_word_cv")
+    short_bounds = targets.get("short_quotation_share")
+    long_bounds = targets.get("long_quotation_share")
+    short_hard_max = targets.get("short_quotation_hard_max")
     mid = 100 - book["short"] - book["long"]
 
-    def band(value, lower_bound, upper_bound):
-        return "ok" if lower_bound <= value <= upper_bound else "FAIL"
-
-    print("\n  words per quotation, against " + ", ".join(PEER_BOOKS))
-    print("  bands are whole rows from those four books, never mixed percentiles")
-    # Two decimals, not one. At 17.947 against a floor of 18.0 the one-decimal
-    # form printed "18.0 ... target 18-24 ... FAIL", which reads as a broken
-    # script rather than as a near miss.
-    print(f"    {'mean':<22}{book['wmean']:>7.2f}   peers 17.0-27.8   "
-          f"target {lower_bound:.0f}-{upper_bound:.0f}    {band(book['wmean'], lower_bound, upper_bound)}")
+    print("\n  words per quotation" + (f", against {', '.join(peer_books)}" if peer_books else ""))
+    if not any([word_mean_bounds, word_cv_bounds, short_bounds, long_bounds]):
+        print("  no word-length bands configured; figures below are descriptive only.")
+    word_mean_text = f"{word_mean_bounds[0]:.0f}-{word_mean_bounds[1]:.0f}" if word_mean_bounds else "not set"
+    print(f"    {'mean':<22}{book['wmean']:>7.2f}   target {word_mean_text:<10}    {band(book['wmean'], word_mean_bounds)}")
     print(f"    {'median':<22}{book['wmed']:>7.0f}")
-    print(f"    {'variation (CV %)':<22}{book['wcv']:>7.0f}    peers 113-152     "
-          f"target {cvlo:.0f}-{cvhi:.0f}  {band(book['wcv'], cvlo, cvhi)}")
-    print(f"    {'4 words or under':<22}{book['short']:>7.1f}%   peers 13.4-26.2%  "
-          f"target {slo:.0f}-{shi:.0f}%   {band(book['short'], slo, shi)}"
-          + ("  OVER HARD MAX" if book["short"] > TARGET_SHORT_HARD_MAX else ""))
-    print(f"    {'5 to 29 words':<22}{mid:>7.1f}%   peers 50.8-61.1%")
-    print(f"    {'30 words or over':<22}{book['long']:>7.1f}%   peers 15.4-28.8%  "
-          f"target {llo:.0f}-{lhi:.0f}%   {band(book['long'], llo, lhi)}")
+    cv_text = f"{word_cv_bounds[0]:.0f}-{word_cv_bounds[1]:.0f}" if word_cv_bounds else "not set"
+    print(f"    {'variation (CV %)':<22}{book['wcv']:>7.0f}    target {cv_text:<10}  {band(book['wcv'], word_cv_bounds)}")
+    short_text = f"{short_bounds[0]:.0f}-{short_bounds[1]:.0f}%" if short_bounds else "not set"
+    hard_max_note = ""
+    if short_hard_max is not None and book["short"] > short_hard_max:
+        hard_max_note = "  OVER HARD MAX"
+    print(f"    {'4 words or under':<22}{book['short']:>7.1f}%   target {short_text:<10}   "
+          f"{band(book['short'], short_bounds)}{hard_max_note}")
+    print(f"    {'5 to 29 words':<22}{mid:>7.1f}%")
+    long_text = f"{long_bounds[0]:.0f}-{long_bounds[1]:.0f}%" if long_bounds else "not set"
+    print(f"    {'30 words or over':<22}{book['long']:>7.1f}%   target {long_text:<10}   "
+          f"{band(book['long'], long_bounds)}")
     print(f"    {'buckets sum to':<22}"
           f"{book['short'] + mid + book['long']:>7.1f}%")
     print("\n  The three bucket rows are coupled: every turn lands in exactly one")
     print("  and they sum to 100. Do not target them independently.\n")
 
+    failures = [band(book["wmean"], word_mean_bounds), band(book["wcv"], word_cv_bounds),
+               band(book["short"], short_bounds), band(book["long"], long_bounds)]
+    below_sentence_target = sentence_target is not None and book["mean"] < sentence_target
+    return 1 if ("FAIL" in failures or below_sentence_target) else 0
+
 
 # Run from grade.py, not on its own. Each script in measures/ reports one
 # diagnostic; grade.py assembles enabled checks and is the interface that says
-# whether a pass helped. Running one of these alone is for reading the
-# individual hits during a fix, which is what --show and the per-file
-# arguments are for, and it is never how a pass gets judged.
+# whether a pass helped.
 def _solo_notice():
     import sys, os
     if os.environ.get("HALSTEAD_VIA_GRADE"):
@@ -220,6 +263,7 @@ def _solo_notice():
     print("  [bundled diagnostic; use grade.py for the structured report]",
           file=sys.stderr)
 
+
 if __name__ == "__main__":
     _solo_notice()
-    main()
+    sys.exit(main() or 0)

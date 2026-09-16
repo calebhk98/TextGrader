@@ -30,9 +30,7 @@ from pathlib import Path
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import CHAPTERS_DIR, CORPUS_DIRS, MANUSCRIPT
-
-CORPUS = CORPUS_DIRS
+import project_config
 
 WORDS = ("one two three four five six seven eight nine ten eleven twelve thirteen "
          "fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty forty "
@@ -75,9 +73,9 @@ def strip_gutenberg(text):
     return text[: match.start()] if match else text
 
 
-def corpus_profiles():
+def corpus_profiles(corpus_dirs):
     out = []
-    for directory in CORPUS:
+    for directory in corpus_dirs:
         if not directory.is_dir():
             continue
         for text_path in sorted(directory.glob("*.txt")):
@@ -101,15 +99,25 @@ def band(label, value, vals, higher_is_worse=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("path", nargs="?", type=Path, default=MANUSCRIPT)
+    parser.add_argument("path", nargs="?", type=Path,
+                    help="a manuscript file; default: the configured manuscript")
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--chapters", action="store_true", help="one row per chapter")
     parser.add_argument("--value", help="print every line containing this number")
     parser.add_argument("--top", type=int, default=20)
     args = parser.parse_args()
 
+    config = project_config.load_config(args.config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    corpus_dirs = tuple((Path(config["_config_dir"]) / value).resolve()
+                        for value in config.get("corpus_dirs", []))
+    manuscript_path = args.path or project_config.project_path("manuscript", "MANUSCRIPT.md", config)
+    chapter_files = sorted(chapters_dir.glob("*.md")) if chapters_dir and chapters_dir.is_dir() else []
+
     if args.value:
         pat = re.compile(rf"\b{re.escape(args.value)}\b", re.I)
-        for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+        for chapter_path in chapter_files:
             for line_number, line in enumerate(chapter_path.read_text(encoding="utf-8").split("\n"), 1):
                 if pat.search(line):
                     for match in pat.finditer(line):
@@ -118,18 +126,22 @@ def main():
         return
 
     if args.chapters:
+        if not chapter_files:
+            print("no chapters found")
+            return
         print(f"{'chapter':24}{'nums':>6}{'/1k':>7}{'distinct':>10}{'top5 %':>8}  commonest")
-        for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+        for chapter_path in chapter_files:
             chapter_profile = profile(chapter_path.read_text(encoding="utf-8"))
             top = ", ".join(f"{value} x{count}" for value, count in chapter_profile["counter"].most_common(3))
             print(f"{chapter_path.stem[:23]:24}{chapter_profile['count']:>6}{chapter_profile['rate']:>7.1f}"
                   f"{chapter_profile['distinct']:>10}{chapter_profile['top5']:>8.1f}  {top}")
         return
 
-    if not args.path.is_file():
-        sys.exit(f"error: no such file {args.path}")
+    if not manuscript_path or not manuscript_path.is_file():
+        sys.exit(f"error: no such file {manuscript_path}")
+    args.path = manuscript_path
     book_profile = profile(args.path.read_text(encoding="utf-8"))
-    ref = corpus_profiles()
+    ref = corpus_profiles(corpus_dirs)
 
     print(f"{args.path.name}: {book_profile['count']:,} numbers in {book_profile['words']:,} words, "
           f"{book_profile['distinct']} distinct values")

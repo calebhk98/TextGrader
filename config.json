@@ -3,13 +3,48 @@
   "chapters_dir": "chapters",
   "characters_dir": "characters",
   "corpus_profile": "prose_reference.json",
+  "analysis": {
+    "comparison_unit": "unknown",
+    "min_sentences_for_corpus": 40,
+    "min_words_for_corpus": 500
+  },
+  "text_processing": {
+    "strip_gutenberg": true,
+    "strip_markdown_headings": true,
+    "strip_transcript": true,
+    "drop_marker_paragraphs": true,
+    "normalize_quotes": false,
+    "segmenter": "auto",
+    "language": "en",
+    "segmenter_clean": false,
+    "transcript": null
+  },
+  "nlp": {
+    "model": "en_core_web_sm",
+    "disable": [
+      "ner"
+    ],
+    "max_chars_per_chunk": 400000,
+    "max_words": null
+  },
+  "regex": {
+    "engine": "auto",
+    "timeout_seconds": 2.0
+  },
   "corpus_builder": {
     "output_dir": "corpus",
     "count": 40,
     "minimum_count": 30,
-    "providers": ["gutenberg"],
-    "metadata_providers": ["openlibrary", "google_books"],
-    "work_types": ["fiction"],
+    "providers": [
+      "gutenberg"
+    ],
+    "metadata_providers": [
+      "openlibrary",
+      "google_books"
+    ],
+    "work_types": [
+      "fiction"
+    ],
     "genres": [],
     "include_terms": [],
     "exclude_terms": [],
@@ -17,40 +52,242 @@
     "max_authors": null,
     "max_books_per_author": 2
   },
-  "text_processing": {},
   "metrics": {
-    "repeated_ngrams": {"enabled": false},
-    "sentence_openings": {"enabled": false},
-    "local_repetition": {"enabled": false},
-    "function_words": {"enabled": false},
-    "mattr": {"enabled": false},
-    "punctuation": {"enabled": false},
-    "length_quantiles": {"enabled": false},
-    "pov_pronouns": {"enabled": false},
-    "dialogue_contractions": {"enabled": false},
-    "dialogue_tags": {"enabled": false},
-    "sentence_segmentation": {"enabled": false, "language": "en", "clean": false},
-    "passive_voice": {"enabled": false},
-    "clause_structure": {"enabled": false},
-    "pos_distribution": {"enabled": false},
-    "tense_consistency": {"enabled": false},
-    "nominalizations": {"enabled": false},
-    "character_voice": {"enabled": false},
-    "absolutes": true,
-    "banned_phrases": true,
-    "check_edits": true,
-    "dialogue_study": true,
-    "number_report": true,
-    "prose_check": true,
-    "quotable": true,
-    "quote_length": true,
-    "register": true,
-    "style_report": true,
-    "tics": true,
-    "verify_citations": true,
-    "voice_separation": true
+    "repeated_ngrams": {
+      "enabled": true,
+      "sizes": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "min_count": 2,
+      "max_reported": 40
+    },
+    "sentence_openings": {
+      "enabled": true,
+      "words": 3
+    },
+    "local_repetition": {
+      "enabled": true,
+      "windows": [
+        50,
+        100,
+        250
+      ]
+    },
+    "function_words": {
+      "enabled": false
+    },
+    "mattr": {
+      "enabled": true,
+      "window": 100
+    },
+    "punctuation": {
+      "enabled": true
+    },
+    "length_quantiles": {
+      "enabled": true
+    },
+    "pov_pronouns": {
+      "enabled": true,
+      "block_words": 500
+    },
+    "dialogue_contractions": {
+      "enabled": true
+    },
+    "dialogue_tags": {
+      "enabled": true
+    },
+    "sentence_segmentation": {
+      "enabled": false
+    },
+    "passive_voice": {
+      "enabled": false
+    },
+    "clause_structure": {
+      "enabled": false
+    },
+    "pos_distribution": {
+      "enabled": false
+    },
+    "tense_consistency": {
+      "enabled": false
+    },
+    "nominalizations": {
+      "enabled": false
+    },
+    "character_voice": {
+      "enabled": false
+    },
+    "sentence_length_autocorrelation": {
+      "enabled": false,
+      "lags": [
+        1,
+        2,
+        3
+      ]
+    },
+    "sentence_length_deltas": {
+      "enabled": false
+    },
+    "sentence_run_lengths": {
+      "enabled": false,
+      "short_max": 8,
+      "long_min": 25
+    },
+    "sentence_length_entropy": {
+      "enabled": false
+    },
+    "paragraph_rhythm": {
+      "enabled": false
+    },
+    "single_sentence_paragraph_runs": {
+      "enabled": false
+    },
+    "dependency_distance": {
+      "enabled": false
+    },
+    "parse_depth": {
+      "enabled": false
+    },
+    "finite_clauses": {
+      "enabled": false
+    },
+    "clause_types": {
+      "enabled": false
+    },
+    "coordination_ratio": {
+      "enabled": false
+    },
+    "opening_patterns": {
+      "enabled": false,
+      "depth": 2,
+      "max_reported": 25
+    },
+    "mtld": {
+      "enabled": false,
+      "threshold": 0.72
+    },
+    "hdd": {
+      "enabled": false,
+      "sample": 42
+    },
+    "word_rarity": {
+      "enabled": false,
+      "language": "en"
+    },
+    "repetition_distance": {
+      "enabled": false,
+      "min_length": 4
+    },
+    "lemma_repetition": {
+      "enabled": false
+    },
+    "adjacent_sentence_similarity": {
+      "enabled": false,
+      "model": "all-MiniLM-L6-v2"
+    },
+    "local_similarity_window": {
+      "enabled": false,
+      "model": "all-MiniLM-L6-v2",
+      "windows": [
+        3,
+        5
+      ]
+    },
+    "paragraph_similarity": {
+      "enabled": false,
+      "model": "all-MiniLM-L6-v2"
+    },
+    "duplicate_sentence_clusters": {
+      "enabled": false,
+      "model": "all-MiniLM-L6-v2",
+      "threshold": 0.85,
+      "max_reported": 30
+    },
+    "dialogue_channels": {
+      "enabled": false
+    },
+    "dialogue_turn_lengths": {
+      "enabled": false
+    },
+    "speaker_style": {
+      "enabled": false,
+      "min_turns": 8
+    },
+    "dialogue_attribution": {
+      "enabled": false
+    },
+    "dialogue_runs": {
+      "enabled": false
+    },
+    "speaker_function_words": {
+      "enabled": false,
+      "min_turns": 8
+    },
+    "sentence_initial_connectives": {
+      "enabled": false
+    },
+    "causal_connectives": {
+      "enabled": false
+    },
+    "hedges_boosters": {
+      "enabled": false
+    },
+    "rhetorical_constructions": {
+      "enabled": false,
+      "max_reported": 30,
+      "min_count": 3
+    },
+    "narration_pov": {
+      "enabled": false
+    },
+    "pov_block_confidence": {
+      "enabled": false,
+      "block_words": 1000
+    },
+    "entity_pronoun_ratio": {
+      "enabled": false,
+      "enable_ner": true
+    },
+    "punctuation_profile": {
+      "enabled": false
+    },
+    "punctuation_entropy": {
+      "enabled": false
+    },
+    "punctuation_patterns": {
+      "enabled": false,
+      "max_reported": 25
+    },
+    "chapter_zscores": {
+      "enabled": false,
+      "window_words": 2500
+    },
+    "rolling_drift": {
+      "enabled": false,
+      "window_words": 2500
+    },
+    "change_points": {
+      "enabled": false,
+      "window_words": 2500,
+      "penalty": 3.0
+    },
+    "absolutes": false,
+    "banned_phrases": false,
+    "check_edits": false,
+    "dialogue_study": false,
+    "number_report": false,
+    "prose_check": false,
+    "quotable": false,
+    "quote_length": false,
+    "register": false,
+    "style_report": false,
+    "tics": false,
+    "verify_citations": false,
+    "voice_separation": false
   },
-  "nlp": {"model": "en_core_web_sm"},
   "allow_external_metric_commands": false,
   "project_rules": {
     "banned_phrases": [],
@@ -58,5 +295,6 @@
     "quote_style": null,
     "hard_line_breaks": null,
     "chapter_length": null
-  }
+  },
+  "project_measures": {}
 }

@@ -17,9 +17,11 @@ always the stale copy.
 into reading order, so there is no list to keep updated and no ordering to
 remember. To move a chapter, rename the files; the build follows.
 
-The script checks, before writing, that the numbers run 01..NN with no gaps or
-duplicates and that each file's own heading matches its filename's number. A
-chapter renamed without its heading being changed is the mistake this catches.
+The script checks, before writing, that the chapter numbers run in sequence
+with no gaps or duplicates, and that each file's own heading matches the
+descriptive slug in its filename (``NN_slug.md`` -> a heading reading
+"Slug"). A chapter renamed without its heading being changed, or renumbered
+without the run being closed up, is the mistake this catches.
 """
 
 import argparse
@@ -62,13 +64,54 @@ def chapters():
     return [(chapter_number(path), path) for path in paths]
 
 
+def slug_of(path):
+    """The descriptive part of a chapter filename, after its leading number."""
+    stem = Path(path).stem
+    match = re.match(r"^\d+[_\-\s]*(.*)$", stem)
+    slug = match.group(1) if match else stem
+    return re.sub(r"[_\-]+", " ", slug).strip()
+
+
+def _normalise(text):
+    return re.sub(r"[^a-z0-9\s]", "", text.lower()).split()
+
+
+def heading_of(text):
+    """The text of a level-1..6 markdown heading on the file's first line, or None."""
+    first_line = text.split("\n", 1)[0]
+    match = re.match(r"^#{1,6}\s+(.*)$", first_line.strip())
+    return match.group(1).strip() if match else None
+
+
 def check(found):
-    """Reject ambiguous duplicate numbers without prescribing headings."""
+    """Reject ambiguous duplicate numbers, sequence gaps, and a heading that
+    no longer names what its filename says it is.
+
+    A chapter renamed without its heading being changed - or renumbered
+    without the neighbouring files shifting to close the gap - is the mistake
+    this exists to catch; see the module docstring.
+    """
     problems = []
     numbers = [number for number, _ in found if number is not None]
     duplicates = sorted({number for number in numbers if numbers.count(number) > 1})
     if duplicates:
         problems.append("duplicate chapter number(s): " + ", ".join(map(str, duplicates)))
+
+    if numbers:
+        gaps = sorted(set(range(min(numbers), max(numbers) + 1)) - set(numbers))
+        if gaps:
+            problems.append("missing chapter number(s) in the sequence: " + ", ".join(map(str, gaps)))
+
+    for _, path in found:
+        text = path.read_text(encoding="utf-8")
+        heading = heading_of(text)
+        if heading is None:
+            problems.append(f"{path.name}: no markdown heading on its first line")
+            continue
+        slug = slug_of(path)
+        if slug and _normalise(heading) != _normalise(slug):
+            problems.append(f"{path.name}: heading {heading!r} does not match "
+                            f"the filename's {slug!r}")
     return problems
 
 

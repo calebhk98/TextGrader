@@ -1,29 +1,50 @@
 """Build and load self-contained, reproducible reference-corpus profiles.
 
 This module deliberately does not acquire books.  It accepts local UTF-8 text
-files (or directories containing them) and emits portable JSON which contains
-source provenance and the distributions used by TextGrader at run time.
+files (or directories containing them) and emits portable JSON containing source
+provenance and the distributions TextGrader uses at run time.
+
+Three things recorded here exist because leaving them out produced silently
+wrong comparisons:
+
+``text_processing``
+    exactly how the corpus text was cleaned and segmented.  A profile built
+    without stripping Gutenberg boilerplate does not describe the same kind of
+    document as a manuscript that had it stripped, and ``grade.py`` now says so.
+
+``comparison_unit``
+    whether each observation is a book, a chapter or a scene.  A chapter graded
+    against a shelf of novels predictably "fails" document length, which is a
+    fact about how books are divided, not about the chapter.
+
+the parse-based metrics
+    the builder used to skip everything in ``NLP_METRICS`` outright, so passive
+    voice, tense, POS and the rest could be measured on a manuscript but could
+    never be compared with anything.  They are profiled now, behind a flag,
+    because they are slow rather than because they are unwanted.
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
+import importlib.util
 import json
 import os
 import statistics
-import importlib
-import importlib.util
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-SCHEMA_VERSION = 1
-PARSER_VERSION = "1"
-METRIC_DEFINITION_VERSION = "1"
+SCHEMA_VERSION = 2
+PARSER_VERSION = "2"
+METRIC_DEFINITION_VERSION = "2"
 
-from .text import paragraphs, sentences, strip_gutenberg, words
-from .metrics import MODULES, NLP_METRICS
+from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing
+from .metrics import REGISTRY
+from .stats import summarize
 
 CORE_METRIC_KEYS = (
     "fk", "ari", "wps", "slcv", "wpp", "spp", "wlen", "long7", "sttr",
@@ -32,28 +53,22 @@ CORE_METRIC_KEYS = (
     "_sentences", "_paragraphs",
 )
 
+#: Metric ids that are counts rather than rates.  ``grade.py`` refuses to
+#: compare these across different ``comparison_unit`` values.
+SCALE_DEPENDENT = {"_words", "_sentences", "_paragraphs",
+                   "word_count", "sentence_count", "paragraph_count"}
 
-def _core_measure(text: str) -> dict[str, Any]:
-    """Load the legacy core calculator without making ``measures`` a package."""
+
+def _core_module():
+    """Load the core calculator without making ``measures`` a package."""
+
     path = Path(__file__).resolve().parents[1] / "measures" / "prose_grade.py"
     spec = importlib.util.spec_from_file_location("textgrader_corpus_prose_grade", path)
     if spec is None or spec.loader is None:  # pragma: no cover - installation damage
         raise RuntimeError(f"cannot load core prose metrics from {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.measure(text, floor=1)
-
-
-def _words(text: str) -> list[str]:
-    return [word.lower().replace("’", "'") for word in words(text)]
-
-
-def _sentences(text: str) -> list[str]:
-    return sentences(text)
-
-
-def _paragraphs(text: str) -> list[str]:
-    return paragraphs(text)
+    return module
 
 
 def _source_files(inputs: Iterable[str | Path]) -> list[tuple[int, Path, str]]:
@@ -61,12 +76,13 @@ def _source_files(inputs: Iterable[str | Path]) -> list[tuple[int, Path, str]]:
     for input_index, item in enumerate(inputs):
         path = Path(item).expanduser().resolve()
         if path.is_file():
-            if path.suffix.lower() != ".txt":
-                raise ValueError(f"corpus source is not a .txt file: {path}")
+            if path.suffix.lower() not in (".txt", ".md"):
+                raise ValueError(f"corpus source is not a .txt or .md file: {path}")
             found.append((input_index, path, path.name))
         elif path.is_dir():
-            for source in path.rglob("*.txt"):
-                found.append((input_index, source, source.relative_to(path).as_posix()))
+            for pattern in ("*.txt", "*.md"):
+                for source in path.rglob(pattern):
+                    found.append((input_index, source, source.relative_to(path).as_posix()))
         else:
             raise FileNotFoundError(f"corpus input does not exist: {path}")
     return sorted(found, key=lambda row: (row[0], row[2].casefold(), row[2]))
@@ -84,15 +100,19 @@ def _manifest_entries(manifest: Mapping[str, Any] | None) -> Mapping[str, Any]:
 
 
 def _distribution(values: Sequence[float | int]) -> dict[str, Any]:
-    ordered = sorted(values)
-    if not ordered:
-        return {"values": [], "count": 0, "median": None, "mad": None, "q1": None, "q3": None}
-    median = statistics.median(ordered)
-    deviations = [abs(value - median) for value in ordered]
-    # inclusive quartiles behave sensibly for small corpora.
-    quartiles = statistics.quantiles(ordered, n=4, method="inclusive") if len(ordered) > 1 else [ordered[0]] * 3
-    return {"values": ordered, "count": len(ordered), "median": median,
-            "mad": statistics.median(deviations), "q1": quartiles[0], "q3": quartiles[2]}
+    """One corpus distribution, stored as its values plus its whole shape.
+
+    The raw values are kept because robust comparison needs the empirical
+    distribution, not a summary: a median and a MAD cannot answer "how far
+    outside the observed range is this", and MAD collapses to zero on discrete
+    metrics where the quantiles still carry information.
+    """
+
+    ordered = sorted(value for value in values if value is not None)
+    summary = summarize(ordered)
+    summary["values"] = ordered
+    summary["q1"], summary["q3"] = summary.get("p25"), summary.get("p75")
+    return summary
 
 
 def _timestamp(value: str | None) -> str:
@@ -103,77 +123,125 @@ def _timestamp(value: str | None) -> str:
     return moment.isoformat().replace("+00:00", "Z")
 
 
+def _metric_names(metrics: Mapping[str, Any] | None, include_parse: bool) -> list[str]:
+    """Which registered metrics to precompute for every corpus text.
+
+    Everything dependency-free is profiled regardless of whether it is enabled
+    for grading, because a distribution is only useful if it already exists when
+    somebody turns a metric on.  Parse-based metrics are opt-in: they are tens
+    of seconds per book.
+    """
+
+    out = []
+    for name, spec in REGISTRY.items():
+        if spec.needs_parse and not include_parse:
+            continue
+        if spec.requires and not spec.needs_parse:
+            # An optional package may be missing on the machine that grades even
+            # if it is present here; the metric still degrades gracefully.
+            pass
+        out.append(name)
+    return out
+
+
 def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local corpus",
                   manifest: Mapping[str, Any] | None = None, built_at: str | None = None,
                   preprocessing: Mapping[str, Any] | None = None,
+                  text_processing: Mapping[str, Any] | None = None,
+                  nlp: Mapping[str, Any] | None = None,
                   metrics: Mapping[str, Any] | None = None,
-                  include_core_metrics: bool = True) -> dict[str, Any]:
+                  comparison_unit: str = "book",
+                  include_core_metrics: bool = True,
+                  include_parse_metrics: bool = False,
+                  progress=None) -> dict[str, Any]:
     """Profile local text files without retaining or later requiring raw books."""
+
     files = _source_files(inputs)
     if not files:
-        raise ValueError("corpus contains no .txt files")
+        raise ValueError("corpus contains no .txt or .md files")
+    if comparison_unit not in COMPARISON_UNITS:
+        raise ValueError(f"comparison_unit must be one of {', '.join(COMPARISON_UNITS)}")
     entries = _manifest_entries(manifest)
-    preprocessing_settings = {"strip_gutenberg": True, **(preprocessing or {})}
+    # ``preprocessing`` is the pre-2.0 name and is accepted so old callers keep
+    # working; ``text_processing`` is what the runtime configuration calls it.
+    settings = dict(preprocessing or {})
+    settings.update(text_processing or {})
+    processing = TextProcessing.from_config(settings)
+    nlp_settings = NlpSettings.from_config(nlp)
+    metric_settings = dict(metrics or {})
+    wanted = _metric_names(metric_settings, include_parse_metrics)
+    core_module = _core_module() if include_core_metrics else None
+
     books: list[dict[str, Any]] = []
     used_ids: Counter[str] = Counter()
     frequency: Counter[str] = Counter()
     feature_profiles: dict[str, list[dict[str, float]]] = {"function_words": []}
-    metric_settings = dict(metrics or {})
+    metric_errors: dict[str, str] = {}
 
-    for input_index, path, relative_name in files:
+    for _, path, relative_name in files:
         raw_bytes = path.read_bytes()
         try:
             raw = raw_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(f"corpus source is not UTF-8: {path}") from exc
         digest = hashlib.sha256(raw_bytes).hexdigest()
-        clean = strip_gutenberg(raw) if preprocessing_settings["strip_gutenberg"] else raw
-        words = _words(clean)
-        sentences = _sentences(clean)
-        paragraphs = _paragraphs(clean)
-        sentence_lengths = [len(_words(sentence)) for sentence in sentences]
-        paragraph_lengths = [len(_words(paragraph)) for paragraph in paragraphs]
+        analysis = DocumentAnalysis.from_text(raw, processing=processing,
+                                              nlp_settings=nlp_settings,
+                                              source=relative_name,
+                                              comparison_unit=comparison_unit)
         item_meta = entries.get(relative_name, entries.get(path.name, {}))
         if not isinstance(item_meta, dict):
             raise ValueError(f"manifest entry for {relative_name!r} must be an object")
         base_id = str(item_meta.get("id") or f"{path.stem}-{digest[:12]}")
         used_ids[base_id] += 1
         source_id = base_id if used_ids[base_id] == 1 else f"{base_id}-{used_ids[base_id]}"
-        frequency.update(words)
+        frequency.update(analysis.tokens)
         book = {
             "source_id": source_id, "source_filename": path.name,
             "source_path": relative_name, "source_hash": f"sha256:{digest}",
-            "word_count": len(words), "sentence_count": len(sentences),
-            "paragraph_count": len(paragraphs),
-            "mean_sentence_words": statistics.fmean(sentence_lengths) if sentence_lengths else None,
-            "mean_paragraph_words": statistics.fmean(paragraph_lengths) if paragraph_lengths else None,
-            "mean_word_characters": statistics.fmean(map(len, words)) if words else None,
+            "word_count": analysis.word_count,
+            "sentence_count": analysis.sentence_count,
+            "paragraph_count": analysis.paragraph_count,
+            "mean_sentence_words": (statistics.fmean(analysis.sentence_lengths)
+                                    if analysis.sentence_lengths else None),
+            "mean_paragraph_words": (statistics.fmean(analysis.paragraph_lengths)
+                                     if analysis.paragraph_lengths else None),
+            "mean_word_characters": (statistics.fmean(map(len, analysis.words))
+                                     if analysis.words else None),
             "metadata": {key: value for key, value in item_meta.items()
                          if key not in {"id", "filename", "path"}},
         }
-        if include_core_metrics:
-            core = _core_measure(clean)
-            book.update({key: core[key] for key in CORE_METRIC_KEYS
-                         if core.get(key) is not None})
-        # Dependency-free opt-in metrics are precomputed so enabling one at
-        # grading time can compare like with like without retaining raw books.
-        for metric_name, module_name in MODULES.items():
-            if metric_name in NLP_METRICS or metric_name in {"character_voice", "function_words"}:
+        if core_module is not None:
+            core = core_module.measure(analysis, floor=1)
+            if core:
+                book.update({key: core[key] for key in CORE_METRIC_KEYS
+                             if core.get(key) is not None})
+        for name in wanted:
+            spec = REGISTRY[name]
+            setting = metric_settings.get(name, {})
+            options = dict(spec.defaults)
+            if isinstance(setting, Mapping):
+                options.update({key: value for key, value in setting.items() if key != "enabled"})
+            try:
+                module = importlib.import_module(f"textgrader.metrics.{spec.module}")
+                findings = module.measure(analysis, config=options, profile=None)
+            except Exception as exc:
+                metric_errors[name] = f"{type(exc).__name__}: {exc}"
                 continue
-            module = importlib.import_module(f"textgrader.metrics.{module_name}")
-            setting = metric_settings.get(metric_name, {})
-            options = setting if isinstance(setting, Mapping) else {}
-            for finding in module.measure(clean, config=options, profile=None, nlp=None):
-                if isinstance(finding.get("value"), (int, float)):
-                    book[finding["metric_id"]] = finding["value"]
+            for finding in findings or []:
+                value = finding.get("value")
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    book[finding["metric_id"]] = value
         function_words = importlib.import_module("textgrader.metrics.function_words")
-        feature_profiles["function_words"].append(function_words.vector(clean))
+        feature_profiles["function_words"].append(function_words.vector(analysis.text))
         books.append(book)
+        if progress:
+            progress(relative_name, book)
 
-    metric_keys = ("word_count", "sentence_count", "paragraph_count", "mean_sentence_words",
-                   "mean_paragraph_words", "mean_word_characters")
-    distributions = {key: _distribution([book[key] for book in books if book[key] is not None])
-                     for key in metric_keys}
+    base_keys = ("word_count", "sentence_count", "paragraph_count", "mean_sentence_words",
+                 "mean_paragraph_words", "mean_word_characters")
+    distributions = {key: _distribution([book.get(key) for book in books])
+                     for key in base_keys}
     # Stable analysis IDs used by the runtime report.  Aliases keep the
     # provenance-friendly long names in each book while avoiding copied
     # thresholds or raw-book access during grading.
@@ -185,22 +253,30 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "_sentences": distributions["sentence_count"],
         "_paragraphs": distributions["paragraph_count"],
     })
-    advanced_keys = sorted({key for book in books for key in book if key.startswith(("style.", "nlp."))})
+    measured = sorted({key for book in books for key in book
+                       if key not in base_keys and isinstance(book.get(key), (int, float))
+                       and not isinstance(book.get(key), bool)})
     distributions.update({key: _distribution([book[key] for book in books if key in book])
-                          for key in advanced_keys})
-    if include_core_metrics:
-        distributions.update({key: _distribution([book[key] for book in books if key in book])
-                              for key in CORE_METRIC_KEYS})
+                          for key in measured})
+    effective = {name: {**REGISTRY[name].defaults,
+                        **{key: value for key, value in
+                           (metric_settings.get(name) or {}).items() if key != "enabled"}}
+                 for name in wanted if isinstance(metric_settings.get(name, {}), Mapping)}
     return {
         "schema_version": SCHEMA_VERSION,
-        "textgrader_version": "0.1.0",
+        "textgrader_version": "0.2.0",
         "parser_version": PARSER_VERSION,
         "metric_definition_version": METRIC_DEFINITION_VERSION,
         "corpus_name": corpus_name,
+        "comparison_unit": comparison_unit,
         "build_timestamp": _timestamp(built_at),
-        "preprocessing": preprocessing_settings,
+        "text_processing": processing.fingerprint(),
+        # Retained under the pre-2.0 name so older readers still find it.
+        "preprocessing": processing.fingerprint(),
         "core_metrics": include_core_metrics,
-        "metric_settings": metric_settings,
+        "parse_metrics": include_parse_metrics,
+        "metric_settings": effective,
+        "metric_errors": metric_errors,
         "book_count": len(books), "books": books,
         "distributions": distributions,
         "word_frequency": {word: frequency[word] for word in sorted(frequency)},
@@ -210,13 +286,14 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
 
 
 def write_profile(profile: Mapping[str, Any], destination: str | Path) -> None:
-    Path(destination).write_text(json.dumps(profile, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-                                 encoding="utf-8")
+    Path(destination).write_text(
+        json.dumps(profile, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8")
 
 
 def load_profile(path: str | Path) -> dict[str, Any]:
     profile = json.loads(Path(path).read_text(encoding="utf-8"))
-    if profile.get("schema_version") != SCHEMA_VERSION:
+    if profile.get("schema_version") not in (1, SCHEMA_VERSION):
         raise ValueError(f"unsupported corpus profile schema: {profile.get('schema_version')!r}")
     if not isinstance(profile.get("books"), list) or not isinstance(profile.get("distributions"), dict):
         raise ValueError("invalid corpus profile")
@@ -224,19 +301,44 @@ def load_profile(path: str | Path) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build a TextGrader corpus profile from local .txt files")
-    parser.add_argument("inputs", nargs="+", help="local .txt files or directories (searched recursively)")
+    parser = argparse.ArgumentParser(
+        description="Build a TextGrader corpus profile from local text files")
+    parser.add_argument("inputs", nargs="+",
+                        help="local .txt/.md files or directories (searched recursively)")
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--name", default="local corpus")
     parser.add_argument("--manifest", type=Path, help="optional JSON metadata manifest")
-    parser.add_argument("--config", type=Path, help="project config whose metric options must be reproduced")
-    parser.add_argument("--no-core-metrics", action="store_true", help="omit the default core prose distributions")
+    parser.add_argument("--config", type=Path,
+                        help="project config whose text_processing and metric options "
+                             "must be reproduced")
+    parser.add_argument("--comparison-unit", choices=COMPARISON_UNITS, default="book",
+                        help="what one input file is: a whole book, a chapter, a scene")
+    parser.add_argument("--no-core-metrics", action="store_true",
+                        help="omit the default core prose distributions")
+    parser.add_argument("--parse-metrics", action="store_true",
+                        help="also profile the spaCy-parse metrics (tens of seconds per book)")
+    parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8")) if args.manifest else None
     config = json.loads(args.config.read_text(encoding="utf-8")) if args.config else {}
-    write_profile(build_profile(args.inputs, corpus_name=args.name, manifest=manifest,
-                                metrics=config.get("metrics", {}),
-                                include_core_metrics=not args.no_core_metrics), args.output)
+
+    def progress(name, book):
+        if not args.quiet:
+            print(f"  measured {name} ({book['word_count']:,} words)")
+
+    profile = build_profile(
+        args.inputs, corpus_name=args.name, manifest=manifest,
+        text_processing=config.get("text_processing"), nlp=config.get("nlp"),
+        metrics=config.get("metrics", {}), comparison_unit=args.comparison_unit,
+        include_core_metrics=not args.no_core_metrics,
+        include_parse_metrics=args.parse_metrics, progress=progress)
+    write_profile(profile, args.output)
+    if not args.quiet:
+        print(f"\nwrote {profile['book_count']} {args.comparison_unit}(s) to {args.output}")
+        if profile["metric_errors"]:
+            print("metrics that could not be profiled:")
+            for name, reason in sorted(profile["metric_errors"].items()):
+                print(f"  {name}: {reason}")
     return 0
 
 

@@ -1,49 +1,88 @@
 #!/usr/bin/env python3
-"""Analyze English-fiction prose and emit structured evidence.
+"""Analyze English prose and emit structured evidence.
 
-The default run makes descriptive measurements only.  Corpus outliers are not
-failures and project rules are applied only when explicitly enabled in the
-configuration.  Use ``--json`` for the stable machine-readable representation.
+Every measurement in one run describes ONE document.  The text is cleaned,
+tokenized, segmented into sentences and paragraphs, and split into dialogue and
+narration exactly once, in :mod:`textgrader.document`; the core metrics, the
+optional metrics and the corpus builder all read that same object.  Before this
+existed, core analysis stripped Gutenberg boilerplate and Markdown headings
+while the optional metrics received the raw file, so two numbers in one report
+could describe two different texts.
+
+Corpus outliers are evidence, not failures.  Project rules are the author's own
+choices and are the only thing reported as a violation.  ``--json`` is the
+stable machine-readable representation; the ``summary.top_findings`` list is
+the short, severity-ordered list an authoring agent should read first.
 """
 
 import argparse
-import importlib.util
 import importlib
+import importlib.util
 import json
 import os
-import statistics
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-from project_config import CONFIG, CONFIG_PATH, MANUSCRIPT, PROJECT_RULES, load_config
-from textgrader.results import MetricResult, Report, StatusType
-from textgrader.metrics import MODULES, NLP_METRICS
+from project_config import CONFIG_ENV_VAR, config_path, load_config
+from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings,
+                                 TextProcessing, resolve_unit, units_comparable)
+from textgrader.metrics import REGISTRY
+from textgrader.results import Action, MetricResult, Report, StatusType
+from textgrader.rules import compile_rules
+from textgrader import stats
 
 ROOT = Path(__file__).resolve().parent
+
+#: Bundled reports in ``measures/``.  Each row is the argument template.
+#: ``prose_check`` and ``verify_citations`` used to be handed the manuscript as
+#: a bare positional, which those two programs read as a character-sheet file,
+#: and ``dialogue_study`` was handed the manuscript's PARENT DIRECTORY as if it
+#: were a corpus.  Everything here now names what it passes.
 BUNDLED_MEASURES = {
-    "absolutes": (), "banned_phrases": (), "check_edits": (),
-    "dialogue_study": ("{manuscript_dir}",), "number_report": ("{manuscript}",),
-    "prose_check": ("{manuscript}",), "quotable": (), "quote_length": (),
-    "register": (), "style_report": ("{manuscript}",), "tics": (),
-    "verify_citations": ("{manuscript}",), "voice_separation": (),
+    "absolutes": ("{manuscript}",),
+    "banned_phrases": ("{manuscript}",),
+    "check_edits": ("{manuscript}",),
+    "dialogue_study": ("{manuscript}",),
+    "number_report": ("{manuscript}",),
+    "prose_check": ("--manuscript", "{manuscript}"),
+    "quotable": ("{manuscript}",),
+    "quote_length": ("{manuscript}",),
+    "register": ("{manuscript}",),
+    "style_report": ("{manuscript}",),
+    "tics": ("{manuscript}",),
+    "verify_citations": ("--manuscript", "{manuscript}"),
+    "voice_separation": ("{manuscript}",),
 }
+
 METRIC_NAMES = {
-    "fk": ("Flesch-Kincaid grade", "grade"), "ari": ("Automated Readability Index", "grade"),
-    "wps": ("Words per sentence", "words/sentence"), "slcv": ("Sentence-length variation", "%"),
-    "wpp": ("Words per paragraph", "words/paragraph"), "spp": ("Sentences per paragraph", "sentences/paragraph"),
-    "wlen": ("Mean word length", "characters"), "long7": ("Words of 7+ characters", "%"),
-    "sttr": ("Standardized type-token ratio", "%"), "top100": ("Commonest-100 word share", "%"),
-    "commas": ("Commas per sentence", "commas/sentence"),
-    "subord": ("Subordinator-cue sentence share (lexical proxy)", "%"),
-    "relcl": ("Relative-word sentence share (lexical proxy)", "%"),
-    "simple": ("No-clause-cue sentence share (lexical proxy)", "%"),
-    "u10": ("Sentences under 10 words", "%"), "b2035": ("Sentences 20–35 words", "%"),
-    "shortruns": ("Sentences in short runs", "%"), "front": ("Front-loaded cue proxy", "%"),
-    "and2": ('Sentences with two or more "and" tokens', "%"),
-    "andrate": ('"and" share', "%"), "negative": ("Negative-cue sentence share", "%"),
-    "_words": ("Word count", "words"), "_sentences": ("Sentence count", "sentences"),
-    "_paragraphs": ("Paragraph count", "paragraphs"), "_transcript": ("Transcript word share", "%"),
+    "fk": ("Flesch-Kincaid grade", "grade", "readability"),
+    "ari": ("Automated Readability Index", "grade", "readability"),
+    "lexile": ("Approximate Lexile", "L", "readability"),
+    "wps": ("Words per sentence", "words/sentence", "sentence_rhythm"),
+    "slcv": ("Sentence-length variation", "%", "sentence_rhythm"),
+    "wpp": ("Words per paragraph", "words/paragraph", "paragraph_rhythm"),
+    "spp": ("Sentences per paragraph", "sentences/paragraph", "paragraph_rhythm"),
+    "wlen": ("Mean word length", "characters", "lexical"),
+    "long7": ("Words of 7+ characters", "%", "lexical"),
+    "sttr": ("Standardized type-token ratio", "%", "lexical"),
+    "top100": ("Commonest-100 word share", "%", "lexical"),
+    "commas": ("Commas per sentence", "commas/sentence", "punctuation"),
+    "subord": ("Subordinator-cue sentence share (lexical proxy)", "%", "syntax"),
+    "relcl": ("Relative-word sentence share (lexical proxy)", "%", "syntax"),
+    "simple": ("No-clause-cue sentence share (lexical proxy)", "%", "syntax"),
+    "u10": ("Sentences under 10 words", "%", "sentence_rhythm"),
+    "b2035": ("Sentences 20-35 words", "%", "sentence_rhythm"),
+    "shortruns": ("Sentences in short runs", "%", "sentence_rhythm"),
+    "front": ("Front-loaded cue proxy", "%", "syntax"),
+    "and2": ('Sentences with two or more "and" tokens', "%", "syntax"),
+    "andrate": ('"and" share', "%", "lexical"),
+    "negative": ("Negative-cue sentence share", "%", "discourse"),
+    "_words": ("Word count", "words", "size"),
+    "_sentences": ("Sentence count", "sentences", "size"),
+    "_paragraphs": ("Paragraph count", "paragraphs", "size"),
+    "_transcript": ("Transcript word share", "%", "size"),
 }
 
 
@@ -51,19 +90,173 @@ def _load_prose_module():
     measures = ROOT / "measures"
     if str(measures) not in sys.path:
         sys.path.insert(0, str(measures))
-    spec = importlib.util.spec_from_file_location("textgrader_prose_grade", measures / "prose_grade.py")
+    spec = importlib.util.spec_from_file_location("textgrader_prose_grade",
+                                                  measures / "prose_grade.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def run_metric_process(metric_id, command):
-    """Run an optional external metric without losing crashes or findings.
+# --------------------------------------------------------------- corpus access
 
-    External metrics use a small JSON protocol: stdout is either one result or
-    a list of result dictionaries.  A non-zero exit is always INTERNAL_ERROR;
-    prose findings belong in successful structured output, never exit status.
+def distribution(profile, key):
+    """Corpus observations for one metric id, from either profile layout."""
+
+    if not profile:
+        return []
+    if "distributions" in profile:
+        found = profile["distributions"].get(key, [])
+        if isinstance(found, dict):
+            found = found.get("values", [])
+        return [value for value in found if value is not None]
+    books = profile.get("books", profile)
+    if isinstance(books, dict):
+        return [row[key] for row in books.values()
+                if isinstance(row, dict) and row.get(key) is not None]
+    if isinstance(books, list):
+        return [row[key] for row in books if isinstance(row, dict) and row.get(key) is not None]
+    return []
+
+
+def profile_unit(profile):
+    if not profile:
+        return "unknown"
+    unit = profile.get("comparison_unit") or profile.get("metadata", {}).get("comparison_unit")
+    return unit if unit in COMPARISON_UNITS else "unknown"
+
+
+class Comparator:
+    """Holds one measurement against the corpus, with every gate applied.
+
+    Three separate things can make a comparison unsafe, and each is reported
+    rather than silently absorbed: too little manuscript, too little corpus, and
+    a unit mismatch between a chapter and a shelf of novels.
     """
+
+    def __init__(self, profile, document, settings):
+        self.profile = profile
+        self.document = document
+        self.corpus_unit = profile_unit(profile)
+        self.min_sentences = settings.get("min_sentences_for_corpus", 40)
+        self.min_words = settings.get("min_words_for_corpus", 500)
+        self.min_corpus = settings.get("min_corpus_sample", stats.MIN_CORPUS_SAMPLE)
+
+    @property
+    def document_is_large_enough(self):
+        return (self.document.sentence_count >= self.min_sentences
+                and self.document.word_count >= self.min_words)
+
+    def document_note(self):
+        return (f"document has {self.document.sentence_count} sentences and "
+                f"{self.document.word_count} words, below the "
+                f"{self.min_sentences}/{self.min_words} needed to place it in a corpus "
+                f"distribution; the measurement is reported without a comparison")
+
+    def apply(self, result, key, value, sample_size=None, min_sample=None):
+        """Attach corpus statistics to ``result``, or explain their absence."""
+
+        reference = distribution(self.profile, key)
+        result.comparison_unit = self.document.comparison_unit
+        if value is None:
+            result.action = Action.UNAVAILABLE if result.error or result.warning else result.action
+            return result
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            # Some findings are labels rather than quantities ("which feature
+            # drifts most"). They are reportable and not comparable.
+            return result
+        if sample_size is not None and min_sample and sample_size < min_sample:
+            result.action = Action.INSUFFICIENT_DATA
+            result.warning = _join(result.warning,
+                                   f"measured from {sample_size} units, below the {min_sample} "
+                                   f"this metric needs to be read as a rate")
+            return result
+        if not reference:
+            return result
+        if not self.document_is_large_enough:
+            result.action = Action.INSUFFICIENT_DATA
+            result.warning = _join(result.warning, self.document_note())
+            return result
+        if not units_comparable(key, self.document.comparison_unit, self.corpus_unit):
+            result.warning = _join(
+                result.warning,
+                f"{key} scales with document length: this profile describes "
+                f"'{resolve_unit(self.corpus_unit)}' units and the input is "
+                f"'{resolve_unit(self.document.comparison_unit)}', so the comparison is "
+                f"withheld. Rebuild the profile from the same kind of unit, or compare a "
+                f"rate instead of a count")
+            result.action = Action.INSUFFICIENT_DATA
+            return result
+        comparison = stats.compare(value, reference, min_corpus=self.min_corpus)
+        result.corpus = comparison.to_dict()
+        result.corpus["profile_name"] = (self.profile.get("corpus_name")
+                                         or self.profile.get("metadata", {}).get("corpus_name"))
+        result.corpus["corpus_unit"] = self.corpus_unit
+        result.direction = comparison.direction
+        result.severity = comparison.severity
+        result.confidence = comparison.confidence
+        if comparison.outlier is None:
+            result.status = "uncompared"
+            result.status_type = StatusType.INFORMATIONAL
+            result.action = Action.INSUFFICIENT_DATA
+            result.warning = _join(result.warning, "; ".join(comparison.notes) or None)
+        elif comparison.outlier:
+            result.status, result.status_type = "outlier", StatusType.CORPUS_OUTLIER
+            result.action = Action.REVIEW
+        else:
+            result.status, result.status_type = "inlier", StatusType.CORPUS_INLIER
+            result.action = Action.INFORMATIONAL
+        return result
+
+
+def _join(existing, addition):
+    if not addition:
+        return existing
+    return f"{existing}; {addition}" if existing else addition
+
+
+# --------------------------------------------------------------- metric running
+
+def metric_enabled(metric_config, name):
+    setting = metric_config.get(name)
+    if setting is None:
+        return False
+    return setting is True or (isinstance(setting, dict) and bool(setting.get("enabled", False)))
+
+
+def metric_options(metric_config, name):
+    setting = metric_config.get(name, {})
+    options = dict(setting) if isinstance(setting, dict) else {}
+    options.pop("enabled", None)
+    spec = REGISTRY.get(name)
+    if spec:
+        merged = dict(spec.defaults)
+        merged.update(options)
+        return merged
+    return options
+
+
+def options_match_profile(profile, name, options):
+    """Whether the corpus was built with the same options as this run.
+
+    Comparing a MATTR computed over a 100-word window with a corpus built on a
+    50-word window is comparing two different measurements, so it is refused.
+    """
+
+    if not profile or "metric_settings" not in profile:
+        return False
+    expected = dict(profile["metric_settings"].get(name, {}))
+    expected.pop("enabled", None)
+    spec = REGISTRY.get(name)
+    if spec:
+        base = dict(spec.defaults)
+        base.update(expected)
+        expected = base
+    return expected == dict(options)
+
+
+def run_metric_process(metric_id, command):
+    """Run an optional external metric without losing crashes or findings."""
+
     try:
         completed = subprocess.run(command, capture_output=True, text=True, check=False)
     except OSError as exc:
@@ -84,241 +277,395 @@ def run_metric_process(metric_id, command):
                              error=f"invalid metric JSON: {exc}")]
 
 
-def run_bundled_measure(name, manuscript, config):
-    """Run a bundled report as a structured metric, never via a shell."""
-    if name == "quote_length" and not config.get("dialogue_targets"):
-        return MetricResult(
-            "measure.quote_length", "Quote Length", status="unavailable",
-            status_type=StatusType.UNAVAILABLE,
-            warning="quote_length requires configured dialogue_targets")
-    arguments = [part.format(manuscript=str(manuscript), manuscript_dir=str(manuscript.parent))
+def run_bundled_measure(name, manuscript, config, timeout=120):
+    """Run a bundled report as a structured metric, never via a shell.
+
+    The report is launched with ``TEXTGRADER_CONFIG`` pointing at the same
+    configuration this run loaded.  Without that, a ``--config other.json`` only
+    reached the new metrics while every bundled report silently kept using the
+    repository's own ``config.json``.
+    """
+
+    arguments = [part.format(manuscript=str(manuscript),
+                             manuscript_dir=str(manuscript.parent))
                  for part in BUNDLED_MEASURES[name]]
     command = [sys.executable, str(ROOT / "measures" / f"{name}.py"), *arguments]
+    environment = {**os.environ, "HALSTEAD_VIA_GRADE": "1",
+                   CONFIG_ENV_VAR: str(config.get("_config_path", config_path()))}
     try:
-        environment = {**os.environ, "HALSTEAD_VIA_GRADE": "1"}
-        completed = subprocess.run(command, cwd=config.get("_config_dir", ROOT), env=environment,
-                                   capture_output=True, text=True,
-                                   check=False, timeout=60)
+        completed = subprocess.run(command, cwd=config.get("_config_dir", ROOT),
+                                   env=environment, capture_output=True, text=True,
+                                   check=False, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return MetricResult(f"measure.{name}", name.replace("_", " ").title(), status="error",
-                            status_type=StatusType.INTERNAL_ERROR, error=str(exc))
+                            status_type=StatusType.INTERNAL_ERROR, error=str(exc),
+                            family="project_report")
     output = completed.stdout.strip()
     error = completed.stderr.strip()
     crashed = "Traceback (most recent call last)" in error
     if completed.returncode not in (0, 1) or crashed:
         return MetricResult(f"measure.{name}", name.replace("_", " ").title(), status="error",
                             status_type=StatusType.INTERNAL_ERROR,
-                            error=error or output or f"process exited {completed.returncode}")
-    details = [{"output": output}] if output else []
+                            error=error or output or f"process exited {completed.returncode}",
+                            family="project_report")
     return MetricResult(f"measure.{name}", name.replace("_", " ").title(),
                         status="review" if completed.returncode else "available",
                         status_type=(StatusType.DIAGNOSTIC if completed.returncode
                                      else StatusType.INFORMATIONAL),
-                        details=details, warning=error or None)
+                        details=[{"output": output}] if output else [],
+                        warning=error or None, family="project_report")
 
 
-def _distribution(profile, key):
-    if not profile:
-        return []
-    # Current profiles store per-book metric dictionaries.  Also accept a
-    # future pre-aggregated ``distributions`` mapping without changing grading.
-    if "distributions" in profile:
-        distribution = profile["distributions"].get(key, [])
-        if isinstance(distribution, dict):
-            distribution = distribution.get("values", [])
-        return [v for v in distribution if v is not None]
-    books = profile.get("books", profile)
-    if isinstance(books, dict):
-        return [row[key] for row in books.values() if isinstance(row, dict) and row.get(key) is not None]
-    return []
+def project_rules(analysis, config):
+    """Configured house rules, compiled and bounded before anything is scanned."""
 
-
-def _corpus_result(key, value, profile):
-    name, unit = METRIC_NAMES.get(key, (key, None))
-    values = sorted(_distribution(profile, key))
-    if not values:
-        return MetricResult(f"prose.{key.lstrip('_')}", name, value, unit,
-                            sample_size=None, warning="No corpus distribution available")
-    median = statistics.median(values)
-    deviations = [abs(item - median) for item in values]
-    mad = statistics.median(deviations)
-    percentile = 100 * (sum(item < value for item in values) + .5 * sum(item == value for item in values)) / len(values)
-    # A zero MAD means every central observation is identical.  A differing
-    # value is therefore maximally, rather than immeasurably, distant.
-    robust_distance = (value - median) / (1.4826 * mad) if mad else (0.0 if value == median else None)
-    outlier = (value != median) if mad == 0 else abs(robust_distance) > 3.5
-    stats = {"profile_name": profile.get("corpus_name", profile.get("metadata", {}).get("corpus_name")),
-             "count": len(values), "median": median, "mad": mad,
-             "percentile": percentile, "robust_distance": robust_distance,
-             "method": "two-sided median/MAD (|robust_distance| > 3.5)"}
-    return MetricResult(f"prose.{key.lstrip('_')}", name, value, unit,
-                        "outlier" if outlier else "inlier",
-                        StatusType.CORPUS_OUTLIER if outlier else StatusType.CORPUS_INLIER,
-                        stats, len(values))
-
-
-def _rules(text, rules):
-    import re
     results = []
-    for index, rule in enumerate(rules.get("banned_phrases", [])):
-        pattern = rule.get("pattern", "")
-        hits = [{"match": match.group(0), "offset": match.start()} for match in re.finditer(pattern, text, re.I)]
+    rules = config.get("project_rules", {}) or {}
+    for rule in compile_rules(rules, config.get("regex", {})):
+        if rule.error and rule.pattern is None:
+            results.append(MetricResult(f"rule.{rule.rule_id}", rule.name, status="unavailable",
+                                        status_type=StatusType.UNAVAILABLE,
+                                        family="project_rule", error=rule.error))
+            continue
+        hits = rule.finditer(analysis.raw)
         if hits:
-            rid = rule.get("id", f"banned_phrase_{index + 1}")
-            results.append(MetricResult(f"rule.{rid}", rule.get("name", rid), len(hits), "hits",
-                                        "violation", StatusType.PROJECT_RULE, sample_size=len(hits), details=hits))
+            results.append(MetricResult(
+                f"rule.{rule.rule_id}", rule.name, len(hits), "hits", "violation",
+                StatusType.PROJECT_RULE, sample_size=len(hits), details=hits[:50],
+                evidence=hits[:20], family="project_rule", warning=rule.error))
+        elif rule.error:
+            results.append(MetricResult(f"rule.{rule.rule_id}", rule.name, 0, "hits",
+                                        family="project_rule", warning=rule.error))
     if rules.get("em_dash") == "forbid":
-        hits = [{"offset": m.start()} for m in re.finditer("—", text)]
+        hits = [{"offset": index} for index, char in enumerate(analysis.raw) if char == "—"]
         if hits:
-            results.append(MetricResult("rule.em_dash", "Em-dash policy", len(hits), "hits", "violation",
-                                        StatusType.PROJECT_RULE, details=hits, sample_size=len(hits)))
+            results.append(MetricResult("rule.em_dash", "Em-dash policy", len(hits), "hits",
+                                        "violation", StatusType.PROJECT_RULE,
+                                        details=hits[:50], evidence=hits[:20],
+                                        sample_size=len(hits), family="project_rule"))
+    style = rules.get("quote_style")
+    if style in ("straight", "curly"):
+        banned = "“”" if style == "straight" else '"'
+        hits = [{"offset": index, "match": char}
+                for index, char in enumerate(analysis.raw) if char in banned]
+        if hits:
+            results.append(MetricResult("rule.quote_style", f"Quote style ({style})", len(hits),
+                                        "hits", "violation", StatusType.PROJECT_RULE,
+                                        details=hits[:50], evidence=hits[:20],
+                                        sample_size=len(hits), family="project_rule"))
     return results
+
+
+# --------------------------------------------------------------------- analysis
+
+def load_profile(config, report):
+    path = config.get("corpus_profile")
+    if not path:
+        return None
+    candidate = Path(config.get("_config_dir", ROOT)) / path
+    if not candidate.is_file():
+        return None
+    try:
+        profile = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        report.results.append(MetricResult("corpus.profile", "Corpus profile",
+                                           status="unavailable",
+                                           status_type=StatusType.UNAVAILABLE,
+                                           warning=str(exc)))
+        return None
+    header = profile.get("metadata") or {
+        key: profile.get(key) for key in
+        ("schema_version", "corpus_name", "build_timestamp", "parser_version",
+         "metric_definition_version", "comparison_unit", "text_processing")
+    }
+    if not header.get("corpus_name"):
+        header["corpus_name"] = candidate.stem
+    header.setdefault("book_count", profile.get("book_count", len(profile.get("books", profile))))
+    header["comparison_unit"] = profile_unit(profile)
+    report.corpus_profile = header
+    return profile
+
+
+def check_preprocessing(profile, analysis, report):
+    """Warn when the corpus was built from differently-prepared text."""
+
+    if not profile:
+        return
+    recorded = profile.get("text_processing")
+    if recorded is None:
+        report.results.append(MetricResult(
+            "corpus.text_processing", "Corpus preprocessing", status="unavailable",
+            status_type=StatusType.UNAVAILABLE,
+            warning="this profile predates recorded text_processing settings; rebuild it to "
+                    "guarantee the corpus and the manuscript were prepared the same way"))
+        return
+    if dict(recorded) != analysis.processing.fingerprint():
+        differing = sorted(key for key in set(recorded) | set(analysis.processing.fingerprint())
+                           if recorded.get(key) != analysis.processing.fingerprint().get(key))
+        report.results.append(MetricResult(
+            "corpus.text_processing", "Corpus preprocessing", status="unavailable",
+            status_type=StatusType.UNAVAILABLE,
+            warning=f"corpus and manuscript were prepared differently ({', '.join(differing)}); "
+                    f"comparisons may not describe the same kind of text"))
 
 
 def analyze(path, config):
     path = Path(path)
+    settings = config.get("analysis", {}) or {}
     report = Report(source=str(path))
     if not path.is_file():
-        report.results.append(MetricResult("input.manuscript", "Manuscript input", status="unavailable",
-                                           status_type=StatusType.UNAVAILABLE, error=f"file not found: {path}"))
-        return report
-    text = path.read_text(encoding="utf-8")
-    try:
-        got = _load_prose_module().measure(text, floor=1)
-    except Exception as exc:
-        report.results.append(MetricResult("prose.analysis", "Core prose analysis", status="error",
-                                           status_type=StatusType.INTERNAL_ERROR, error=f"{type(exc).__name__}: {exc}"))
-        return report
-    if not got:
-        report.results.append(MetricResult("prose.analysis", "Core prose analysis", status="unavailable",
+        report.results.append(MetricResult("input.manuscript", "Manuscript input",
+                                           status="unavailable",
                                            status_type=StatusType.UNAVAILABLE,
-                                           warning="No measurable sentences"))
+                                           error=f"file not found: {path}"))
         return report
-    profile_path = config.get("corpus_profile")
-    profile = None
-    if profile_path:
-        candidate = Path(config.get("_config_dir", ROOT)) / profile_path
-        if candidate.is_file():
-            try:
-                profile = json.loads(candidate.read_text(encoding="utf-8"))
-                report.corpus_profile = profile.get("metadata", {
-                    key: profile.get(key) for key in ("schema_version", "corpus_name", "build_timestamp",
-                                                      "parser_version", "metric_definition_version")
-                })
-                if not report.corpus_profile.get("corpus_name"):
-                    report.corpus_profile["corpus_name"] = candidate.stem
-                    report.corpus_profile["book_count"] = len(profile.get("books", profile))
-            except (OSError, ValueError) as exc:
-                report.results.append(MetricResult("corpus.profile", "Corpus profile", status="unavailable",
-                                                   status_type=StatusType.UNAVAILABLE, warning=str(exc)))
-    for key, value in got.items():
-        if key == "_words_all" or value is None:
-            continue
-        report.results.append(_corpus_result(key, value, profile))
-    report.results.extend(_rules(text, config.get("project_rules", {})))
-    # Every configurable measurement uses the same switch map. Modules are
-    # loaded independently so one optional dependency cannot hide the rest.
-    metric_config = config.get("metrics", {})
-    def metric_enabled(name):
-        setting = metric_config.get(name, name in BUNDLED_MEASURES)
-        return setting is True or (isinstance(setting, dict) and setting.get("enabled", False))
+    try:
+        processing = TextProcessing.from_config(config.get("text_processing"))
+        nlp_settings = NlpSettings.from_config(config.get("nlp"))
+    except ValueError as exc:
+        report.results.append(MetricResult("config.text_processing", "Configuration",
+                                           status="error",
+                                           status_type=StatusType.INTERNAL_ERROR, error=str(exc)))
+        return report
+    analysis = DocumentAnalysis.from_path(
+        path, processing=processing, nlp_settings=nlp_settings,
+        comparison_unit=settings.get("comparison_unit", "unknown"))
+    report.document = analysis.describe()
 
-    def metric_options(name):
-        setting = metric_config.get(name, {})
-        return setting if isinstance(setting, dict) else {}
+    profile = load_profile(config, report)
+    check_preprocessing(profile, analysis, report)
+    comparator = Comparator(profile, analysis, settings)
 
-    def comparison_is_compatible(name):
-        if not profile or "metric_settings" not in profile:
-            return False
-        expected = dict(profile["metric_settings"].get(name, {}))
-        actual = dict(metric_options(name))
-        expected.pop("enabled", None)
-        actual.pop("enabled", None)
-        return expected == actual
-
-    enabled = [name for name in MODULES if metric_enabled(name)]
-    nlp = None
-    if any(name in NLP_METRICS for name in enabled):
-        try:
-            import spacy
-            nlp = spacy.load(config.get("nlp", {}).get("model", "en_core_web_sm"))
-        except (ImportError, OSError):
-            nlp = None
-    for name in enabled:
-        try:
-            module = importlib.import_module(f"textgrader.metrics.{MODULES[name]}")
-            findings = module.measure(text, config=metric_options(name), profile=profile, nlp=nlp)
-            for finding in findings:
-                metric_id = finding["metric_id"]
-                value = finding.get("value")
-                # Scalar measures use exactly the same corpus machinery as the
-                # longstanding prose metrics when a profile has that feature.
-                if value is not None and _distribution(profile, metric_id) and comparison_is_compatible(name):
-                    item = _corpus_result(metric_id, value, profile)
-                    item.metric_id, item.name = metric_id, finding["name"]
-                    item.unit = finding.get("unit")
-                    item.details = finding.get("details", [])
-                    item.warning = finding.get("warning")
-                else:
-                    unavailable = value is None and finding.get("warning")
-                    mismatch = (value is not None and _distribution(profile, metric_id)
-                                and not comparison_is_compatible(name))
-                    item = MetricResult(metric_id, finding["name"], value, finding.get("unit"),
-                                        status="unavailable" if unavailable else "available",
-                                        status_type=StatusType.UNAVAILABLE if unavailable else StatusType.INFORMATIONAL,
-                                        details=finding.get("details", []),
-                                        warning=("Corpus distribution was built with different or unrecorded metric options"
-                                                 if mismatch else finding.get("warning")))
-                report.results.append(item)
-        except Exception as exc:
-            report.results.append(MetricResult(f"metric.{name}", name.replace("_", " ").title(),
-                                               status="error", status_type=StatusType.INTERNAL_ERROR,
-                                               error=f"{type(exc).__name__}: {exc}"))
-    commands = config.get("metric_commands", [])
-    if commands and not config.get("allow_external_metric_commands", False):
-        report.results.append(MetricResult(
-            "metric.external_commands", "External metric commands", status="unavailable",
-            status_type=StatusType.UNAVAILABLE,
-            warning="metric_commands are disabled; set allow_external_metric_commands=true only for trusted configuration"))
-    else:
-        for item in commands:
-            command = [part.format(manuscript=str(path)) for part in item["command"]]
-            report.results.extend(run_metric_process(item["id"], command))
-    for name in BUNDLED_MEASURES:
-        if metric_enabled(name):
-            report.results.append(run_bundled_measure(name, path, config))
+    core = _core_results(analysis, config, comparator, report)
+    if core is not None:
+        report.results.extend(core)
+    report.results.extend(project_rules(analysis, config))
+    report.results.extend(_optional_results(analysis, config, profile, comparator))
+    report.results.extend(_external_results(path, config))
+    report.results.extend(_bundled_results(path, config))
     return report
 
 
+def _core_results(analysis, config, comparator, report):
+    settings = config.get("analysis", {}) or {}
+    lexile_source = settings.get("lexile_frequency_source", "none")
+    try:
+        # Floor 1 here on purpose: the measurement is descriptive and worth
+        # having for a short text.  What tiny documents must NOT get is a pile
+        # of confident corpus outliers, and that is the Comparator's job.
+        got = _load_prose_module().measure(analysis, floor=1, lexile_source=lexile_source)
+    except Exception as exc:
+        report.results.append(MetricResult("prose.analysis", "Core prose analysis",
+                                           status="error",
+                                           status_type=StatusType.INTERNAL_ERROR,
+                                           error=f"{type(exc).__name__}: {exc}"))
+        return None
+    if not got:
+        report.results.append(MetricResult("prose.analysis", "Core prose analysis",
+                                           status="unavailable",
+                                           status_type=StatusType.UNAVAILABLE,
+                                           warning="No measurable sentences"))
+        return None
+    out = []
+    for key, value in got.items():
+        if key == "_words_all" or value is None:
+            continue
+        name, unit, family = METRIC_NAMES.get(key, (key, None, "other"))
+        item = MetricResult(f"prose.{key.lstrip('_')}", name, value, unit,
+                            family=family, sample_size=got.get("_sentences"),
+                            comparison_unit=analysis.comparison_unit)
+        out.append(comparator.apply(item, key, value))
+    lengths = analysis.sentence_lengths
+    if lengths:
+        shape = stats.summarize(lengths)
+        out.append(MetricResult("prose.sentence_length_shape", "Sentence length distribution",
+                                shape.get("median"), "words", family="sentence_rhythm",
+                                sample_size=len(lengths), distribution=shape,
+                                comparison_unit=analysis.comparison_unit))
+    return out
+
+
+def _optional_results(analysis, config, profile, comparator):
+    metric_config = config.get("metrics", {}) or {}
+    enabled = [name for name in REGISTRY if metric_enabled(metric_config, name)]
+    out = []
+    for name in enabled:
+        spec = REGISTRY[name]
+        options = metric_options(metric_config, name)
+        started = time.monotonic()
+        try:
+            module = importlib.import_module(f"textgrader.metrics.{spec.module}")
+            findings = module.measure(analysis, config=options, profile=profile)
+        except Exception as exc:
+            out.append(MetricResult(f"metric.{name}", name.replace("_", " ").title(),
+                                    status="error", status_type=StatusType.INTERNAL_ERROR,
+                                    family=spec.family,
+                                    error=f"{type(exc).__name__}: {exc}"))
+            continue
+        elapsed = time.monotonic() - started
+        comparable = options_match_profile(profile, name, options)
+        for finding in findings or []:
+            out.append(_finding_result(finding, spec, analysis, comparator, comparable,
+                                       profile, elapsed))
+    return out
+
+
+def _finding_result(finding, spec, analysis, comparator, comparable, profile, elapsed):
+    metric_id = finding["metric_id"]
+    value = finding.get("value")
+    warning = finding.get("warning")
+    item = MetricResult(
+        metric_id, finding.get("name", metric_id), value, finding.get("unit"),
+        family=finding.get("family") or spec.family,
+        sample_size=finding.get("sample_size"),
+        distribution=finding.get("distribution"),
+        details=finding.get("details", []), evidence=finding.get("evidence", []),
+        channel=finding.get("channel", "full"),
+        comparison_unit=analysis.comparison_unit, warning=warning)
+    if elapsed > 1.0:
+        item.warning = _join(item.warning,
+                             f"this metric took {elapsed:.1f}s on this document ({spec.cost})")
+    if value is None:
+        item.status = "unavailable"
+        item.status_type = StatusType.UNAVAILABLE
+        item.action = Action.UNAVAILABLE
+        return item
+    reference = distribution(profile, metric_id)
+    if reference and not comparable:
+        item.warning = _join(item.warning,
+                             "the corpus distribution for this metric was built with different "
+                             "or unrecorded options; comparison withheld")
+        item.action = Action.INSUFFICIENT_DATA
+        return item
+    return comparator.apply(item, metric_id, value, finding.get("sample_size"),
+                            finding.get("min_sample"))
+
+
+def _external_results(path, config):
+    commands = config.get("metric_commands", [])
+    if not commands:
+        return []
+    if not config.get("allow_external_metric_commands", False):
+        return [MetricResult(
+            "metric.external_commands", "External metric commands", status="unavailable",
+            status_type=StatusType.UNAVAILABLE,
+            warning="metric_commands are disabled; set allow_external_metric_commands=true "
+                    "only for trusted configuration")]
+    out = []
+    for item in commands:
+        command = [part.format(manuscript=str(path)) for part in item["command"]]
+        out.extend(run_metric_process(item["id"], command))
+    return out
+
+
+def _bundled_results(path, config):
+    metric_config = config.get("metrics", {}) or {}
+    timeout = (config.get("analysis", {}) or {}).get("bundled_timeout_seconds", 120)
+    return [run_bundled_measure(name, path, config, timeout)
+            for name in BUNDLED_MEASURES if metric_enabled(metric_config, name)]
+
+
+# ---------------------------------------------------------------------- output
+
 def render(report):
     print(f"TextGrader: {report.source}")
+    document = report.document or {}
+    if document:
+        print(f"  {document.get('analyzed_words', 0):,} words analyzed of "
+              f"{document.get('raw_words', 0):,} in the file; "
+              f"{document.get('sentences', 0):,} sentences, "
+              f"{document.get('paragraphs', 0):,} paragraphs; "
+              f"segmenter={document.get('segmenter')}; "
+              f"unit={document.get('comparison_unit')}")
     print("Metrics are evidence and diagnostics, not rewriting instructions.\n")
     for result in report.results:
-        value = "—" if result.value is None else f"{result.value:.2f}" if isinstance(result.value, float) else str(result.value)
+        value = ("-" if result.value is None else f"{result.value:.2f}"
+                 if isinstance(result.value, float) else str(result.value))
+        value = value if len(value) <= 10 else value[:9] + "…"
         unit = f" {result.unit}" if result.unit else ""
-        print(f"  {result.metric_id:<28} {value:>10}{unit:<20} [{result.status_type.value}]")
+        marker = {"review": "!", "rule_violation": "!", "error": "E"}.get(result.action.value, " ")
+        print(f" {marker} {result.metric_id:<44} {value:>10}{unit:<22} "
+              f"[{result.action.value}]")
         if result.warning:
-            print(f"    warning: {result.warning}")
+            print(f"      warning: {result.warning}")
         if result.error:
-            print(f"    ERROR: {result.error}")
+            print(f"      ERROR: {result.error}")
     summary = report.summary()
     print(f"\n{summary['total']} structured results; "
-          f"{summary['by_status_type']['corpus_outlier']} corpus outliers; "
-          f"{summary['by_status_type']['project_rule_violation']} project-rule violations; "
+          f"{summary['by_action']['review']} to review; "
+          f"{summary['by_action']['rule_violation']} project-rule violations; "
+          f"{summary['by_action']['insufficient_data']} without enough data; "
           f"{summary['by_status_type']['internal_error']} internal errors.")
+    if summary["top_findings"]:
+        print("\nFurthest from the corpus, most distant first:")
+        for item in summary["top_findings"][:8]:
+            severity = "-" if item["severity"] is None else f"{item['severity']:.1f}"
+            print(f"  {item['metric_id']:<44} {item['direction']:<8} severity {severity}")
+
+
+def list_metrics():
+    rows = sorted(REGISTRY.values(), key=lambda spec: (spec.family, spec.name))
+    print(f"{'metric':<34}{'family':<20}{'cost':<10}{'needs'}")
+    for spec in rows:
+        print(f"{spec.name:<34}{spec.family:<20}{spec.cost:<10}"
+              f"{', '.join(spec.requires) or '-'}")
+    print(f"\n{len(rows)} metrics. cost: fast = well under a second on a novel, "
+          f"moderate = a few seconds, parse = tens of seconds (one shared spaCy parse).")
+
+
+def apply_switches(config, enable, disable, families, enable_all):
+    metrics = config.setdefault("metrics", {})
+    names = set(enable or [])
+    for family in families or []:
+        names |= {name for name, spec in REGISTRY.items() if spec.family == family}
+    if enable_all:
+        names |= set(REGISTRY)
+    unknown = sorted(names - set(REGISTRY) - set(BUNDLED_MEASURES))
+    if unknown:
+        raise SystemExit(f"error: unknown metric(s): {', '.join(unknown)}")
+    for name in names:
+        current = metrics.get(name)
+        metrics[name] = {**(current if isinstance(current, dict) else {}), "enabled": True}
+    for name in disable or []:
+        current = metrics.get(name)
+        metrics[name] = ({**current, "enabled": False} if isinstance(current, dict) else False)
+    return config
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("manuscript", nargs="?", help="Markdown or text manuscript")
-    parser.add_argument("--config", default=str(CONFIG_PATH))
-    parser.add_argument("--json", action="store_true", help="emit stable JSON instead of terminal text")
-    parser.add_argument("--json-out", help="write JSON to this file in addition to terminal text")
+    parser.add_argument("--config", default=None,
+                        help="project configuration; also reaches the bundled reports")
+    parser.add_argument("--json", action="store_true",
+                        help="emit stable JSON instead of terminal text")
+    parser.add_argument("--json-out", help="write JSON to this file as well")
+    parser.add_argument("--enable", action="append", metavar="METRIC",
+                        help="turn one metric on for this run; repeatable")
+    parser.add_argument("--enable-family", action="append", metavar="FAMILY",
+                        help="turn on every metric in a family; repeatable")
+    parser.add_argument("--enable-all", action="store_true",
+                        help="turn on every registered metric (slow: includes the parse)")
+    parser.add_argument("--disable", action="append", metavar="METRIC",
+                        help="turn one metric off for this run; repeatable")
+    parser.add_argument("--comparison-unit", choices=COMPARISON_UNITS,
+                        help="what the input is, so scale-dependent comparisons are honest")
+    parser.add_argument("--list-metrics", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.list_metrics:
+        list_metrics()
+        return 0
     config = load_config(args.config)
-    manuscript = Path(args.manuscript) if args.manuscript else (Path(config["_config_dir"]) / config.get("manuscript", "MANUSCRIPT.md"))
+    config = apply_switches(config, args.enable, args.disable, args.enable_family,
+                            args.enable_all)
+    if args.comparison_unit:
+        config.setdefault("analysis", {})["comparison_unit"] = args.comparison_unit
+    manuscript = (Path(args.manuscript) if args.manuscript
+                  else Path(config["_config_dir"]) / config.get("manuscript", "MANUSCRIPT.md"))
     report = analyze(manuscript, config)
-    output = json.dumps(report.to_dict(), indent=2, sort_keys=True)
+    output = json.dumps(report.to_dict(), indent=2, sort_keys=True, default=str)
     if args.json_out:
         Path(args.json_out).write_text(output + "\n", encoding="utf-8")
     if args.json:

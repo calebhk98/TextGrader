@@ -1,90 +1,109 @@
+"""The structured-report contract: accounting, toggles and failure visibility."""
+
 import json
 import sys
-import tempfile
-import unittest
 from pathlib import Path
 
+import pytest
+
 import grade
-from textgrader.results import StatusType
+from textgrader.results import Action, StatusType
+
+CONFIG = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
 
 
-class StructuredGradeTests(unittest.TestCase):
-    def test_one_metrics_map_controls_bundled_and_module_measures(self):
-        config = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
-        self.assertTrue(all(config["metrics"][name] is True for name in grade.BUNDLED_MEASURES))
-        self.assertFalse(config["metrics"]["mattr"]["enabled"])
-
-    def test_missing_profile_does_not_use_an_implicit_fallback(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            manuscript = Path(temporary) / "story.md"
-            manuscript.write_text("One sentence. Another sentence follows.", encoding="utf-8")
-            report = grade.analyze(manuscript, {"_config_dir": temporary,
-                "corpus_profile": "corpus_profile.json",
-                "metrics": {name: False for name in grade.BUNDLED_MEASURES}})
-            fk = next(item for item in report.results if item.metric_id == "prose.fk")
-            self.assertIsNone(fk.sample_size)
-            self.assertIsNone(report.corpus_profile)
-
-    def test_bundled_measure_can_run_as_structured_diagnostic(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            manuscript = Path(temporary) / "story.md"
-            manuscript.write_text("There were 12 birds and 3 trees.", encoding="utf-8")
-            report = grade.analyze(manuscript, {"_config_dir": temporary,
-                "metrics": {name: name == "number_report" for name in grade.BUNDLED_MEASURES}})
-            item = next(item for item in report.results if item.metric_id == "measure.number_report")
-            self.assertEqual(item.status_type, StatusType.INFORMATIONAL)
-            self.assertTrue(item.details and "output" in item.details[0])
-
-    def test_bundled_measures_share_metric_toggles_and_default_on(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            manuscript = Path(temporary) / "story.md"
-            manuscript.write_text("There were 12 birds and 3 trees.", encoding="utf-8")
-            enabled = grade.analyze(manuscript, {"_config_dir": temporary})
-            self.assertTrue(any(item.metric_id.startswith("measure.") for item in enabled.results))
-            disabled = grade.analyze(manuscript, {"_config_dir": temporary,
-                "metrics": {name: False for name in grade.BUNDLED_MEASURES}})
-            self.assertFalse(any(item.metric_id.startswith("measure.") for item in disabled.results))
-
-    def test_value_differing_from_zero_mad_corpus_is_an_outlier(self):
-        profile = {"corpus_name": "flat", "distributions": {
-            "wps": {"values": [10.0, 10.0, 10.0]}}}
-        result = grade._corpus_result("wps", 11.0, profile)
-        self.assertEqual(result.status_type, StatusType.CORPUS_OUTLIER)
-        self.assertIsNone(result.corpus["robust_distance"])
-
-    def test_crashed_child_is_counted_as_internal_error(self):
-        result = grade.run_metric_process("fixture.crash", [sys.executable, "-c", "raise RuntimeError('boom')"])
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].metric_id, "fixture.crash")
-        self.assertEqual(result[0].status_type, StatusType.INTERNAL_ERROR)
-        self.assertIn("exited", result[0].error)
-
-    def test_invalid_child_json_is_an_internal_error(self):
-        result = grade.run_metric_process("fixture.invalid", [sys.executable, "-c", "print('PASS words can change')"])
-        self.assertEqual(result[0].status_type, StatusType.INTERNAL_ERROR)
-
-    def test_json_ids_and_accounting_are_stable(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            manuscript = Path(temporary) / "story.md"
-            manuscript.write_text("# Heading\n\nOne small sentence. Another longer sentence follows here.", encoding="utf-8")
-            report = grade.analyze(manuscript, {"_config_dir": temporary, "project_rules": {}})
-            payload = report.to_dict()
-            self.assertEqual(payload["summary"]["total"], len(payload["results"]))
-            self.assertTrue(all(item["metric_id"] for item in payload["results"]))
-            self.assertEqual(json.loads(json.dumps(payload, sort_keys=True)), payload)
-
-    def test_project_rules_disabled_then_explicitly_enabled(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            manuscript = Path(temporary) / "story.md"
-            manuscript.write_text("I noticed the door. It opened.", encoding="utf-8")
-            empty = grade.analyze(manuscript, {"_config_dir": temporary, "project_rules": {}})
-            self.assertFalse(any(r.status_type == StatusType.PROJECT_RULE for r in empty.results))
-            configured = grade.analyze(manuscript, {"_config_dir": temporary, "project_rules": {
-                "banned_phrases": [{"id": "noticed", "name": "Noticed", "pattern": r"\bI noticed\b"}]
-            }})
-            self.assertEqual([r.metric_id for r in configured.results if r.status_type == StatusType.PROJECT_RULE],
-                             ["rule.noticed"])
+def test_shipped_defaults_favour_the_generic_metrics():
+    # A public tool should not ship with one author's project reports enabled
+    # and every generic measurement switched off.
+    assert all(CONFIG["metrics"][name] is False for name in grade.BUNDLED_MEASURES)
+    assert CONFIG["metrics"]["mattr"]["enabled"] is True
+    assert CONFIG["metrics"]["repeated_ngrams"]["enabled"] is True
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_new_metric_families_ship_off_but_present():
+    for name in ("sentence_length_autocorrelation", "dependency_distance", "mtld",
+                 "adjacent_sentence_similarity", "dialogue_channels",
+                 "hedges_boosters", "narration_pov", "punctuation_profile",
+                 "chapter_zscores"):
+        assert CONFIG["metrics"][name]["enabled"] is False, name
+
+
+def test_one_metrics_map_controls_both_kinds_of_measure(tmp_path, base_config):
+    source = tmp_path / "story.md"
+    source.write_text("There were 12 birds and 3 trees.", encoding="utf-8")
+    off = grade.analyze(source, base_config)
+    assert not any(item.metric_id.startswith("measure.") for item in off.results)
+    on = grade.analyze(source, {**base_config, "metrics": {
+        **base_config["metrics"], "number_report": True}})
+    item = next(item for item in on.results if item.metric_id == "measure.number_report")
+    assert item.family == "project_report"
+
+
+def test_missing_profile_does_not_use_an_implicit_fallback(tmp_path, base_config):
+    source = tmp_path / "story.md"
+    source.write_text("One sentence. Another sentence follows.", encoding="utf-8")
+    report = grade.analyze(source, {**base_config, "corpus_profile": "nowhere.json"})
+    assert report.corpus_profile is None
+    item = next(item for item in report.results if item.metric_id == "prose.fk")
+    assert item.corpus is None
+
+
+def test_zero_mad_corpus_does_not_make_every_difference_an_outlier(tmp_path, base_config):
+    # A discrete metric over a small corpus has MAD 0. Calling any difference
+    # an outlier there produced confident nonsense; the IQR, then the empirical
+    # range, then an explicit refusal, are the fallbacks.
+    profile = {"corpus_name": "flat", "comparison_unit": "book",
+               "distributions": {"wps": {"values": [10.0] * 20}}}
+    (tmp_path / "flat.json").write_text(json.dumps(profile), encoding="utf-8")
+    source = tmp_path / "story.md"
+    source.write_text("Ten words in this one sentence here right now yes. " * 60,
+                      encoding="utf-8")
+    report = grade.analyze(source, {**base_config, "corpus_profile": "flat.json"})
+    item = next(item for item in report.results if item.metric_id == "prose.wps")
+    assert item.status_type is not StatusType.CORPUS_OUTLIER
+    assert item.corpus["method"] == "insufficient variation"
+
+
+def test_crashed_child_is_counted_as_internal_error():
+    result = grade.run_metric_process(
+        "fixture.crash", [sys.executable, "-c", "raise RuntimeError('boom')"])
+    assert len(result) == 1
+    assert result[0].status_type is StatusType.INTERNAL_ERROR
+    assert "exited" in result[0].error
+
+
+def test_invalid_child_json_is_an_internal_error():
+    result = grade.run_metric_process(
+        "fixture.invalid", [sys.executable, "-c", "print('PASS words can change')"])
+    assert result[0].status_type is StatusType.INTERNAL_ERROR
+
+
+def test_json_ids_and_accounting_are_stable(tmp_path, base_config):
+    source = tmp_path / "story.md"
+    source.write_text("# Heading\n\nOne small sentence. Another longer one follows here.",
+                      encoding="utf-8")
+    payload = grade.analyze(source, base_config).to_dict()
+    assert payload["summary"]["total"] == len(payload["results"])
+    assert all(item["metric_id"] for item in payload["results"])
+    assert json.loads(json.dumps(payload, sort_keys=True, default=str))
+
+
+def test_project_rules_are_off_until_configured(tmp_path, base_config):
+    source = tmp_path / "story.md"
+    source.write_text("I noticed the door. It opened.", encoding="utf-8")
+    empty = grade.analyze(source, {**base_config, "project_rules": {}})
+    assert not any(item.action is Action.RULE_VIOLATION for item in empty.results)
+    configured = grade.analyze(source, {**base_config, "project_rules": {
+        "banned_phrases": [{"id": "noticed", "name": "Noticed", "pattern": r"\bI noticed\b"}]}})
+    assert [item.metric_id for item in configured.results
+            if item.action is Action.RULE_VIOLATION] == ["rule.noticed"]
+
+
+def test_external_commands_require_explicit_trust(tmp_path, base_config):
+    source = tmp_path / "story.txt"
+    source.write_text("One sentence.", encoding="utf-8")
+    report = grade.analyze(source, {**base_config,
+                                    "metric_commands": [{"id": "unsafe", "command": ["false"]}]})
+    item = next(item for item in report.results
+                if item.metric_id == "metric.external_commands")
+    assert item.status_type is StatusType.UNAVAILABLE

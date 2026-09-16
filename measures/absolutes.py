@@ -7,13 +7,13 @@ Two things are measured, and the second matters more than the first.
 Every novel uses these; the question is whether this one leans on them harder
 than twenty-three published books do.
 
-**The flat absolute with an exception behind it.** The defect pattern found by
-hand in this manuscript: a sentence states something universal, and within the
-next few sentences the text supplies a case it does not cover.
+**The flat absolute with an exception behind it.** A sentence states something
+universal, and within the next few sentences the text supplies a case it does
+not cover.
 
-    "Nobody has ever sent Chloe anything."  ... then a letter arrives for her.
-    "She tells him everything."             ... then she declines to say what
-                                                one project was about.
+    "Nobody has ever written to her."  ... then a letter arrives.
+    "She tells him everything."        ... then she declines to say what one
+                                           of her projects was about.
 
 The absolute reads as authorial fact rather than as a character's belief, so
 the exception lands as a contradiction instead of as a turn. Where the turn is
@@ -35,7 +35,7 @@ from pathlib import Path
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import CHAPTERS_DIR
+import project_config
 
 spec = importlib.util.spec_from_file_location(
     "pg", Path(__file__).resolve().parent / "prose_grade.py")
@@ -136,8 +136,25 @@ def build(dirs):
     print(f"\nwrote {len(out)} books to {REF.name}")
 
 
+def resolve_paths(explicit, default_dir):
+    if not explicit:
+        return sorted(default_dir.glob("*.md")) if default_dir and default_dir.is_dir() else []
+    paths = []
+    for item in explicit:
+        item = Path(item)
+        if item.is_dir():
+            paths.extend(sorted(item.glob("*.md")))
+        elif item.is_file():
+            paths.append(item)
+    return paths
+
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("paths", nargs="*", type=Path,
+                    help="chapter files or directories; default: the configured chapters directory")
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--corpus", nargs="*")
     parser.add_argument("--pairs", action="store_true",
                     help="print every absolute-then-exception pair in full")
@@ -146,6 +163,10 @@ def main():
     args = parser.parse_args()
     if args.corpus:
         return build(args.corpus)
+
+    config = project_config.load_config(args.config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    chapters = resolve_paths(args.paths, chapters_dir)
 
     if args.list:
         measurements = measure(Path(args.list).read_text(encoding="utf-8"))
@@ -156,6 +177,10 @@ def main():
               f"{Path(args.list).stem}")
         return
 
+    if not chapters:
+        print("no chapters found")
+        return 0
+
     ref = json.loads(REF.read_text()) if REF.exists() else {}
     rates = sorted(reference_values["per1000"] for reference_values in ref.values())
     shares = sorted(reference_values["share"] for reference_values in ref.values())
@@ -165,7 +190,7 @@ def main():
     print("-" * 76)
     total_absolutes = total_words = total_pairs = 0
     all_pairs = []
-    for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+    for chapter_path in chapters:
         measurements = measure(chapter_path.read_text(encoding="utf-8"))
         if not measurements:
             continue
@@ -193,7 +218,7 @@ def main():
 
     for side, label in (("narration", "narration only"), ("spoken", "dialogue only")):
         word_count = absolute_count = 0
-        for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+        for chapter_path in chapters:
             side_measurements = measure(chapter_path.read_text(encoding="utf-8"), side=side)
             if side_measurements:
                 word_count += side_measurements["words"]; absolute_count += side_measurements["absolutes"]

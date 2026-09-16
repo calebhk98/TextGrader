@@ -14,42 +14,66 @@ reason, and `grade.py` runs it.
     python3 banned_phrases.py            report
     python3 banned_phrases.py --show N   print the full line for entry N
 """
-import argparse, glob, re, sys
+import argparse, re, sys
 from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import BANNED_CONSTRUCTIONS, CHAPTERS_DIR
-
-# (pattern, what it is, why it is out)
-BANNED = []
-
-# Personal bans are disabled by default and supplied only through configuration.
-if BANNED_CONSTRUCTIONS is not None:
-    BANNED = [
-        (item["pattern"], item["name"], item.get("reason", "Configured rule."))
-        for item in BANNED_CONSTRUCTIONS
-    ]
+import project_config
 
 
-def scan(paths):
+def banned_from(config):
+    """(pattern, what it is, why it is out), from project_rules.banned_phrases.
+
+    Personal bans are disabled by default and supplied only through
+    configuration; there is nothing manuscript-specific in this file itself.
+    """
+    constructions = config.get("project_rules", {}).get("banned_phrases", [])
+    return [(item["pattern"], item["name"], item.get("reason", "Configured rule."))
+           for item in constructions] if constructions else []
+
+
+def scan(paths, banned):
     hits = []
     for chapter_path in paths:
         for line_number, line in enumerate(Path(chapter_path).read_text(encoding="utf-8").split("\n"), 1):
-            for pattern, name, why in BANNED:
+            for pattern, name, why in banned:
                 for match in re.finditer(pattern, line, re.I):
                     hits.append((Path(chapter_path).stem, line_number, name, why, line, match.start()))
     return hits
 
 
+def resolve_paths(explicit, default_dir):
+    if not explicit:
+        return sorted(default_dir.glob("*.md")) if default_dir and default_dir.is_dir() else []
+    paths = []
+    for item in explicit:
+        item = Path(item)
+        if item.is_dir():
+            paths.extend(sorted(item.glob("*.md")))
+        elif item.is_file():
+            paths.append(item)
+    return paths
+
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("paths", nargs="*", type=Path,
+                    help="chapter files or directories; default: the configured chapters directory")
+    parser.add_argument("--config", help="path to a config.json "
+                    "(default: $TEXTGRADER_CONFIG, or the repo's own)")
     parser.add_argument("--show", type=int)
     args = parser.parse_args()
 
-    paths = sorted(glob.glob(str(CHAPTERS_DIR / "*.md")))
-    hits = scan(paths)
+    config = project_config.load_config(args.config)
+    banned = banned_from(config)
+    chapters_dir = project_config.project_path("chapters_dir", "chapters", config)
+    paths = resolve_paths(args.paths, chapters_dir)
+    if not banned:
+        print("no project_rules.banned_phrases configured; nothing is banned, so nothing to scan for.")
+        return 0
+    hits = scan(paths, banned)
 
     if args.show is not None:
         if 1 <= args.show <= len(hits):
@@ -59,7 +83,7 @@ def main():
             print(f"no entry {args.show}; there are {len(hits)}")
         return
 
-    print(f"\n  {len(BANNED)} ruled-out phrases, {len(paths)} chapters\n")
+    print(f"\n  {len(banned)} ruled-out phrases, {len(paths)} chapters\n")
     if not hits:
         print("  none present.\n")
         return 0
