@@ -37,15 +37,15 @@ WORD = re.compile(r"[A-Za-z][A-Za-z']*")
 
 
 def at_revision(rev, relpath):
-    r = subprocess.run(["git", "show", f"{rev}:{relpath}"],
+    result = subprocess.run(["git", "show", f"{rev}:{relpath}"],
                        capture_output=True, text=True, cwd=HERE.parent)
-    return r.stdout if r.returncode == 0 else None
+    return result.stdout if result.returncode == 0 else None
 
 
 def counts(text):
     lines = text.split("\n")
     return {
-        "hard breaks": sum(1 for l in lines if l.endswith("  ") and l.strip()),
+        "hard breaks": sum(1 for line in lines if line.endswith("  ") and line.strip()),
         "em dashes": text.count("—"),
         "curly quotes": len(re.findall(r"[“”‘’]", text)),
         "words": len(WORD.findall(text)),
@@ -54,34 +54,34 @@ def counts(text):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--since", default="HEAD", help="revision to compare against")
-    ap.add_argument("--chapters", nargs="*",
+    parser.add_argument("--since", default="HEAD", help="revision to compare against")
+    parser.add_argument("--chapters", nargs="*",
                     help="number prefixes, e.g. 01 02 or 01,02")
-    a = ap.parse_args()
+    args = parser.parse_args()
 
     files = sorted(CHAPTERS_DIR.glob("*.md"))
-    if a.chapters:
+    if args.chapters:
         # Both "--chapters 01 02" and "--chapters 01,02" have to work. The
         # comma form used to match nothing, print an empty table and report
         # "0 problem(s)", so every caller who wrote it got a silent pass. Two
         # agents and this script's own caller were misled by that before it
         # was found; an argument matching no chapter is now an error.
-        want = {n.strip().zfill(2)
-                for arg in a.chapters for n in arg.split(",") if n.strip()}
-        files = [f for f in files if f.name[:2] in want]
-        missing = want - {f.name[:2] for f in files}
+        want = {chapter_number.strip().zfill(2)
+                for arg in args.chapters for chapter_number in arg.split(",") if chapter_number.strip()}
+        files = [chapter_path for chapter_path in files if chapter_path.name[:2] in want]
+        missing = want - {chapter_path.name[:2] for chapter_path in files}
         if missing or not files:
             sys.exit(f"no chapter matches: {', '.join(sorted(missing)) or '(none given)'}")
 
     problems = 0
     print(f"{'chapter':<24}{'words':>8}{'hard breaks':>14}{'em dash':>9}{'curly':>7}")
-    for f in files:
-        rel = f"{HERE.name}/chapters/{f.name}"
-        now = f.read_text(encoding="utf-8")
-        old = at_revision(a.since, rel)
-        c, o = counts(now), counts(old) if old else None
+    for chapter_path in files:
+        rel = f"{HERE.name}/chapters/{chapter_path.name}"
+        now = chapter_path.read_text(encoding="utf-8")
+        old = at_revision(args.since, rel)
+        current_counts, old_counts = counts(now), counts(old) if old else None
 
         note = []
         lines = now.split("\n")
@@ -89,20 +89,20 @@ def main():
             note.append("no heading on line 1"); problems += 1
         if len(lines) < 3 or lines[1].strip() or not DATELINE.match(lines[2].strip()):
             note.append("date line is not on line 3"); problems += 1
-        if c["em dashes"]:
-            note.append(f"{c['em dashes']} em dash"); problems += 1
-        if o and c["curly quotes"] > o["curly quotes"]:
-            note.append(f"curly quotes up {o['curly quotes']}->{c['curly quotes']}")
+        if current_counts["em dashes"]:
+            note.append(f"{current_counts['em dashes']} em dash"); problems += 1
+        if old_counts and current_counts["curly quotes"] > old_counts["curly quotes"]:
+            note.append(f"curly quotes up {old_counts['curly quotes']}->{current_counts['curly quotes']}")
             problems += 1
         # The book is on one convention now: blank lines between paragraphs.
-        if c["hard breaks"]:
-            note.append(f"{c['hard breaks']} trailing-space line(s), convert to "
+        if current_counts["hard breaks"]:
+            note.append(f"{current_counts['hard breaks']} trailing-space line(s), convert to "
                         f"blank-line paragraphs"); problems += 1
 
-        delta = f"{c['words'] - o['words']:+d}" if o else "new"
-        hb = f"{c['hard breaks']}" + (f" (was {o['hard breaks']})" if o else "")
-        print(f"{f.stem:<24}{c['words']:>8}{hb:>14}{c['em dashes']:>9}"
-              f"{c['curly quotes']:>7}   {delta:>6}  {'; '.join(note)}")
+        delta = f"{current_counts['words'] - old_counts['words']:+d}" if old_counts else "new"
+        hard_break_change = f"{current_counts['hard breaks']}" + (f" (was {old_counts['hard breaks']})" if old_counts else "")
+        print(f"{chapter_path.stem:<24}{current_counts['words']:>8}{hard_break_change:>14}{current_counts['em dashes']:>9}"
+              f"{current_counts['curly quotes']:>7}   {delta:>6}  {'; '.join(note)}")
 
     print(f"\n{problems} problem(s).")
     return 1 if problems else 0

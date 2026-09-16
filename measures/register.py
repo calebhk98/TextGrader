@@ -24,7 +24,7 @@ gets older and that rise is wanted.
     python3 register.py            report
     python3 register.py --words N  the long words in the worst chapters
 """
-import argparse, glob, re, statistics as st, sys
+import argparse, glob, re, statistics as statistics, sys
 from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
@@ -61,29 +61,29 @@ def profile(path):
     words = WORD.findall(text)
     if not words:
         return 0.0, [], 0
-    long_words = [w for w in words if len(w) >= LONG]
+    long_words = [word for word in words if len(word) >= LONG]
     return len(long_words) / len(words) * 100, long_words, len(words)
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--words", type=int, metavar="N",
+    parser.add_argument("--words", type=int, metavar="N",
                     help="print the N commonest long words in each flagged chapter")
-    a = ap.parse_args()
+    args = parser.parse_args()
 
     rows = []
-    for f in sorted(glob.glob(str(CHAPTERS_DIR / "*.md"))):
-        pct, longs, n = profile(f)
-        rows.append((Path(f).stem, pct, longs, n))
+    for chapter_path in sorted(glob.glob(str(CHAPTERS_DIR / "*.md"))):
+        pct, longs, word_count = profile(chapter_path)
+        rows.append((Path(chapter_path).stem, pct, longs, word_count))
     if not rows:
         print("  no chapters found")
         return 0
 
-    median = st.median(r[1] for r in rows)
+    median = statistics.median(row[1] for row in rows)
     ceiling = median * RATIO
-    over = [r for r in rows if r[1] > ceiling and r[0] not in EXEMPT]
-    excused = [r for r in rows if r[1] > ceiling and r[0] in EXEMPT]
+    over = [row for row in rows if row[1] > ceiling and row[0] not in EXEMPT]
+    excused = [row for row in rows if row[1] > ceiling and row[0] in EXEMPT]
 
     print(f"  long words are {LONG} letters or more, as a share of all words")
     print(f"  book median {median:.2f}%, flag above {ceiling:.2f}% "
@@ -97,14 +97,14 @@ def main():
             mark = ""
         print(f"  {stem[:24]:26s}{pct:6.2f}%{mark}")
 
-    if a.words:
+    if args.words:
         from collections import Counter
         for stem, pct, longs, _ in over:
-            common = Counter(w.lower() for w in longs).most_common(a.words)
-            print(f"\n  {stem}: " + ", ".join(f"{w} ({c})" for w, c in common))
+            common = Counter(word.lower() for word in longs).most_common(args.words)
+            print(f"\n  {stem}: " + ", ".join(f"{word} ({count})" for word, count in common))
 
     if over:
-        names = ", ".join(f"{r[0][:2]} ({r[1]:.2f}%)" for r in over)
+        names = ", ".join(f"{row[0][:2]} ({row[1]:.2f}%)" for row in over)
         # One verdict line, matching how the scorecard reads every other
         # measure. The per-chapter rows above are the detail to fix from; the
         # scorecard has been burned once already by matching a detail line.

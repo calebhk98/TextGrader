@@ -39,16 +39,16 @@ TENS = ("", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy",
         "Eighty", "Ninety")
 
 
-def number_word(n):
+def number_word(number):
     """Return a spelled cardinal number suitable for a chapter heading."""
-    if not 0 < n < 1000:
+    if not 0 < number < 1000:
         raise ValueError("chapter numbers must be between 1 and 999")
-    if n < 20:
-        return ONES[n]
-    if n < 100:
-        tens, ones = divmod(n, 10)
+    if number < 20:
+        return ONES[number]
+    if number < 100:
+        tens, ones = divmod(number, 10)
         return TENS[tens] if not ones else f"{TENS[tens]}-{ONES[ones]}"
-    hundreds, rest = divmod(n, 100)
+    hundreds, rest = divmod(number, 100)
     stem = f"{ONES[hundreds]} Hundred"
     return stem if not rest else f"{stem} {number_word(rest)}"
 
@@ -56,42 +56,42 @@ def number_word(n):
 def chapters():
     """Every chapters/NN_*.md in filename order, which is reading order."""
     found = []
-    for p in sorted(CHAPTERS.glob("*.md")):
-        m = re.match(r"(\d+)_", p.name)
-        if m:
-            found.append((int(m.group(1)), p))
+    for path in sorted(CHAPTERS.glob("*.md")):
+        match = re.match(r"(\d+)_", path.name)
+        if match:
+            found.append((int(match.group(1)), path))
     return found
 
 
 def check(found):
     """Numbering gaps, duplicates, and headings that disagree with filenames."""
     problems = []
-    nums = [n for n, _ in found]
-    for i, n in enumerate(nums, start=1):
-        if n != i:
-            problems.append(f"numbering: expected {i:02d}, found {n:02d} "
-                            f"({found[i-1][1].name})")
+    nums = [chapter_number for chapter_number, _ in found]
+    for position, chapter_number in enumerate(nums, start=1):
+        if chapter_number != position:
+            problems.append(f"numbering: expected {position:02d}, found {chapter_number:02d} "
+                            f"({found[position-1][1].name})")
             break
-    for n, p in found:
-        head = p.read_text(encoding="utf-8").split("\n", 1)[0]
-        want = f"## Chapter {number_word(n)}:"
+    for chapter_number, path in found:
+        head = path.read_text(encoding="utf-8").split("\n", 1)[0]
+        want = f"## Chapter {number_word(chapter_number)}:"
         if not head.startswith(want):
-            problems.append(f"{p.name}: heading is {head!r}, expected it to "
+            problems.append(f"{path.name}: heading is {head!r}, expected it to "
                             f"start {want!r}")
     return problems
 
 
 def build(found):
-    return "\n\n\n".join(p.read_text(encoding="utf-8").strip()
-                         for _, p in found) + "\n"
+    return "\n\n\n".join(path.read_text(encoding="utf-8").strip()
+                         for _, path in found) + "\n"
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--check", action="store_true",
+    parser.add_argument("--check", action="store_true",
                     help="report what would change, write nothing")
-    a = ap.parse_args()
+    args = parser.parse_args()
 
     found = chapters()
     if not found:
@@ -100,8 +100,8 @@ def main():
     problems = check(found)
     if problems:
         print("chapters/ is inconsistent:\n")
-        for p in problems:
-            print(f"  {p}")
+        for problem in problems:
+            print(f"  {problem}")
         sys.exit("\nfix the filenames or the headings, then run again.")
 
     new = build(found)
@@ -111,10 +111,10 @@ def main():
     if new == old:
         print(f"{OUT.name} already current: {len(found)} chapters, {words:,} words")
         return
-    if a.check:
-        d = words - len(old.split())
+    if args.check:
+        word_difference = words - len(old.split())
         print(f"{OUT.name} would change: {len(found)} chapters, "
-              f"{words:,} words ({d:+,})")
+              f"{words:,} words ({word_difference:+,})")
         return
     OUT.write_text(new, encoding="utf-8")
     print(f"wrote {OUT.name}: {len(found)} chapters, {words:,} words")

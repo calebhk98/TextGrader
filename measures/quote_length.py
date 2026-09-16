@@ -72,11 +72,11 @@ TARGET_LONG_SHARE = tuple(DIALOGUE_TARGETS["long_quotation_share"])
 def _check_bands_are_possible():
     """A bucket target that cannot sum to 100 is the error this file exists to
     prevent, so it is asserted rather than trusted."""
-    lo = TARGET_SHORT_SHARE[0] + TARGET_LONG_SHARE[0]
-    hi = TARGET_SHORT_SHARE[1] + TARGET_LONG_SHARE[1]
-    assert lo < 100 and hi < 100, "short+long bands leave no room for the middle"
-    assert 40 <= 100 - hi and 100 - lo <= 70, (
-        f"implied middle band {100 - hi:.0f}-{100 - lo:.0f}% is outside the "
+    lower_bound = TARGET_SHORT_SHARE[0] + TARGET_LONG_SHARE[0]
+    upper_bound = TARGET_SHORT_SHARE[1] + TARGET_LONG_SHARE[1]
+    assert lower_bound < 100 and upper_bound < 100, "short+long bands leave no room for the middle"
+    assert 40 <= 100 - upper_bound and 100 - lower_bound <= 70, (
+        f"implied middle band {100 - upper_bound:.0f}-{100 - lower_bound:.0f}% is outside the "
         f"peer range of 50.8-61.1%")
 
 
@@ -98,7 +98,7 @@ def quotations(text):
     text = re.sub(r"(?m)^#.*$", "", text)
     text = re.sub(r"(?m)^[a-z]+: .*$", "", text)   # chat transcript lines
     text = text.replace("\u201c", '"').replace("\u201d", '"')
-    return [q for q in re.findall(r'"([^"]{2,})"', text) if "\n\n" not in q]
+    return [quotation for quotation in re.findall(r'"([^"]{2,})"', text) if "\n\n" not in quotation]
 
 
 def sentences(quote):
@@ -106,40 +106,40 @@ def sentences(quote):
 
 
 def profile(text):
-    qs = quotations(text)
-    counts = [sentences(q) for q in qs]
+    quotes = quotations(text)
+    counts = [sentences(quotation) for quotation in quotes]
     if not counts:
         return None
-    wl = [len(re.findall(r"[A-Za-z']+", q)) for q in qs]
-    mean_w = sum(wl) / len(wl)
-    sd = statistics.stdev(wl) if len(wl) > 1 else 0.0
+    word_lengths = [len(re.findall(r"[A-Za-z']+", quotation)) for quotation in quotes]
+    mean_w = sum(word_lengths) / len(word_lengths)
+    standard_deviation = statistics.stdev(word_lengths) if len(word_lengths) > 1 else 0.0
     return {
         "quotes": len(counts),
         "mean": sum(counts) / len(counts),
-        "one": sum(1 for c in counts if c == 1) / len(counts) * 100,
-        "three": sum(1 for c in counts if c >= 3) / len(counts) * 100,
+        "one": sum(1 for count in counts if count == 1) / len(counts) * 100,
+        "three": sum(1 for count in counts if count >= 3) / len(counts) * 100,
         "wmean": mean_w,
-        "wmed": statistics.median(wl),
-        "wcv": 100 * sd / mean_w if mean_w else 0.0,
-        "short": sum(1 for v in wl if v <= 4) / len(wl) * 100,
-        "long": sum(1 for v in wl if v >= 30) / len(wl) * 100,
+        "wmed": statistics.median(word_lengths),
+        "wcv": 100 * standard_deviation / mean_w if mean_w else 0.0,
+        "short": sum(1 for value in word_lengths if value <= 4) / len(word_lengths) * 100,
+        "long": sum(1 for value in word_lengths if value >= 30) / len(word_lengths) * 100,
     }
 
 
 def corpus():
     rows = []
-    for d in CORPUS_DIRS:
-        if not os.path.isdir(d):
+    for directory in CORPUS_DIRS:
+        if not os.path.isdir(directory):
             continue
-        for name in sorted(os.listdir(d)):
+        for name in sorted(os.listdir(directory)):
             try:
-                text = open(os.path.join(d, name), encoding="utf-8",
+                text = open(os.path.join(directory, name), encoding="utf-8",
                             errors="ignore").read()
             except OSError:
                 continue
-            p = profile(text)
-            if p and p["quotes"] >= 200:
-                rows.append((name.replace("_stripped", "")[:24], p))
+            text_path = profile(text)
+            if text_path and text_path["quotes"] >= 200:
+                rows.append((name.replace("_stripped", "")[:24], text_path))
     return rows
 
 
@@ -147,44 +147,44 @@ def main():
     files = sorted(glob.glob(str(CHAPTERS_DIR / "*.md")))
     if not files:
         sys.exit(f"no chapters found in {CHAPTERS_DIR}")
-    book = profile("\n".join(open(f).read() for f in files))
+    book = profile("\n".join(open(chapter_path).read() for chapter_path in files))
     ref = corpus()
 
     print(f"\n  {'chapter':<26}{'quotes':>7}{'mean':>7}{'1 sent %':>10}{'3+ %':>7}")
     print("  " + "-" * 57)
-    for f in files:
-        p = profile(open(f).read())
-        if not p or p["quotes"] < 15:
+    for chapter_path in files:
+        chapter_profile = profile(open(chapter_path).read())
+        if not chapter_profile or chapter_profile["quotes"] < 15:
             continue
-        flag = "  <-- clipped" if p["mean"] < 1.25 else ""
-        print(f"  {os.path.basename(f)[:-3]:<26}{p['quotes']:>7}"
-              f"{p['mean']:>7.2f}{p['one']:>10.1f}{p['three']:>7.1f}{flag}")
+        flag = "  <-- clipped" if chapter_profile["mean"] < 1.25 else ""
+        print(f"  {os.path.basename(chapter_path)[:-3]:<26}{chapter_profile['quotes']:>7}"
+              f"{chapter_profile['mean']:>7.2f}{chapter_profile['one']:>10.1f}{chapter_profile['three']:>7.1f}{flag}")
 
     print("  " + "-" * 57)
     print(f"  {'BOOK':<26}{book['quotes']:>7}{book['mean']:>7.2f}"
           f"{book['one']:>10.1f}{book['three']:>7.1f}")
     if ref:
-        med = statistics.median(p["mean"] for _, p in ref)
-        med_one = statistics.median(p["one"] for _, p in ref)
-        med_three = statistics.median(p["three"] for _, p in ref)
-        lo = min(ref, key=lambda r: r[1]["mean"])
-        hi = max(ref, key=lambda r: r[1]["mean"])
+        med = statistics.median(chapter_profile["mean"] for _, chapter_profile in ref)
+        med_one = statistics.median(chapter_profile["one"] for _, chapter_profile in ref)
+        med_three = statistics.median(chapter_profile["three"] for _, chapter_profile in ref)
+        lower_bound = min(ref, key=lambda r: r[1]["mean"])
+        upper_bound = max(ref, key=lambda r: r[1]["mean"])
         print(f"  {'corpus median':<26}{'':>7}{med:>7.2f}{med_one:>10.1f}"
               f"{med_three:>7.1f}   ({len(ref)} books)")
-        print(f"  {'corpus low  ' + lo[0]:<26}{'':>7}{lo[1]['mean']:>7.2f}")
-        print(f"  {'corpus high ' + hi[0]:<26}{'':>7}{hi[1]['mean']:>7.2f}")
+        print(f"  {'corpus low  ' + lower_bound[0]:<26}{'':>7}{lower_bound[1]['mean']:>7.2f}")
+        print(f"  {'corpus high ' + upper_bound[0]:<26}{'':>7}{upper_bound[1]['mean']:>7.2f}")
     print(f"\n  sentences per quotation: target mean {TARGET_MEAN}, "
           f"target 3+ {TARGET_THREE_PLUS}%: "
           f"{'ok' if book['mean'] >= TARGET_MEAN else 'UNDER'}")
 
-    lo, hi = TARGET_WORD_MEAN
+    lower_bound, upper_bound = TARGET_WORD_MEAN
     cvlo, cvhi = TARGET_WORD_CV
     slo, shi = TARGET_SHORT_SHARE
     llo, lhi = TARGET_LONG_SHARE
     mid = 100 - book["short"] - book["long"]
 
-    def band(v, a_, b_):
-        return "ok" if a_ <= v <= b_ else "FAIL"
+    def band(value, lower_bound, upper_bound):
+        return "ok" if lower_bound <= value <= upper_bound else "FAIL"
 
     print("\n  words per quotation, against " + ", ".join(PEER_BOOKS))
     print("  bands are whole rows from those four books, never mixed percentiles")
@@ -192,7 +192,7 @@ def main():
     # form printed "18.0 ... target 18-24 ... FAIL", which reads as a broken
     # script rather than as a near miss.
     print(f"    {'mean':<22}{book['wmean']:>7.2f}   peers 17.0-27.8   "
-          f"target {lo:.0f}-{hi:.0f}    {band(book['wmean'], lo, hi)}")
+          f"target {lower_bound:.0f}-{upper_bound:.0f}    {band(book['wmean'], lower_bound, upper_bound)}")
     print(f"    {'median':<22}{book['wmed']:>7.0f}")
     print(f"    {'variation (CV %)':<22}{book['wcv']:>7.0f}    peers 113-152     "
           f"target {cvlo:.0f}-{cvhi:.0f}  {band(book['wcv'], cvlo, cvhi)}")

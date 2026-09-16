@@ -28,7 +28,7 @@ import argparse
 import importlib.util
 import json
 import re
-import statistics as st
+import statistics as statistics
 import sys
 from pathlib import Path
 
@@ -39,8 +39,8 @@ from project_config import CHAPTERS_DIR
 
 spec = importlib.util.spec_from_file_location(
     "pg", Path(__file__).resolve().parent / "prose_grade.py")
-pg = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(pg)
+prose_grade = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(prose_grade)
 
 REF = HERE / "absolutes_reference.json"
 
@@ -85,135 +85,135 @@ WINDOW = 3   # sentences after the absolute in which an exception counts
 
 
 def measure(text, side="all"):
-    text, _ = pg.strip_transcript(text)
+    text, _ = prose_grade.strip_transcript(text)
     if side == "narration":
         text = QUOTED.sub(" ", text)
     elif side == "spoken":
-        text = " ".join(m.group(0).strip('"') for m in QUOTED.finditer(text))
-    paras = [p for p in pg.paragraphs(text) if p.strip() != "---"]
-    ss = [s for p in paras for s in pg.sents(p) if pg.words(s)]
-    if len(ss) < 10:
+        text = " ".join(match.group(0).strip('"') for match in QUOTED.finditer(text))
+    paras = [paragraph for paragraph in prose_grade.paragraphs(text) if paragraph.strip() != "---"]
+    sentences = [sentence for paragraph in paras for sentence in prose_grade.sents(paragraph) if prose_grade.words(sentence)]
+    if len(sentences) < 10:
         return None if side == "all" else {
-            "words": len(pg.words(text)), "sentences": len(ss),
+            "words": len(prose_grade.words(text)), "sentences": len(sentences),
             "absolutes": 0, "per1000": 0.0, "share": 0.0,
             "pairs": [], "lines": []}
-    n_w = len(pg.words(text))
-    hits = [i for i, s in enumerate(ss) if ABSOLUTE.search(s)]
+    word_count = len(prose_grade.words(text))
+    hits = [hit_index for hit_index, sentence in enumerate(sentences) if ABSOLUTE.search(sentence)]
     pairs = []
-    for i in hits:
-        for j in range(i + 1, min(i + 1 + WINDOW, len(ss))):
-            if EXCEPTION.search(ss[j]):
-                pairs.append((ss[i], ss[j]))
+    for hit_index in hits:
+        for candidate_index in range(hit_index + 1, min(hit_index + 1 + WINDOW, len(sentences))):
+            if EXCEPTION.search(sentences[candidate_index]):
+                pairs.append((sentences[hit_index], sentences[candidate_index]))
                 break
     return {
-        "words": n_w,
-        "sentences": len(ss),
+        "words": word_count,
+        "sentences": len(sentences),
         "absolutes": len(hits),
-        "per1000": 1000 * len(hits) / n_w,
-        "share": 100 * len(hits) / len(ss),
+        "per1000": 1000 * len(hits) / word_count,
+        "share": 100 * len(hits) / len(sentences),
         "pairs": pairs,
-        "lines": [ss[i] for i in hits],
+        "lines": [sentences[hit_index] for hit_index in hits],
     }
 
 
 def build(dirs):
     out = {}
-    for d in dirs:
-        for f in sorted(Path(d).rglob("*.txt")):
-            if "stripped" in f.stem:
+    for directory in dirs:
+        for text_path in sorted(Path(directory).rglob("*.txt")):
+            if "stripped" in text_path.stem:
                 continue
-            t = f.read_text(encoding="utf-8", errors="replace")
-            t = pg.strip_gutenberg(t) if hasattr(pg, "strip_gutenberg") else t
-            m = measure(t)
-            if m:
-                out[f.stem] = {k: m[k] for k in ("per1000", "share", "words")}
-                out[f.stem]["pairs"] = len(m["pairs"])
-                for sd in ("narration", "spoken"):
-                    q = measure(t, side=sd)
-                    out[f.stem][sd + "_per1000"] = q["per1000"] if q else 0.0
-                print(f"  {f.stem:<36}{m['per1000']:6.2f} per 1000")
+            text = text_path.read_text(encoding="utf-8", errors="replace")
+            text = prose_grade.strip_gutenberg(text) if hasattr(prose_grade, "strip_gutenberg") else text
+            measurements = measure(text)
+            if measurements:
+                out[text_path.stem] = {key: measurements[key] for key in ("per1000", "share", "words")}
+                out[text_path.stem]["pairs"] = len(measurements["pairs"])
+                for side in ("narration", "spoken"):
+                    side_measurements = measure(text, side=side)
+                    out[text_path.stem][side + "_per1000"] = side_measurements["per1000"] if side_measurements else 0.0
+                print(f"  {text_path.stem:<36}{measurements['per1000']:6.2f} per 1000")
     REF.write_text(json.dumps(out, indent=1, sort_keys=True), encoding="utf-8")
     print(f"\nwrote {len(out)} books to {REF.name}")
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--corpus", nargs="*")
-    ap.add_argument("--pairs", action="store_true",
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--corpus", nargs="*")
+    parser.add_argument("--pairs", action="store_true",
                     help="print every absolute-then-exception pair in full")
-    ap.add_argument("--list", metavar="CHAPTER",
+    parser.add_argument("--list", metavar="CHAPTER",
                     help="print every narration absolute in one chapter")
-    a = ap.parse_args()
-    if a.corpus:
-        return build(a.corpus)
+    args = parser.parse_args()
+    if args.corpus:
+        return build(args.corpus)
 
-    if a.list:
-        m = measure(Path(a.list).read_text(encoding="utf-8"))
-        for line in m["lines"]:
+    if args.list:
+        measurements = measure(Path(args.list).read_text(encoding="utf-8"))
+        for line in measurements["lines"]:
             print("  " + ABSOLUTE.sub(lambda x: x.group(0).upper(),
                                       line.strip())[:300])
-        print(f"\n  {len(m['lines'])} sentences carry an absolute in "
-              f"{Path(a.list).stem}")
+        print(f"\n  {len(measurements['lines'])} sentences carry an absolute in "
+              f"{Path(args.list).stem}")
         return
 
     ref = json.loads(REF.read_text()) if REF.exists() else {}
-    rates = sorted(v["per1000"] for v in ref.values())
-    shares = sorted(v["share"] for v in ref.values())
+    rates = sorted(reference_values["per1000"] for reference_values in ref.values())
+    shares = sorted(reference_values["share"] for reference_values in ref.values())
 
     print(f"\n{'chapter':<24}{'words':>7}{'absolutes':>11}{'per 1000':>10}"
           f"{'% of sents':>12}{'exceptions':>12}")
     print("-" * 76)
-    tot_a = tot_w = tot_p = 0
+    total_absolutes = total_words = total_pairs = 0
     all_pairs = []
-    for p in sorted(CHAPTERS_DIR.glob("*.md")):
-        m = measure(p.read_text(encoding="utf-8"))
-        if not m:
+    for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+        measurements = measure(chapter_path.read_text(encoding="utf-8"))
+        if not measurements:
             continue
-        tot_a += m["absolutes"]; tot_w += m["words"]; tot_p += len(m["pairs"])
-        all_pairs += [(p.stem, x, y) for x, y in m["pairs"]]
-        flag = "  <--" if rates and m["per1000"] > max(rates) else ""
-        print(f"{p.stem:<24}{m['words']:>7}{m['absolutes']:>11}"
-              f"{m['per1000']:>10.2f}{m['share']:>12.1f}{len(m['pairs']):>12}{flag}")
+        total_absolutes += measurements["absolutes"]; total_words += measurements["words"]; total_pairs += len(measurements["pairs"])
+        all_pairs += [(chapter_path.stem, absolute_sentence, exception_sentence) for absolute_sentence, exception_sentence in measurements["pairs"]]
+        flag = "  <--" if rates and measurements["per1000"] > max(rates) else ""
+        print(f"{chapter_path.stem:<24}{measurements['words']:>7}{measurements['absolutes']:>11}"
+              f"{measurements['per1000']:>10.2f}{measurements['share']:>12.1f}{len(measurements['pairs']):>12}{flag}")
 
-    book = 1000 * tot_a / tot_w if tot_w else 0
+    book = 1000 * total_absolutes / total_words if total_words else 0
     print("-" * 76)
-    print(f"{'BOOK':<24}{tot_w:>7}{tot_a:>11}{book:>10.2f}{'':>12}{tot_p:>12}")
+    print(f"{'BOOK':<24}{total_words:>7}{total_absolutes:>11}{book:>10.2f}{'':>12}{total_pairs:>12}")
     if rates:
-        pct = 100 * sum(1 for r in rates if r < book) / len(rates)
+        pct = 100 * sum(1 for rate in rates if rate < book) / len(rates)
         print(f"\n  corpus of {len(rates)} books:  low {min(rates):.2f}   "
-              f"median {st.median(rates):.2f}   high {max(rates):.2f}")
+              f"median {statistics.median(rates):.2f}   high {max(rates):.2f}")
         print(f"  this book {book:.2f} per 1000 words, "
               f"at the {pct:.0f}th percentile of the corpus")
-        cp = sorted(v["pairs"] / (v["words"] / 1000) for v in ref.values())
-        bp = 1000 * tot_p / tot_w if tot_w else 0.0
+        corpus_pair_rates = sorted(reference_values["pairs"] / (reference_values["words"] / 1000) for reference_values in ref.values())
+        book_pair_rate = 1000 * total_pairs / total_words if total_words else 0.0
         print(f"\n  absolute followed within {WINDOW} sentences by an exception:")
-        print(f"  corpus  low {min(cp):.3f}   median {st.median(cp):.3f}   "
-              f"high {max(cp):.3f}   per 1000 words")
-        print(f"  this book {bp:.3f}")
+        print(f"  corpus  low {min(corpus_pair_rates):.3f}   median {statistics.median(corpus_pair_rates):.3f}   "
+              f"high {max(corpus_pair_rates):.3f}   per 1000 words")
+        print(f"  this book {book_pair_rate:.3f}")
 
-    for sd, label in (("narration", "narration only"), ("spoken", "dialogue only")):
-        w = c = 0
-        for p in sorted(CHAPTERS_DIR.glob("*.md")):
-            q = measure(p.read_text(encoding="utf-8"), side=sd)
-            if q:
-                w += q["words"]; c += q["absolutes"]
-        if not (w and ref):
+    for side, label in (("narration", "narration only"), ("spoken", "dialogue only")):
+        word_count = absolute_count = 0
+        for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+            side_measurements = measure(chapter_path.read_text(encoding="utf-8"), side=side)
+            if side_measurements:
+                word_count += side_measurements["words"]; absolute_count += side_measurements["absolutes"]
+        if not (word_count and ref):
             continue
-        rs = [v.get(sd + "_per1000", 0) for v in ref.values()]
-        rs = sorted(r for r in rs if r)
-        b = 1000 * c / w
-        pc = 100 * sum(1 for r in rs if r < b) / len(rs)
-        print(f"\n  {label}: this book {b:.2f} per 1000, at the {pc:.0f}th "
+        side_rates = [reference_values.get(side + "_per1000", 0) for reference_values in ref.values()]
+        side_rates = sorted(rate for rate in side_rates if rate)
+        book_rate = 1000 * absolute_count / word_count
+        percentile = 100 * sum(1 for rate in side_rates if rate < book_rate) / len(side_rates)
+        print(f"\n  {label}: this book {book_rate:.2f} per 1000, at the {percentile:.0f}th "
               f"percentile")
-        print(f"  corpus  low {min(rs):.2f}   median {st.median(rs):.2f}   "
-              f"high {max(rs):.2f}")
+        print(f"  corpus  low {min(side_rates):.2f}   median {statistics.median(side_rates):.2f}   "
+              f"high {max(side_rates):.2f}")
 
-    if a.pairs and all_pairs:
+    if args.pairs and all_pairs:
         print(f"\n{'=' * 76}\nEVERY ABSOLUTE WITH AN EXCEPTION BEHIND IT\n{'=' * 76}")
-        for stem, x, y in all_pairs:
+        for stem, absolute_sentence, exception_sentence in all_pairs:
             print(f"\n{stem}")
-            print(f"  absolute : {x.strip()[:300]}")
-            print(f"  exception: {y.strip()[:300]}")
+            print(f"  absolute : {absolute_sentence.strip()[:300]}")
+            print(f"  exception: {exception_sentence.strip()[:300]}")
     elif all_pairs:
         print(f"\n  {len(all_pairs)} pairs found. Run with --pairs to read them.")
 

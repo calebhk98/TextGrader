@@ -97,61 +97,61 @@ SECTION = re.compile(r"^-?\s*What (?:he|she|they)(?:'s| is| are)? wrong about\b"
 
 def sentences(text):
     """Yield (line_no, sentence). Sheets are markdown, so strip the furniture."""
-    for i, line in enumerate(text.split("\n"), 1):
+    for start, line in enumerate(text.split("\n"), 1):
         if line.lstrip().startswith(("|", "#", "```")):
             continue
         clean = re.sub(r"\*+|_+|`+", "", line)
         clean = QUOTED.sub(" ", clean)
-        for s in re.split(r"(?<=[.!?])\s+", clean):
-            if s.strip():
-                yield i, s.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", clean):
+            if sentence.strip():
+                yield start, sentence.strip()
 
 
 def scan(path, rules):
     hits = []
-    for line_no, s in sentences(path.read_text(encoding="utf-8")):
+    for line_no, sentence in sentences(path.read_text(encoding="utf-8")):
         for pattern, label in rules:
-            m = re.search(pattern, s, re.I)
-            if m and label == "verdict" and DESCRIBES.search(s[:m.start()]):
+            match = re.search(pattern, sentence, re.I)
+            if match and label == "verdict" and DESCRIBES.search(sentence[:match.start()]):
                 continue
-            if m and label == "verdict" and SECTION.match(s):
+            if match and label == "verdict" and SECTION.match(sentence):
                 continue
-            if m:
-                hits.append((line_no, label, m.group(0), s))
+            if match:
+                hits.append((line_no, label, match.group(0), sentence))
                 break
     return hits
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("sheets", nargs="*", type=Path)
-    ap.add_argument("--root", type=Path, default=HERE)
-    ap.add_argument("--rule", type=int, choices=(1, 2, 3), help="check only this rule")
-    ap.add_argument("--show", action="store_true", help="print the whole sentence")
-    a = ap.parse_args()
+    parser.add_argument("sheets", nargs="*", type=Path)
+    parser.add_argument("--root", type=Path, default=HERE)
+    parser.add_argument("--rule", type=int, choices=(1, 2, 3), help="check only this rule")
+    parser.add_argument("--show", action="store_true", help="print the whole sentence")
+    args = parser.parse_args()
 
     rules = VERDICT + NEGATION + BOOK_REFERENCE
-    if a.rule == 1:
+    if args.rule == 1:
         rules = VERDICT
-    elif a.rule == 2:
+    elif args.rule == 2:
         rules = NEGATION
-    elif a.rule == 3:
+    elif args.rule == 3:
         rules = BOOK_REFERENCE
 
-    files = a.sheets or sorted(CHARACTERS_DIR.glob("*.md"))
+    files = args.sheets or sorted(CHARACTERS_DIR.glob("*.md"))
     total = 0
-    for f in files:
-        if f.name in SKIP or not f.is_file():
+    for sheet_path in files:
+        if sheet_path.name in SKIP or not sheet_path.is_file():
             continue
-        hits = scan(f, rules)
+        hits = scan(sheet_path, rules)
         if not hits:
             continue
         total += len(hits)
-        print(f"\n{f.name}")
+        print(f"\n{sheet_path.name}")
         for line_no, label, found, sentence in hits:
             print(f"  {line_no:>4} [{label}] {found}")
-            if a.show:
+            if args.show:
                 print(f"       {sentence[:150]}")
 
     print(f"\n{total} flagged across {len(files)} files.")

@@ -88,81 +88,81 @@ def closers(text):
     """The last sentence of every speech long enough to have arrived at one."""
     out = []
     for spoken in QUOTE.findall(text):
-        parts = [s.strip() for s in re.split(r'(?<=[.!?])\s+', spoken) if s.strip()]
+        parts = [sentence.strip() for sentence in re.split(r'(?<=[.!?])\s+', spoken) if sentence.strip()]
         if len(parts) >= 2:
             out.append(parts[-1])
     return out
 
 
-def is_maxim(s):
+def is_maxim(sentence):
     # A question asks; it does not pronounce. Four of the first fourteen hits
     # were questions, and dropping them is what moved this from a rate the
     # corpus could match to one it cannot.
-    if s.rstrip().endswith("?"):
+    if sentence.rstrip().endswith("?"):
         return False
-    n = len(WORD.findall(s))
-    if not 4 <= n <= 22:
+    word_count = len(WORD.findall(sentence))
+    if not 4 <= word_count <= 22:
         return False
-    if PAST.search(s):
+    if PAST.search(sentence):
         return False
     # The opening word is capitalised because it opens; that is not a name.
-    if PROPER.search(s[0].lower() + s[1:] if s else s):
+    if PROPER.search(sentence[0].lower() + sentence[1:] if sentence else sentence):
         return False
-    if PROMISE.search(s):
+    if PROMISE.search(sentence):
         return False
     # A list of particulars is not a general claim, whatever its last clause
     # does. Two or more commas with no verb before the first one is a list.
-    head = s.split(",")[0]
-    if s.count(",") >= 2 and not COPULA.search(head):
+    head = sentence.split(",")[0]
+    if sentence.count(",") >= 2 and not COPULA.search(head):
         return False
-    if not COPULA.search(s):
+    if not COPULA.search(sentence):
         return False
-    return bool(GENERIC.search(s) or IMPERSONAL_YOU.search(s))
+    return bool(GENERIC.search(sentence) or IMPERSONAL_YOU.search(sentence))
 
 
 def measure(paths):
     total = 0
     hits = []
-    for p in paths:
-        text = Path(p).read_text(errors="ignore")
-        for c in closers(text):
+    for paragraph in paths:
+        text = Path(paragraph).read_text(errors="ignore")
+        for candidate in closers(text):
             total += 1
-            if is_maxim(c):
-                hits.append((Path(p).stem, c))
+            if is_maxim(candidate):
+                hits.append((Path(paragraph).stem, candidate))
     return hits, total
 
 
 def corpus_rates():
     rows = []
-    for d in CORPUS_DIRS:
-        for f in sorted(glob.glob(str(d / "*"))):
+    for directory in CORPUS_DIRS:
+        for text_path in sorted(glob.glob(str(directory / "*"))):
             # The corpus carries a stripped copy of each modern book; counting
             # both would weight those authors twice.
-            if "strip" in Path(f).name:
+            if "strip" in Path(text_path).name:
                 continue
-            hits, total = measure([f])
+            hits, total = measure([text_path])
             if total >= 50:
-                rows.append((Path(f).stem, len(hits), total, len(hits) / total * 100))
+                rows.append((Path(text_path).stem, len(hits), total, len(hits) / total * 100))
     rows.sort(key=lambda r: r[3])
     return rows
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--corpus", action="store_true", help="the per-book corpus table")
-    a = ap.parse_args()
+    parser.add_argument("--corpus", action="store_true", help="the per-book corpus table")
+    args = parser.parse_args()
 
     rows = corpus_rates()
     if not rows:
         print("  corpus texts not readable; nothing to compare against")
         return 0
-    ceiling = max(r[3] for r in rows)
+    ceiling = max(row[3] for row in rows)
     median = rows[len(rows) // 2][3]
 
-    if a.corpus:
-        for stem, h, t, pct in rows:
-            print(f"  {stem[:38]:38s} {h:3d}/{t:5d}  {pct:5.2f}%")
+    if args.corpus:
+        for stem, hits, total, pct in rows:
+            print(f"  {stem[:38]:38s} {hits:3d}/{total:5d}  {pct:5.2f}%")
         print(f"\n  median {median:.2f}%   maximum {ceiling:.2f}%   {len(rows)} books")
         return 0
 
@@ -177,7 +177,7 @@ def main():
     for stem, line in hits:
         print(f"  {stem[:22]:22s} {line}")
 
-    chapters = len({s for s, _ in hits})
+    chapters = len({sentence for sentence, _ in hits})
     print(f"\n  spread across {chapters} chapters. The habit belongs to no one "
           f"character,")
     print(f"  which is the reader's actual complaint: one gear, everybody in it.")

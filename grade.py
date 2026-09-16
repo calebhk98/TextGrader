@@ -74,11 +74,11 @@ FK_BOOK_TARGET = READING_TARGETS["fk_book"]
 def fk_band(stem):
     """The (floor, ceiling) this chapter's number is judged against."""
     try:
-        n = int(stem[:2])
+        chapter_number = int(stem[:2])
     except ValueError:
         return None
-    for lo, hi, floor, ceil in FK_BANDS:
-        if lo <= n <= hi:
+    for first_chapter, last_chapter, floor, ceil in FK_BANDS:
+        if first_chapter <= chapter_number <= last_chapter:
             return floor, ceil
     return None
 
@@ -86,10 +86,10 @@ def fk_band(stem):
 def load(name):
     # measures/ has to be importable too: prose_grade imports style_report from
     # alongside it, and dialogue_study loads prose_grade the same way.
-    md = HERE / "measures"
-    if str(md) not in sys.path:
-        sys.path.insert(0, str(md))
-    spec = importlib.util.spec_from_file_location(name[:-3], md / name)
+    module = HERE / "measures"
+    if str(module) not in sys.path:
+        sys.path.insert(0, str(module))
+    spec = importlib.util.spec_from_file_location(name[:-3], module / name)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -102,11 +102,11 @@ def run(script, *args, quiet_rc=True):
     behaviour and not a failure, so the return code is ignored by default.
     """
     env = dict(os.environ, HALSTEAD_VIA_GRADE="1")
-    r = subprocess.run([sys.executable, str(HERE / "measures" / script), *map(str, args)],
+    result = subprocess.run([sys.executable, str(HERE / "measures" / script), *map(str, args)],
                        capture_output=True, text=True, env=env)
-    if r.returncode and not quiet_rc:
-        return f"({script} exited {r.returncode})\n{r.stdout}{r.stderr}"
-    return r.stdout.rstrip("\n")
+    if result.returncode and not quiet_rc:
+        return f"({script} exited {result.returncode})\n{result.stdout}{result.stderr}"
+    return result.stdout.rstrip("\n")
 
 
 def rule(title):
@@ -158,24 +158,24 @@ def dialogue_share(path):
     import statistics as _st
     spec2 = importlib.util.spec_from_file_location(
         "ds", HERE / "measures" / "dialogue_study.py")
-    ds = importlib.util.module_from_spec(spec2)
+    dialogue_module = importlib.util.module_from_spec(spec2)
     import sys as _sys
     _argv, _sys.argv = _sys.argv, ["x"]
     try:
-        spec2.loader.exec_module(ds)
+        spec2.loader.exec_module(dialogue_module)
     finally:
         _sys.argv = _argv
-    t = Path(path).read_text(encoding="utf-8")
-    t, _ = ds.pg.strip_transcript(t)
-    sp, na = ds.spoken_and_narrated(t)
-    sl = ds.sent_lengths(sp)
-    sw, nw = len(ds.pg.words(sp)), len(ds.pg.words(na))
-    if not (sw + nw):
+    text = Path(path).read_text(encoding="utf-8")
+    text, _ = dialogue_module.pg.strip_transcript(text)
+    spoken, narrated = dialogue_module.spoken_and_narrated(text)
+    spoken_lengths = dialogue_module.sent_lengths(spoken)
+    spoken_words, narrated_words = len(dialogue_module.pg.words(spoken)), len(dialogue_module.pg.words(narrated))
+    if not (spoken_words + narrated_words):
         return None
-    return {"quoted": 100 * sw / (sw + nw),
-            "spoken": _st.fmean(sl) if sl else None,
-            "n": len(sl),
-            "short": 100 * sum(1 for x in sl if x <= 3) / len(sl) if sl else None}
+    return {"quoted": 100 * spoken_words / (spoken_words + narrated_words),
+            "spoken": _st.fmean(spoken_lengths) if spoken_lengths else None,
+            "n": len(spoken_lengths),
+            "short": 100 * sum(1 for length in spoken_lengths if length <= 3) / len(spoken_lengths) if spoken_lengths else None}
 
 
 def one_chapter(path):
@@ -187,10 +187,10 @@ def one_chapter(path):
     This format has one metric per line with its goal beside it, so there is
     nothing to miscount.
     """
-    pg = load("prose_grade.py")
+    prose_grader = load("prose_grade.py")
     text = Path(path).read_text(encoding="utf-8")
-    m = pg.measure(text, floor=10)
-    if not m:
+    measurements = prose_grader.measure(text, floor=10)
+    if not measurements:
         sys.exit(f"{path}: too short to measure")
 
     name = Path(path).stem
@@ -200,33 +200,33 @@ def one_chapter(path):
 
     band = fk_band(name)
     failed = []
-    for key, label, goal, cmp_, src in GOALS:
+    for key, label, goal, comparison, src in GOALS:
         if band and key in ("fk", "ari"):
             goal, src = band[0], f"band {band[0]:g}-{band[1]:g} for this chapter"
-        v = m.get(key)
-        if v is None:
+        value = measurements.get(key)
+        if value is None:
             print(f"  {label:<40}{'-':>9}{'':>14}  {'':<6}{src}")
             continue
-        if cmp_ == "~":
-            lo, hi = goal
-            ok = lo <= v <= hi
-            gtxt = f"{lo:g} to {hi:g}"
-        elif cmp_ == ">=":
-            ok = v >= goal
-            gtxt = f">= {goal:g}"
+        if comparison == "~":
+            lower_bound, upper_bound = goal
+            at_goal = lower_bound <= value <= upper_bound
+            goal_text = f"{lower_bound:g} to {upper_bound:g}"
+        elif comparison == ">=":
+            at_goal = value >= goal
+            goal_text = f">= {goal:g}"
         else:
-            ok = v <= goal
-            gtxt = f"<= {goal:g}"
-        mark = "pass" if ok else "FAIL"
-        if not ok:
+            at_goal = value <= goal
+            goal_text = f"<= {goal:g}"
+        mark = "pass" if at_goal else "FAIL"
+        if not at_goal:
             failed.append(label)
-        print(f"  {label:<40}{v:9.1f}{gtxt:>14}  {mark:<6}{src}")
+        print(f"  {label:<40}{value:9.1f}{goal_text:>14}  {mark:<6}{src}")
 
-    d = dialogue_share(path)
-    pgm = load("prose_grade.py")
-    tshare = (pgm.measure(Path(path).read_text(encoding="utf-8"), floor=10)
+    dialogue = dialogue_share(path)
+    prose_grade_measurements = load("prose_grade.py")
+    tshare = (prose_grade_measurements.measure(Path(path).read_text(encoding="utf-8"), floor=10)
               or {}).get("_transcript", 0)
-    if d and tshare >= 25:
+    if dialogue and tshare >= 25:
         # A chat chapter carries its dialogue as transcript lines, which are
         # stripped before measurement, so the quoted-share and spoken-mean
         # gates below are measuring the handful of lines that happen to sit in
@@ -237,24 +237,24 @@ def one_chapter(path):
         print("  transcript, which is stripped before measurement, so quoted share")
         print("  and spoken mean would describe a few stray lines rather than the")
         print("  chapter. Read the transcript itself.")
-        d = None
-    if d:
+        dialogue = None
+    if dialogue:
         quoted_min = DIALOGUE_TARGETS["quoted_word_share_min"]
         spoken_min = DIALOGUE_TARGETS["spoken_sentence_words_min"]
         short_max = DIALOGUE_TARGETS["short_spoken_lines_max"]
         print("  " + "-" * 84)
-        print(f"  {'dialogue, share of words quoted %':<40}{d['quoted']:9.1f}"
+        print(f"  {'dialogue, share of words quoted %':<40}{dialogue['quoted']:9.1f}"
               f"{f'>= {quoted_min:g}':>14}  "
-              f"{'pass' if d['quoted'] >= quoted_min else 'FAIL':<6}configured")
-        if d["spoken"] is not None:
-            print(f"  {'mean spoken sentence, words':<40}{d['spoken']:9.1f}"
+              f"{'pass' if dialogue['quoted'] >= quoted_min else 'FAIL':<6}configured")
+        if dialogue["spoken"] is not None:
+            print(f"  {'mean spoken sentence, words':<40}{dialogue['spoken']:9.1f}"
                   f"{f'>= {spoken_min:g}':>14}  "
-                  f"{'pass' if d['spoken'] >= spoken_min else 'FAIL':<6}configured")
-            print(f"  {'spoken lines of 1-3 words %':<40}{d['short']:9.1f}"
+                  f"{'pass' if dialogue['spoken'] >= spoken_min else 'FAIL':<6}configured")
+            print(f"  {'spoken lines of 1-3 words %':<40}{dialogue['short']:9.1f}"
                   f"{f'<= {short_max:g}':>14}  "
-                  f"{'pass' if d['short'] <= short_max else 'FAIL':<6}configured")
-        if d["n"] < 20:
-            print(f"\n  ** Only {d['n']} spoken sentences in this chapter. The mean above is")
+                  f"{'pass' if dialogue['short'] <= short_max else 'FAIL':<6}configured")
+        if dialogue["n"] < 20:
+            print(f"\n  ** Only {dialogue['n']} spoken sentences in this chapter. The mean above is")
             print("     measured over almost nothing and means almost nothing. A chapter this")
             print("     quiet has usually narrated its dialogue instead of writing it; check")
             print("     the narration for 'he tells her', 'she asks him whether', and the like.")
@@ -285,48 +285,48 @@ def table():
 MEAN_WORD_TARGET = (2600, 3600)
 
 
-def book_length(pg):
+def book_length(prose_grader):
     """The book average, which is the number that keeps the page count honest."""
-    counts = [pg.measure(p.read_text(encoding="utf-8"), floor=10)["_words_all"]
-              for p in CHAPTERS]
-    counts = [c for c in counts if c]
+    counts = [prose_grader.measure(chapter_path.read_text(encoding="utf-8"), floor=10)["_words_all"]
+              for chapter_path in CHAPTERS]
+    counts = [word_count for word_count in counts if word_count]
     total, mean = sum(counts), sum(counts) / len(counts)
-    lo, hi = MEAN_WORD_TARGET
-    verdict = "ok" if lo <= mean <= hi else ("under" if mean < lo else "OVER")
+    minimum_words, maximum_words = MEAN_WORD_TARGET
+    verdict = "ok" if minimum_words <= mean <= maximum_words else ("under" if mean < minimum_words else "OVER")
     print(f"  book length   {total:,} words over {len(counts)} chapters, "
-          f"mean {mean:,.0f}   target {lo:,}-{hi:,}   {verdict}")
-    over = [(p.stem, c) for p, c in zip(CHAPTERS, counts) if c > 5000]
+          f"mean {mean:,.0f}   target {minimum_words:,}-{maximum_words:,}   {verdict}")
+    over = [(chapter_path.stem, word_count) for chapter_path, word_count in zip(CHAPTERS, counts) if word_count > 5000]
     if over:
         print("  past the 5,000 ceiling: "
-              + ", ".join(f"{s} ({c:,})" for s, c in over))
-    longest = sorted(zip([p.stem for p in CHAPTERS], counts),
+              + ", ".join(f"{chapter_name} ({word_count:,})" for chapter_name, word_count in over))
+    longest = sorted(zip([chapter_path.stem for chapter_path in CHAPTERS], counts),
                      key=lambda r: -r[1])[:3]
-    print("  longest: " + ", ".join(f"{s} {c:,}" for s, c in longest))
+    print("  longest: " + ", ".join(f"{chapter_name} {word_count:,}" for chapter_name, word_count in longest))
 
 
 def targets():
     """Distance to the author's targets, per band and for the book."""
-    pg = load("prose_grade.py")
+    prose_grader = load("prose_grade.py")
     rule("2. AGAINST TARGET (reading grade by band, Lexile %d)" % LEXILE_TARGET)
-    book_length(pg)
+    book_length(prose_grader)
 
     rows = []
-    for p in CHAPTERS:
-        m = pg.measure(p.read_text(encoding="utf-8"), floor=10)
-        if m:
+    for chapter_path in CHAPTERS:
+        measurements = prose_grader.measure(chapter_path.read_text(encoding="utf-8"), floor=10)
+        if measurements:
             # Also measure the chapter as a reader meets it, transcript
             # included. The graded figure strips chat, which is right for
             # judging the prose, but in the last five chapters chat is a
             # quarter to two fifths of the words and the reader reads it.
-            orig = pg.strip_transcript
-            pg.strip_transcript = lambda x: (x, 0.0)
+            orig = prose_grader.strip_transcript
+            prose_grader.strip_transcript = lambda x: (x, 0.0)
             try:
-                as_read = pg.measure(p.read_text(encoding="utf-8"), floor=10)
+                as_read = prose_grader.measure(chapter_path.read_text(encoding="utf-8"), floor=10)
             finally:
-                pg.strip_transcript = orig
-            rows.append((p.stem, m["fk"], m["lexile"],
-                         as_read["fk"] if as_read else m["fk"]))
-    whole = pg.measure(BOOK.read_text(encoding="utf-8"))
+                prose_grader.strip_transcript = orig
+            rows.append((chapter_path.stem, measurements["fk"], measurements["lexile"],
+                         as_read["fk"] if as_read else measurements["fk"]))
+    whole = prose_grader.measure(BOOK.read_text(encoding="utf-8"))
 
     print(f"\n  book       F-K {whole['fk']:5.1f}   Lexile {whole['lexile']:7.1f}")
     print(f"  target     F-K {FK_BOOK_TARGET:5.1f}   Lexile {LEXILE_TARGET:7.1f}")
@@ -338,23 +338,23 @@ def targets():
     print(f"  {'band':<12}{'chapters':<12}{'floor':>7}{'average':>9}{'':>3}{'under floor'}")
     print("  " + "-" * 62)
 
-    for lo, hi, floor, ceil in FK_BANDS:
-        got = [r for r in rows if lo <= int(r[0][:2]) <= hi]
+    for first_chapter, last_chapter, floor, ceil in FK_BANDS:
+        got = [row for row in rows if first_chapter <= int(row[0][:2]) <= last_chapter]
         if not got:
             continue
-        avg = sum(r[1] for r in got) / len(got)
-        low = sorted((r for r in got if r[1] < floor), key=lambda r: r[1])
-        high = sorted((r for r in got if r[3] > ceil), key=lambda r: -r[3])
+        avg = sum(row[1] for row in got) / len(got)
+        low = sorted((row for row in got if row[1] < floor), key=lambda r: r[1])
+        high = sorted((row for row in got if row[3] > ceil), key=lambda r: -r[3])
         mark = "" if avg >= floor else "  <-- band under floor"
         # Three decimals in the failing list. At 5.496 against a floor of 5.5
         # both the one- and two-decimal forms printed "5.5" under a floor
         # printed as 5.5, which reads as a broken script rather than a near
         # miss. A chapter named here should show why it was named.
-        names = ", ".join(f"{r[0][:2]} ({r[1]:.3f})" for r in low) or "none"
-        print(f"  {str(lo) + '-' + str(hi):<12}{len(got):<12}{floor:>7.1f}{avg:>9.2f}{mark}")
+        names = ", ".join(f"{row[0][:2]} ({row[1]:.3f})" for row in low) or "none"
+        print(f"  {str(first_chapter) + '-' + str(last_chapter):<12}{len(got):<12}{floor:>7.1f}{avg:>9.2f}{mark}")
         print(f"  {'':<12}{'':<12}{'':>7}{'':>9}   {names}")
         if high:
-            over = ", ".join(f"{r[0][:2]} ({r[3]:.1f})" for r in high)
+            over = ", ".join(f"{row[0][:2]} ({row[3]:.1f})" for row in high)
             print(f"  {'':<12}{'':<12}{'':>7}{'':>9}   over the "
                   f"{ceil:.0f} ceiling: {over}")
 
@@ -381,22 +381,22 @@ def dialogue():
     print(run("quote_length.py"))
     print(f"\n  {'chapter':<24}{'quoted':>8}{'spoken':>9}{'narration':>11}{'gap':>7}")
     print("  " + "-" * 57)
-    q_all, gaps = [], []
-    for p in CHAPTERS:
-        out = run("style_report.py", p)
-        q = re.search(r"QUOTED\s+([\d.]+)%", out)
-        sp = re.search(r"spoken\s+mean\s+([\d.]+) words", out)
-        na = re.search(r"narration\s+mean\s+([\d.]+) words", out)
-        if not (q and sp and na):
+    quoted_values, gaps = [], []
+    for chapter_path in CHAPTERS:
+        out = run("style_report.py", chapter_path)
+        quoted_match = re.search(r"QUOTED\s+([\d.]+)%", out)
+        spoken_match = re.search(r"spoken\s+mean\s+([\d.]+) words", out)
+        narrated_match = re.search(r"narration\s+mean\s+([\d.]+) words", out)
+        if not (quoted_match and spoken_match and narrated_match):
             continue
-        qv, sv, nv = float(q.group(1)), float(sp.group(1)), float(na.group(1))
-        q_all.append(qv)
-        gaps.append(nv - sv)
-        print(f"  {p.stem:<24}{qv:7.1f}%{sv:9.1f}{nv:11.1f}{nv - sv:7.1f}")
-    if q_all:
+        quoted_value, spoken_value, narrated_value = float(quoted_match.group(1)), float(spoken_match.group(1)), float(narrated_match.group(1))
+        quoted_values.append(quoted_value)
+        gaps.append(narrated_value - spoken_value)
+        print(f"  {chapter_path.stem:<24}{quoted_value:7.1f}%{spoken_value:9.1f}{narrated_value:11.1f}{narrated_value - spoken_value:7.1f}")
+    if quoted_values:
         import statistics as st
         print("  " + "-" * 57)
-        print(f"  {'median':<24}{st.median(q_all):7.1f}%"
+        print(f"  {'median':<24}{st.median(quoted_values):7.1f}%"
               f"{'':9}{'':11}{st.median(gaps):7.1f}")
     print("\n  quoted    share of words inside quotation marks")
     print("  gap       narration mean minus spoken mean, in words. A wide gap is")
@@ -445,10 +445,10 @@ def integrity():
             ("Em dashes and the hard-line-break convention",
              "check_edits.py", ())):
         out = run(script, *args)
-        lines = [l for l in out.split("\n") if l.strip()]
+        lines = [line for line in out.split("\n") if line.strip()]
         print(f"\n  {label}")
-        for l in lines:
-            print(f"    {l}")
+        for line in lines:
+            print(f"    {line}")
 
 
 class Tee:
@@ -457,12 +457,12 @@ class Tee:
     def __init__(self):
         self.lines = []
 
-    def run(self, fn):
+    def run(self, function):
         import contextlib
         import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            fn()
+            function()
         out = buf.getvalue()
         print(out, end="")
         self.lines.extend(out.split("\n"))
@@ -521,16 +521,16 @@ def scorecard(seen):
     rule("SCORECARD")
     bad, good, context = [], 0, ""
     for line in seen:
-        s = line.rstrip()
-        if not s.strip():
+        stripped_line = line.rstrip()
+        if not stripped_line.strip():
             continue
-        if re.match(r"^\d+\. [A-Z]", s.strip()):
-            context = s.strip()
+        if re.match(r"^\d+\. [A-Z]", stripped_line.strip()):
+            context = stripped_line.strip()
             continue
-        if any(re.search(p, s) for p in FAIL_MARKERS) and \
-                not any(re.search(p, s) for p in SKIP):
-            bad.append((context, s.strip()))
-        elif any(re.search(p, s, re.I) for p in PASS_MARKERS):
+        if any(re.search(pattern, stripped_line) for pattern in FAIL_MARKERS) and \
+                not any(re.search(pattern, stripped_line) for pattern in SKIP):
+            bad.append((context, stripped_line.strip()))
+        elif any(re.search(pattern, stripped_line, re.I) for pattern in PASS_MARKERS):
             good += 1
 
     total = good + len(bad)
@@ -551,28 +551,28 @@ def scorecard(seen):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--table", action="store_true", help="only the per-chapter table")
-    ap.add_argument("--targets", action="store_true", help="only the table and targets")
-    ap.add_argument("--brief", action="store_true",
+    parser.add_argument("--table", action="store_true", help="only the per-chapter table")
+    parser.add_argument("--targets", action="store_true", help="only the table and targets")
+    parser.add_argument("--brief", action="store_true",
                     help="skip voice separation and citation checking")
-    ap.add_argument("--one", metavar="CHAPTER",
+    parser.add_argument("--one", metavar="CHAPTER",
                     help="one chapter, down the page, each metric against its goal")
-    a = ap.parse_args()
+    args = parser.parse_args()
 
-    if a.one:
-        return one_chapter(a.one)
+    if args.one:
+        return one_chapter(args.one)
 
     if not BOOK.exists():
         sys.exit(f"{BOOK.name} is missing; run build_manuscript.py first")
 
     tee = Tee()
     tee.run(table)
-    if a.table:
+    if args.table:
         return
     tee.run(targets)
-    if a.targets:
+    if args.targets:
         return
     tee.run(grade_vs_corpus)
     tee.run(dialogue)
@@ -581,7 +581,7 @@ def main():
     tee.run(absolutes)
     tee.run(banned)
     tee.run(register)
-    if not a.brief:
+    if not args.brief:
         tee.run(voice)
     tee.run(integrity)
     scorecard(tee.lines)

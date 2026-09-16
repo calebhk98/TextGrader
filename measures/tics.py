@@ -166,11 +166,11 @@ PATTERNS = {
     "sentence opens She/He + verb": r"(?:^|(?<=[.!?]\s))(?:She|He) [a-z]+s\b",
 }
 
-def words(t): return re.findall(r"[A-Za-z']+", t)
+def words(text): return re.findall(r"[A-Za-z']+", text)
 
-def strip_gut(t):
-    m = re.search(r"\*\*\* ?START OF.*?\*\*\*(.*?)\*\*\* ?END OF", t, re.S)
-    return m.group(1) if m else t
+def strip_gut(text):
+    match = re.search(r"\*\*\* ?START OF.*?\*\*\*(.*?)\*\*\* ?END OF", text, re.S)
+    return match.group(1) if match else text
 
 # Every pattern is matched case-insensitively except the sentence-opening one,
 # which needs the capital to find a sentence start. Without this the counter
@@ -184,36 +184,36 @@ for _n, _t in NUMBER_TARGET.items():
 
 
 def measure(text):
-    n = len(words(text))
+    word_count = len(words(text))
     out = {}
-    for k, p in PATTERNS.items():
-        flags = re.M if k in CASE_SENSITIVE else re.M | re.I
-        out[k] = 100000 * len(re.findall(p, text, flags)) / n if n else 0.0
-    return out, n
+    for name, pattern in PATTERNS.items():
+        flags = re.M if name in CASE_SENSITIVE else re.M | re.I
+        out[name] = 100000 * len(re.findall(pattern, text, flags)) / word_count if word_count else 0.0
+    return out, word_count
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--show")
-    a = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--show")
+    args = parser.parse_args()
 
-    book = "\n".join(Path(f).read_text() for f in sorted(CHAPTERS_DIR.glob("*.md")))
-    if a.show:
-        pat = PATTERNS.get(a.show) or a.show
-        flags = 0 if a.show in CASE_SENSITIVE else re.I
-        for f in sorted(CHAPTERS_DIR.glob("*.md")):
-            for i, line in enumerate(Path(f).read_text().split("\n"), 1):
-                for m in re.finditer(pat, line, flags):
-                    s = max(0, m.start()-60)
-                    print(f"{Path(f).stem}:{i}  ...{line[s:m.end()+60]}...")
+    book = "\n".join(Path(chapter_path).read_text() for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")))
+    if args.show:
+        pat = PATTERNS.get(args.show) or args.show
+        flags = 0 if args.show in CASE_SENSITIVE else re.I
+        for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+            for line_number, line in enumerate(Path(chapter_path).read_text().split("\n"), 1):
+                for match in re.finditer(pat, line, flags):
+                    sentence = max(0, match.start()-60)
+                    print(f"{Path(chapter_path).stem}:{line_number}  ...{line[sentence:match.end()+60]}...")
         return
 
-    bk, bn = measure(book)
+    book_count, book_rate = measure(book)
     ref = []
-    for d in CORPUS:
-        for f in sorted(Path(d).rglob("*.txt")):
-            if "stripped" in f.stem: continue
-            r, n = measure(strip_gut(f.read_text(encoding="utf-8", errors="replace")))
-            if n > 20000: ref.append(r)
+    for directory in CORPUS:
+        for chapter_path in sorted(Path(directory).rglob("*.txt")):
+            if "stripped" in chapter_path.stem: continue
+            row, word_count = measure(strip_gut(chapter_path.read_text(encoding="utf-8", errors="replace")))
+            if word_count > 20000: ref.append(row)
 
     print(f"\n{len(ref)} reference books. Rates per 100,000 words.\n")
     if not ref:
@@ -223,23 +223,23 @@ def main():
     print(f"  {'construction':<32}{'book':>8}{'target':>9}{'corpus med':>12}{'corpus max':>12}{'':>3}")
     print("  " + "-"*78)
     rows, over = [], 0
-    for k in PATTERNS:
-        vals = sorted(r[k] for r in ref)
+    for name in PATTERNS:
+        vals = sorted(row[name] for row in ref)
         med = st.median(vals) if vals else None
-        mx = max(vals) if vals else None
-        t = TARGETS.get(k)
-        excess = bk[k]/t if t else 0
-        rows.append((excess, k, bk[k], t, med, mx))
-    for excess, k, b, t, med, mx in sorted(rows, reverse=True):
+        corpus_maximum = max(vals) if vals else None
+        total = TARGETS.get(name)
+        excess = book_count[name]/total if total else 0
+        rows.append((excess, name, book_count[name], total, med, corpus_maximum))
+    for excess, name, benchmark, total, med, corpus_maximum in sorted(rows, reverse=True):
         med_text = f"{med:.1f}" if med is not None else "n/a"
-        max_text = f"{mx:.1f}" if mx is not None else "n/a"
-        if t is None:
-            print(f"  {k:<32}{b:>8.1f}{'-':>9}{med_text:>12}{max_text:>12}")
+        max_text = f"{corpus_maximum:.1f}" if corpus_maximum is not None else "n/a"
+        if total is None:
+            print(f"  {name:<32}{benchmark:>8.1f}{'-':>9}{med_text:>12}{max_text:>12}")
             continue
-        ok = b <= t
-        over += 0 if ok else 1
-        print(f"  {k:<32}{b:>8.1f}{t:>9.1f}{med_text:>12}{max_text:>12}"
-              f"{'  pass' if ok else '  CUT ' + f'{100*(1-t/b):.0f}%'}")
+        within_range = benchmark <= total
+        over += 0 if within_range else 1
+        print(f"  {name:<32}{benchmark:>8.1f}{total:>9.1f}{med_text:>12}{max_text:>12}"
+              f"{'  pass' if within_range else '  CUT ' + f'{100*(1-total/benchmark):.0f}%'}")
     print(f"\n  {over} of {len(TARGETS)} still over target.")
     print("  The target is a reasonable rate, not the corpus. Several of these stay")
     print("  above every reference book after the cut, which is intended: a voice is")

@@ -35,17 +35,17 @@ SKIP_FILES = {"_TEMPLATE.md", "_DIFFERENTIATION.md", "_ALLOCATIONS.md",
               "CHARACTER_SHEETS.md"}
 
 
-def norm(t):
-    t = t.replace("“", '"').replace("”", '"')
-    t = t.replace("‘", "'").replace("’", "'").replace("—", "-")
-    return re.sub(r"\s+", " ", t).lower().strip()
+def norm(text):
+    text = text.replace("“", '"').replace("”", '"')
+    text = text.replace("‘", "'").replace("’", "'").replace("—", "-")
+    return re.sub(r"\s+", " ", text).lower().strip()
 
 
 def load_manuscript(root):
     blob = []
-    for f in SOURCES:
-        if f.is_file():
-            blob.append(f.read_text(encoding="utf-8", errors="replace"))
+    for source_path in SOURCES:
+        if source_path.is_file():
+            blob.append(source_path.read_text(encoding="utf-8", errors="replace"))
     if not blob:
         sys.exit(f"error: no manuscript files under {root}")
     return norm(" ".join(blob))
@@ -60,44 +60,44 @@ CITES = re.compile(r"(chapters/\w+\.md|CHAPTERS_\d+_\d+_v2\.md|MANUSCRIPT_FULL\.
 
 def quotations(text):
     """Yield (line_no, fragment) for quoted text sitting next to a citation."""
-    for i, line in enumerate(text.split("\n"), 1):
+    for line_number, line in enumerate(text.split("\n"), 1):
         if not CITES.search(line):
             continue
-        for m in re.finditer(r'"([^"]{12,400})"|“([^”]{12,400})”', line):
-            q = m.group(1) or m.group(2)
-            q = re.sub(r"\*+|_+|`+", "", q)          # markdown emphasis inside quotes
+        for match in re.finditer(r'"([^"]{12,400})"|“([^”]{12,400})”', line):
+            quotation = match.group(1) or match.group(2)
+            quotation = re.sub(r"\*+|_+|`+", "", quotation)          # markdown emphasis inside quotes
             # An assembled exchange is several real quotes joined; check each.
-            for part in re.split(r"'\s+[A-Z][a-z]+\s+(?:says|said)[,.]?\s+'|\"\s+\"", q):
-                yield i, part
+            for part in re.split(r"'\s+[A-Z][a-z]+\s+(?:says|said)[,.]?\s+'|\"\s+\"", quotation):
+                yield line_number, part
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("sheets", nargs="*", type=Path)
-    ap.add_argument("--root", type=Path, default=HERE)
-    ap.add_argument("--min-words", type=int, default=5,
+    parser.add_argument("sheets", nargs="*", type=Path)
+    parser.add_argument("--root", type=Path, default=HERE)
+    parser.add_argument("--min-words", type=int, default=5,
                     help="ignore quotations shorter than this (default 5)")
-    a = ap.parse_args()
+    args = parser.parse_args()
 
-    book = load_manuscript(a.root)
-    files = a.sheets or sorted(CHARACTERS_DIR.glob("*.md"))
+    book = load_manuscript(args.root)
+    files = args.sheets or sorted(CHARACTERS_DIR.glob("*.md"))
 
     checked = missing = 0
     bad = {}
-    for f in files:
-        if f.name in SKIP_FILES:
+    for sheet_path in files:
+        if sheet_path.name in SKIP_FILES:
             continue
-        for line_no, quote in quotations(f.read_text(encoding="utf-8")):
+        for line_no, quote in quotations(sheet_path.read_text(encoding="utf-8")):
             # An ellipsis joins two separate fragments; check each on its own.
             for frag in re.split(r"\.\.\.|…", quote):
                 frag = frag.strip(" ,.;:-\u2019\u2018'\"")
-                if len(frag.split()) < a.min_words:
+                if len(frag.split()) < args.min_words:
                     continue
                 checked += 1
                 if norm(frag) not in book:
                     missing += 1
-                    bad.setdefault(f.name, []).append((line_no, frag))
+                    bad.setdefault(sheet_path.name, []).append((line_no, frag))
 
     for name in sorted(bad):
         print(f"\n{name}")

@@ -71,28 +71,28 @@ if BANNED_CONSTRUCTIONS is not None:
 
 def scan(paths):
     hits = []
-    for f in paths:
-        for i, line in enumerate(Path(f).read_text(encoding="utf-8").split("\n"), 1):
-            for rx, name, why in BANNED:
-                for m in re.finditer(rx, line, re.I):
-                    hits.append((Path(f).stem, i, name, why, line, m.start()))
+    for chapter_path in paths:
+        for line_number, line in enumerate(Path(chapter_path).read_text(encoding="utf-8").split("\n"), 1):
+            for pattern, name, why in BANNED:
+                for match in re.finditer(pattern, line, re.I):
+                    hits.append((Path(chapter_path).stem, line_number, name, why, line, match.start()))
     return hits
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--show", type=int)
-    a = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--show", type=int)
+    args = parser.parse_args()
 
     paths = sorted(glob.glob(str(CHAPTERS_DIR / "*.md")))
     hits = scan(paths)
 
-    if a.show is not None:
-        if 1 <= a.show <= len(hits):
-            stem, ln, name, why, line, _ = hits[a.show - 1]
-            print(f"{stem}:{ln}\n\n{line}\n\n  [{name}] {why}")
+    if args.show is not None:
+        if 1 <= args.show <= len(hits):
+            stem, line_number, name, why, line, _ = hits[args.show - 1]
+            print(f"{stem}:{line_number}\n\n{line}\n\n  [{name}] {why}")
         else:
-            print(f"no entry {a.show}; there are {len(hits)}")
+            print(f"no entry {args.show}; there are {len(hits)}")
         return
 
     print(f"\n  {len(BANNED)} ruled-out phrases, {len(paths)} chapters\n")
@@ -100,10 +100,10 @@ def main():
         print("  none present.\n")
         return 0
 
-    for n, (stem, ln, name, why, line, col) in enumerate(hits, 1):
-        s = max(0, col - 60)
-        print(f"  {n}. {stem}:{ln}  [{name}]")
-        print(f"     ...{line[s:col + 80]}...")
+    for hit_number, (stem, line_number, name, why, line, col) in enumerate(hits, 1):
+        sentence = max(0, col - 60)
+        print(f"  {hit_number}. {stem}:{line_number}  [{name}]")
+        print(f"     ...{line[sentence:col + 80]}...")
     print(f"\n  {len(hits)} present. Each one is a ruling already made.\n")
     return 1
 
