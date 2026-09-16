@@ -195,9 +195,8 @@ whole document against a corpus of whole documents still compares. Declaring
 `python3 benchmark.py` times every step on your machine and your text. Figures
 below are one core, 309,000 words, 17,654 sentences, pySBD segmentation.
 
-Anything over a second is called out, per the cost column in
-`--list-metrics`, and `grade.py` attaches a warning to any metric that takes
-more than a second on the document in front of it.
+Anything over a second is called out, both in the cost column of
+`--list-metrics` and at run time.
 
 | shared pipeline step | seconds | note |
 | --- | ---: | --- |
@@ -205,27 +204,37 @@ more than a second on the document in front of it.
 | **sentence segmentation (pySBD)** | **5.3** | `text_processing.segmenter: "builtin"` does the same job in **0.25s** with cruder abbreviation handling |
 | dialogue view | 1.3 | segmenting the spoken channel |
 | narration view | 3.7 | segmenting the narrated channel |
-| **spaCy parse** | **27.7** | `en_core_web_sm`, `ner` disabled; shared by all 13 parse metrics |
+| **spaCy parse** | **28.0** | `en_core_web_sm`, `ner` disabled; shared by all 13 parse metrics |
 
-Individual metrics, once the pipeline is warm: 37 of 57 are under half a second.
+Individual metrics, once the pipeline is warm: 43 of 57 are under half a second.
 The ones that are not:
 
 | metric | seconds |
 | --- | ---: |
-| `chapter_zscores` | 2.2 (the other two `book_drift` metrics then cost ~0) |
-| `repeated_ngrams` | 3.5 |
-| `dialogue_turn_lengths` | 1.5 |
-| `duplicate_sentence_clusters` | 1.4 |
-| `word_rarity`, `punctuation_profile`, `tense_consistency` | ~1.0 |
+| `repeated_ngrams` | 3.8 |
+| `chapter_zscores` | 2.3 (the other two `book_drift` metrics then cost about 0) |
+| `duplicate_sentence_clusters` | 1.3 (lexical fallback; embeddings are slower) |
+| `dialogue_turn_lengths` | 1.3 |
+| `punctuation_profile`, `word_rarity`, `tense_consistency`, `local_repetition` | 0.8 to 0.9 |
 
-Practical guidance:
+Totals on the same 309,000-word text:
 
-* A full run with everything except the parse metrics is roughly **20 seconds**
-  on a 300,000-word novel, most of it segmentation.
+| run | seconds |
+| --- | ---: |
+| shipped defaults (9 metrics) | ~16 |
+| every metric except the parse ones (44) | ~29 |
+| all 57 metrics | ~61 |
+
+Roughly two thirds of a no-parse run is sentence segmentation, shared by every
+metric rather than paid per metric. Practical guidance:
+
 * Turning on any parse metric adds the 28-second parse once, not once per
-  metric. Enabling all 13 costs about 35 seconds in total.
-* For a fast revision loop, use `--comparison-unit chapter` on one chapter at a
-  time, or set `text_processing.segmenter: "builtin"`.
+  metric; all 13 together cost about 32 seconds including their own work.
+* For a fast revision loop, grade one chapter at a time with
+  `--comparison-unit chapter`, or set `text_processing.segmenter: "builtin"`,
+  which takes a no-parse run of everything from ~29s to ~23s.
+* `grade.py` attaches a warning to any metric that took over a second on the
+  document in front of it, so a slow run always says which metric was slow.
 * `nlp.max_words` refuses a parse above a size you choose, rather than stalling.
 
 
