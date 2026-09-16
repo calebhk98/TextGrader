@@ -15,15 +15,15 @@ reading grade among the books that are at least a quarter dialogue.
 """
 
 import re
-import statistics as st
+import statistics as statistics
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import importlib.util
 spec = importlib.util.spec_from_file_location("pg", Path(__file__).resolve().parent / "prose_grade.py")
-pg = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(pg)
+prose_grade = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(prose_grade)
 
 QUOTE = re.compile(
     "\u201c([^\u201c\u201d]{2,600})\u201d"   # curly, the Gutenberg default
@@ -51,67 +51,67 @@ def spoken_and_narrated(text):
     either.
     """
     utterances, current, last, out = [], [], 0, []
-    for m in QUOTE.finditer(text):
-        gap = text[last:m.start()]
+    for match in QUOTE.finditer(text):
+        gap = text[last:match.start()]
         out.append(gap)
         if current and re.search(r"[.!?]", gap):
             utterances.append(" ".join(current))
             current = []
-        current.append(m.group(1) or m.group(2) or "")
-        last = m.end()
+        current.append(match.group(1) or match.group(2) or "")
+        last = match.end()
     if current:
         utterances.append(" ".join(current))
     out.append(text[last:])
     return "\n\n".join(utterances), " ".join(out)
 
 
-def sent_lengths(t):
-    return [len(pg.words(s)) for p in pg.paragraphs(t) for s in pg.sents(p)
-            if pg.words(s)]
+def sent_lengths(text):
+    return [len(prose_grade.words(sentence)) for paragraph in prose_grade.paragraphs(text) for sentence in prose_grade.sents(paragraph)
+            if prose_grade.words(sentence)]
 
 
 def main():
-    dirs = [Path(d) for d in sys.argv[1:]]
+    dirs = [Path(data) for data in sys.argv[1:]]
     if not dirs:
         sys.exit(__doc__)
     rows = []
-    for d in dirs:
-        for f in sorted(d.iterdir()):
-            if not f.is_file() or "stripped" in f.name:
+    for data in dirs:
+        for chapter_path in sorted(data.iterdir()):
+            if not chapter_path.is_file() or "stripped" in chapter_path.name:
                 continue
             try:
-                t = f.read_text(encoding="utf-8", errors="ignore")
+                text = chapter_path.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
-            t = pg.strip_gutenberg(t) if hasattr(pg, "strip_gutenberg") else t
-            m = pg.measure(t)
-            if not m:
+            text = prose_grade.strip_gutenberg(text) if hasattr(prose_grade, "strip_gutenberg") else text
+            match = prose_grade.measure(text)
+            if not match:
                 continue
-            sp, na = spoken_and_narrated(t)
-            sw, nw = len(pg.words(sp)), len(pg.words(na))
-            if not sw:
+            spoken, narrated = spoken_and_narrated(text)
+            spoken_words, narrated_words = len(prose_grade.words(spoken)), len(prose_grade.words(narrated))
+            if not spoken_words:
                 continue
-            sl, nl = sent_lengths(sp), sent_lengths(na)
+            spoken_lengths, narrated_lengths = sent_lengths(spoken), sent_lengths(narrated)
             rows.append({
-                "name": f.stem[:34],
-                "quoted": 100 * sw / (sw + nw),
-                "spoken": st.fmean(sl) if sl else 0,
-                "narr": st.fmean(nl) if nl else 0,
-                "fk": m["fk"], "lexile": m["lexile"], "wps": m["wps"],
-                "slcv": m["slcv"], "u10": m["u10"],
+                "name": chapter_path.stem[:34],
+                "quoted": 100 * spoken_words / (spoken_words + narrated_words),
+                "spoken": statistics.fmean(spoken_lengths) if spoken_lengths else 0,
+                "narr": statistics.fmean(narrated_lengths) if narrated_lengths else 0,
+                "fk": match["fk"], "lexile": match["lexile"], "wps": match["wps"],
+                "slcv": match["slcv"], "u10": match["u10"],
             })
 
-    talky = [r for r in rows if r["quoted"] >= 25]
-    talky.sort(key=lambda r: -r["fk"])
+    talky = [result for result in rows if result["quoted"] >= 25]
+    talky.sort(key=lambda row: -row["fk"])
 
-    def show(title, rs):
+    def show(title, rows_to_show):
         print(f"\n{title}")
         print(f"  {'book':<36}{'quoted':>8}{'spoken':>8}{'narr':>7}"
               f"{'w/sent':>8}{'slCV':>7}{'u10':>7}{'F-K':>6}{'Lexile':>8}")
-        for r in rs:
-            print(f"  {r['name']:<36}{r['quoted']:7.1f}%{r['spoken']:8.1f}"
-                  f"{r['narr']:7.1f}{r['wps']:8.1f}{r['slcv']:7.1f}"
-                  f"{r['u10']:7.1f}{r['fk']:6.1f}{r['lexile']:8.0f}")
+        for row in rows_to_show:
+            print(f"  {row['name']:<36}{row['quoted']:7.1f}%{row['spoken']:8.1f}"
+                  f"{row['narr']:7.1f}{row['wps']:8.1f}{row['slcv']:7.1f}"
+                  f"{row['u10']:7.1f}{row['fk']:6.1f}{row['lexile']:8.0f}")
 
     print(f"{len(rows)} books, {len(talky)} of them at least a quarter dialogue.")
     show("HIGHEST reading grade among the talky books", talky[:4])

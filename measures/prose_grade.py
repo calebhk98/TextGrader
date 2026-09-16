@@ -7,7 +7,7 @@ floors that reward choppier writing: chapter 8, the most grown-up chapter in
 the book, fails there partly for not having ENOUGH short sentences.
 
 This grades differently. Every measure is compared against 23 real books, and
-reported as a percentile in that field plus a straight win/loss against one
+reported as a percentile in that field plus a straight type_token_windows/loss against one
 named book. The default benchmark is Peter Pan, which is below the target
 audience, so losing to it on a measure is a clear signal rather than a
 judgement call.
@@ -41,7 +41,7 @@ import argparse
 import math
 import json
 import re
-import statistics as st
+import statistics as statistics
 import sys
 from pathlib import Path
 
@@ -125,18 +125,18 @@ MONITOR = {
 }
 
 
-def syllables(w):
-    w = w.lower()
-    n = len(re.findall(r"[aeiouy]+", w))
-    if w.endswith("e") and not w.endswith(("le", "ee")) and n > 1:
-        n -= 1
-    return max(n, 1)
+def syllables(word):
+    word = word.lower()
+    count = len(re.findall(r"[aeiouy]+", word))
+    if word.endswith("e") and not word.endswith(("le", "ee")) and count > 1:
+        count -= 1
+    return max(count, 1)
 
 
 def strip_transcript(text):
     """Remove chat-transcript lines, and report what share of the words they were."""
     lines = text.split("\n")
-    kept = [l for l in lines if not TRANSCRIPT.match(l.strip())]
+    kept = [line for line in lines if not TRANSCRIPT.match(line.strip())]
     total = len(re.findall(r"[A-Za-z][A-Za-z']*", text))
     left = len(re.findall(r"[A-Za-z][A-Za-z']*", "\n".join(kept)))
     share = 100 * (total - left) / total if total else 0.0
@@ -193,8 +193,8 @@ def lexile(sent_lengths, lower_words):
     if not freq or not sent_lengths or not lower_words:
         return None
     RARE = 0.05  # per million: about one appearance across a twenty-book shelf
-    lwf = [math.log10(max(freq.get(w, RARE), RARE) * 5) for w in lower_words]
-    raw = 9.82247 * math.log(st.fmean(sent_lengths)) - 2.14634 * st.fmean(lwf)
+    log_word_frequencies = [math.log10(max(freq.get(word_count, RARE), RARE) * 5) for word_count in lower_words]
+    raw = 9.82247 * math.log(statistics.fmean(sent_lengths)) - 2.14634 * statistics.fmean(log_word_frequencies)
     return 46.45 * raw + 102.45
 
 
@@ -209,100 +209,100 @@ def measure(text, floor=40):
     """
     full_words = len(words(text))
     text, transcript_share = strip_transcript(text)
-    paras = [p for p in paragraphs(text) if p.strip() != "---"]
-    sl_all = [(s, len(words(s))) for p in paras for s in sents(p)]
-    sl_all = [(s, n) for s, n in sl_all if n]
-    if len(sl_all) < floor:
+    paras = [paragraph for paragraph in paragraphs(text) if paragraph.strip() != "---"]
+    sentence_data = [(sentence, len(words(sentence))) for paragraph in paras for sentence in sents(paragraph)]
+    sentence_data = [(sentence, word_count) for sentence, word_count in sentence_data if word_count]
+    if len(sentence_data) < floor:
         return None
-    ss = [s for s, _ in sl_all]
-    sl = [n for _, n in sl_all]
-    w = words(text)
-    lw = [x.lower() for x in w]
-    n_s, n_w = len(sl), len(w)
+    sentences = [sentence for sentence, _ in sentence_data]
+    sentence_lengths = [word_count for _, word_count in sentence_data]
+    word_tokens = words(text)
+    long_words = [length.lower() for length in word_tokens]
+    sentence_count, word_count = len(sentence_lengths), len(word_tokens)
 
-    runs = inrun = 0
-    for v in sl:
-        if v < 8:
+    runs = short_run_sentences = 0
+    for value in sentence_lengths:
+        if value < 8:
             runs += 1
         else:
-            inrun += runs if runs >= 3 else 0
+            short_run_sentences += runs if runs >= 3 else 0
             runs = 0
-    inrun += runs if runs >= 3 else 0
+    short_run_sentences += runs if runs >= 3 else 0
 
-    win = [len(set(lw[i:i + 1000])) / 1000 for i in range(0, len(lw) - 1000, 1000)]
-    wps = st.fmean(sl)
+    type_token_windows = [len(set(long_words[index:index + 1000])) / 1000 for index in range(0, len(long_words) - 1000, 1000)]
+    words_per_sentence = statistics.fmean(sentence_lengths)
 
     # Paragraph shape. A paragraph with no words in it is a stray marker line,
     # not a paragraph, and would drag both averages down.
-    para_s, para_w = [], []
-    for p in paras:
-        n = [x for x in sents(p) if words(x)]
-        if n:
-            para_s.append(len(n))
-            para_w.append(len(words(p)))
-    and2 = sum(1 for s in ss if len(re.findall(r"\band\b", s.lower())) >= 2)
-    negative = sum(1 for s in ss if NEGATIVE.search(s))
+    paragraph_sentence_counts, paragraph_word_counts = [], []
+    for paragraph in paras:
+        paragraph_sentences = [sentence for sentence in sents(paragraph) if words(sentence)]
+        if paragraph_sentences:
+            paragraph_sentence_counts.append(len(paragraph_sentences))
+            paragraph_word_counts.append(len(words(paragraph)))
+    multiple_and_count = sum(1 for sentence in sentences if len(re.findall(r"\band\b", sentence.lower())) >= 2)
+    negative = sum(1 for sentence in sentences if NEGATIVE.search(sentence))
 
-    n_chars = sum(len(x) for x in w)
+    character_count = sum(len(length) for length in word_tokens)
 
     return {
-        "fk": 0.39 * wps + 11.8 * (sum(syllables(x) for x in w) / n_w) - 15.59,
-        "ari": 4.71 * (n_chars / n_w) + 0.5 * wps - 21.43,
-        "lexile": lexile(sl, lw),
-        "wps": wps,
-        "sttr": 100 * st.fmean(win) if win else None,
-        "commas": text.count(",") / n_s,
-        "subord": 100 * sum(1 for s in ss if re.search(SUBORDINATOR, s, re.I)) / n_s,
-        "relcl": 100 * sum(1 for s in ss if re.search(RELATIVE, s, re.I)) / n_s,
-        "b2035": 100 * sum(1 for v in sl if 20 < v <= 35) / n_s,
-        "long7": 100 * sum(1 for x in w if len(x) >= 7) / n_w,
-        "u10": 100 * sum(1 for v in sl if v < 10) / n_s,
-        "simple": 100 * sum(1 for s in ss
-                            if not re.search(SUBORDINATOR, s, re.I)
-                            and not re.search(RELATIVE, s, re.I)) / n_s,
-        "shortruns": 100 * inrun / n_s,
-        "top100": 100 * sum(1 for x in lw if x in TOP100) / n_w,
-        "slcv": 100 * st.stdev(sl) / wps if len(sl) > 1 else 0.0,
-        "wpp": st.fmean(para_w) if para_w else 0.0,
-        "spp": st.fmean(para_s) if para_s else 0.0,
-        "wlen": st.fmean([len(x) for x in w]),
-        "front": 100 * sum(1 for s in ss if FRONTLOAD.match(s.strip())) / n_s,
-        "and2": 100 * and2 / n_s,
-        "negative": 100 * negative / n_s,
-        "andrate": 100 * lw.count("and") / n_w,
-        "_words": n_w,
+        "fk": 0.39 * words_per_sentence + 11.8 * (sum(syllables(length) for length in word_tokens) / word_count) - 15.59,
+        "ari": 4.71 * (character_count / word_count) + 0.5 * words_per_sentence - 21.43,
+        "lexile": lexile(sentence_lengths, long_words),
+        "wps": words_per_sentence,
+        "sttr": 100 * statistics.fmean(type_token_windows) if type_token_windows else None,
+        "commas": text.count(",") / sentence_count,
+        "subord": 100 * sum(1 for sentence in sentences if re.search(SUBORDINATOR, sentence, re.I)) / sentence_count,
+        "relcl": 100 * sum(1 for sentence in sentences if re.search(RELATIVE, sentence, re.I)) / sentence_count,
+        "b2035": 100 * sum(1 for value in sentence_lengths if 20 < value <= 35) / sentence_count,
+        "long7": 100 * sum(1 for length in word_tokens if len(length) >= 7) / word_count,
+        "u10": 100 * sum(1 for value in sentence_lengths if value < 10) / sentence_count,
+        "simple": 100 * sum(1 for sentence in sentences
+                            if not re.search(SUBORDINATOR, sentence, re.I)
+                            and not re.search(RELATIVE, sentence, re.I)) / sentence_count,
+        "shortruns": 100 * short_run_sentences / sentence_count,
+        "top100": 100 * sum(1 for length in long_words if length in TOP100) / word_count,
+        "slcv": 100 * statistics.stdev(sentence_lengths) / words_per_sentence if len(sentence_lengths) > 1 else 0.0,
+        "wpp": statistics.fmean(paragraph_word_counts) if paragraph_word_counts else 0.0,
+        "spp": statistics.fmean(paragraph_sentence_counts) if paragraph_sentence_counts else 0.0,
+        "wlen": statistics.fmean([len(length) for length in word_tokens]),
+        "front": 100 * sum(1 for sentence in sentences if FRONTLOAD.match(sentence.strip())) / sentence_count,
+        "and2": 100 * multiple_and_count / sentence_count,
+        "negative": 100 * negative / sentence_count,
+        "andrate": 100 * long_words.count("and") / word_count,
+        "_words": word_count,
         # The chapter as written, transcript included. Every graded measure
         # excludes chat lines, which is right for reading grade and wrong for
         # length: it made all five chat chapters look hundreds of words short
         # of the floor when only one of them is. Judge length on this.
         "_words_all": full_words,
-        "_sentences": n_s,
-        "_paragraphs": len(para_w),
+        "_sentences": sentence_count,
+        "_paragraphs": len(paragraph_word_counts),
         "_transcript": transcript_share,
     }
 
 
-def strip_gutenberg(t):
-    m = re.search(r"\*\*\* ?START OF.*?\*\*\*(.*?)\*\*\* ?END OF", t, re.S)
-    return m.group(1) if m else t
+def strip_gutenberg(text):
+    match = re.search(r"\*\*\* ?START OF.*?\*\*\*(.*?)\*\*\* ?END OF", text, re.S)
+    return match.group(1) if match else text
 
 
 def build_reference(dirs, out):
     books = {}
-    for d in dirs:
-        for f in sorted(Path(d).rglob("*.txt")):
-            if "stripped" in f.stem:
+    for directory in dirs:
+        for text_path in sorted(Path(directory).rglob("*.txt")):
+            if "stripped" in text_path.stem:
                 continue
-            got = measure(strip_gutenberg(f.read_text(encoding="utf-8", errors="replace")))
+            got = measure(strip_gutenberg(text_path.read_text(encoding="utf-8", errors="replace")))
             if got:
-                books[f.stem] = got
-                print(f"  measured {f.stem} ({got['_words']:,} words)")
+                books[text_path.stem] = got
+                print(f"  measured {text_path.stem} ({got['_words']:,} words)")
     out.write_text(json.dumps(books, indent=1, sort_keys=True), encoding="utf-8")
     print(f"\nwrote {len(books)} books to {out}")
 
 
-def percentile(values, x):
-    return 100 * sum(1 for v in values if v < x) / len(values)
+def percentile(values, candidate):
+    return 100 * sum(1 for value in values if value < candidate) / len(values)
 
 
 def grade(path, ref, benchmark, brief):
@@ -321,48 +321,48 @@ def grade(path, ref, benchmark, brief):
         if got[key] is None:
             skipped.append(label)
             continue
-        vals = [b[key] for b in ref.values()]
-        p = percentile(vals, got[key])
+        vals = [benchmark_value[key] for benchmark_value in ref.values()]
+        path = percentile(vals, got[key])
         if not higher:
-            p = 100 - p
-        pcts.append(p)
+            path = 100 - path
+        pcts.append(path)
         if key in CORE12:
-            core.append(p)
+            core.append(path)
         # >= / <= so a book tied with the benchmark, including the benchmark
         # itself, is not scored as a loss.
         beat = got[key] >= bench[key] if higher else got[key] <= bench[key]
         # Distance from the benchmark in corpus standard deviations, so gaps on
         # measures with different units can be ranked against each other.
-        sd = st.stdev(vals)
-        gap = (bench[key] - got[key]) / sd * (1 if higher else -1)
+        standard_deviation = statistics.stdev(vals)
+        gap = (bench[key] - got[key]) / standard_deviation * (1 if higher else -1)
         if not beat:
             losses.append((-gap, label, got[key], bench[key], gap))
-        lines.append((p, label, got[key], bench[key], beat))
+        lines.append((path, label, got[key], bench[key], beat))
 
     print("=" * 78)
     print(f"{Path(path).name}  |  {got['_words']:,} words  |  "
           f"benchmark: {benchmark}  |  corpus: {len(ref)} books")
-    n_m = len(METRICS) - len(skipped)
-    print(f"\nmaturity percentile (median of {n_m} measures): {st.median(pcts):.0f}"
-          f"      lost to benchmark on {len(losses)} of {n_m}")
-    print(f"  on the original 12 measures: {st.median(core):.0f}")
+    metric_count = len(METRICS) - len(skipped)
+    print(f"\nmaturity percentile (median of {metric_count} measures): {statistics.median(pcts):.0f}"
+          f"      lost to benchmark on {len(losses)} of {metric_count}")
+    print(f"  on the original 12 measures: {statistics.median(core):.0f}")
     if got["_transcript"] >= 1:
         print(f"  {got['_transcript']:.0f}% of this chapter is chat transcript, "
               f"measured separately and excluded above")
     if not brief:
         print(f"\n  {'measure':46}{'this':>8}{'bench':>8}{'pct':>6}")
-        for p, label, mine, theirs, beat in sorted(lines):
-            print(f"  {label:46}{mine:>8.2f}{theirs:>8.2f}{p:>5.0f}%  "
+        for path, label, mine, theirs, beat in sorted(lines):
+            print(f"  {label:46}{mine:>8.2f}{theirs:>8.2f}{path:>5.0f}%  "
                   f"{'' if beat else '<-- loses'}")
     if skipped:
         print(f"  not measurable in a text this short: {', '.join(skipped)}")
     if not brief:
         print(f"\n  monitored, not graded (corpus low / median / high):")
         for key, label in MONITOR.items():
-            vals = sorted(b[key] for b in ref.values() if key in b)
+            vals = sorted(benchmark_value[key] for benchmark_value in ref.values() if key in benchmark_value)
             if not vals:
                 continue
-            band = f"{vals[0]:.2f} / {st.median(vals):.2f} / {vals[-1]:.2f}"
+            band = f"{vals[0]:.2f} / {statistics.median(vals):.2f} / {vals[-1]:.2f}"
             over = "  above every book in the corpus" if got[key] > vals[-1] else ""
             print(f"  {label:46}{got[key]:>8.2f}   corpus {band}{over}")
 
@@ -371,7 +371,7 @@ def grade(path, ref, benchmark, brief):
               f"(in corpus standard deviations):")
         for _, label, mine, theirs, gap in sorted(losses)[:4]:
             print(f"    {label:46}{mine:>8.2f} vs {theirs:>7.2f}   {gap:>4.1f} sd")
-    return st.median(pcts), len(losses)
+    return statistics.median(pcts), len(losses)
 
 
 # Short column headings for the summary table, in print order.
@@ -405,29 +405,29 @@ def summary(paths, ref):
     if not rows:
         return
 
-    head = f"{'file':<22}" + "".join(f"{h:>8}" for _, h in SUMMARY_COLS)
+    head = f"{'file':<22}" + "".join(f"{header:>8}" for _, header in SUMMARY_COLS)
     print(head)
     print("-" * len(head))
     for stem, got in rows:
         cells = []
         for key, _ in SUMMARY_COLS:
-            v = got[key]
-            cells.append("       -" if v is None else
-                         f"{v:>8,}" if key == "_words" else
-                         f"{v:>8.0f}" if key.startswith("_") else f"{v:>8.1f}")
+            value = got[key]
+            cells.append("       -" if value is None else
+                         f"{value:>8,}" if key == "_words" else
+                         f"{value:>8.0f}" if key.startswith("_") else f"{value:>8.1f}")
         print(f"{stem[:21]:<22}" + "".join(cells))
 
     print("-" * len(head))
-    for label, pick in (("book median", st.median), ("corpus median", None)):
+    for label, pick in (("book median", statistics.median), ("corpus median", None)):
         if pick:
-            vals = {k: pick([g[k] for _, g in rows if g[k] is not None] or [0])
-                    for k, _ in SUMMARY_COLS}
+            vals = {key: pick([grade_value[key] for _, grade_value in rows if grade_value[key] is not None] or [0])
+                    for key, _ in SUMMARY_COLS}
         else:
-            vals = {k: (st.median([b[k] for b in ref.values() if k in b])
-                        if any(k in b for b in ref.values()) else 0.0)
-                    for k, _ in SUMMARY_COLS}
-        cells = "".join(f"{vals[k]:>8,.0f}" if k.startswith("_") else
-                        f"{vals[k]:>8.1f}" for k, _ in SUMMARY_COLS)
+            vals = {key: (statistics.median([benchmark[key] for benchmark in ref.values() if key in benchmark])
+                        if any(key in benchmark for benchmark in ref.values()) else 0.0)
+                    for key, _ in SUMMARY_COLS}
+        cells = "".join(f"{vals[key]:>8,.0f}" if key.startswith("_") else
+                        f"{vals[key]:>8.1f}" for key, _ in SUMMARY_COLS)
         print(f"{label:<22}" + cells)
     print("\ncorpus word and paragraph counts are whole books, so the first three "
           "columns\nonly compare like with like between chapters. A dash under sTTR "
@@ -436,43 +436,43 @@ def summary(paths, ref):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("paths", nargs="*", type=Path)
-    ap.add_argument("--benchmark", default="peter_pan")
-    ap.add_argument("--reference", type=Path, default=REFERENCE)
-    ap.add_argument("--brief", action="store_true", help="summary line per file only")
-    ap.add_argument("--summary", action="store_true",
+    parser.add_argument("paths", nargs="*", type=Path)
+    parser.add_argument("--benchmark", default="peter_pan")
+    parser.add_argument("--reference", type=Path, default=REFERENCE)
+    parser.add_argument("--brief", action="store_true", help="summary line per file only")
+    parser.add_argument("--summary", action="store_true",
                     help="one row per file with every measure, no grading")
-    ap.add_argument("--list-benchmarks", action="store_true")
-    ap.add_argument("--build-reference", nargs="+", metavar="DIR")
-    a = ap.parse_args()
+    parser.add_argument("--list-benchmarks", action="store_true")
+    parser.add_argument("--build-reference", nargs="+", metavar="DIR")
+    args = parser.parse_args()
 
-    if a.build_reference:
-        return build_reference(a.build_reference, a.reference)
-    if not a.reference.is_file():
-        sys.exit(f"error: no reference corpus at {a.reference}; "
+    if args.build_reference:
+        return build_reference(args.build_reference, args.reference)
+    if not args.reference.is_file():
+        sys.exit(f"error: no reference corpus at {args.reference}; "
                  f"rebuild with --build-reference DIR")
-    ref = json.loads(a.reference.read_text(encoding="utf-8"))
+    ref = json.loads(args.reference.read_text(encoding="utf-8"))
 
-    if a.list_benchmarks:
-        print(f"{len(ref)} books in {a.reference.name}, by reading grade:")
+    if args.list_benchmarks:
+        print(f"{len(ref)} books in {args.reference.name}, by reading grade:")
         for name in sorted(ref, key=lambda k: ref[k]["fk"]):
             print(f"  {ref[name]['fk']:5.1f}  {name}")
         return
-    if not a.paths:
+    if not args.paths:
         sys.exit("error: give one or more files to grade")
-    if a.benchmark not in ref:
-        sys.exit(f"error: no book named {a.benchmark}; try --list-benchmarks")
+    if args.benchmark not in ref:
+        sys.exit(f"error: no book named {args.benchmark}; try --list-benchmarks")
 
-    if a.summary:
-        return summary(a.paths, ref)
+    if args.summary:
+        return summary(args.paths, ref)
 
     results = []
-    for p in a.paths:
-        got = grade(p, ref, a.benchmark, a.brief)
+    for path in args.paths:
+        got = grade(path, ref, args.benchmark, args.brief)
         if got:
-            results.append((p.name, *got))
+            results.append((path.name, *got))
         print()
     if len(results) > 1:
         print("=" * 78)

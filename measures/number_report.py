@@ -22,7 +22,7 @@ books do rather than more than felt right on the day.
 
 import argparse
 import re
-import statistics as st
+import statistics as statistics
 import sys
 from collections import Counter
 from pathlib import Path
@@ -47,112 +47,112 @@ WORD = re.compile(r"[A-Za-z][A-Za-z']*")
 def numbers(text):
     text = re.sub(r"(?m)^#.*$", "", text)
     text = re.sub(r"(?m)^\*[A-Z][a-z]+ \d{4}.*\*$", "", text)   # the date lines
-    return [m.group(0).lower().replace(",", "") for m in NUMBER.finditer(text)]
+    return [match.group(0).lower().replace(",", "") for match in NUMBER.finditer(text)]
 
 
 def profile(text):
-    n = numbers(text)
-    w = len(WORD.findall(text))
-    c = Counter(n)
-    total = len(n) or 1
+    values = numbers(text)
+    words = len(WORD.findall(text))
+    counter = Counter(values)
+    total = len(values) or 1
     return {
-        "words": w,
-        "count": len(n),
-        "rate": 1000 * len(n) / w if w else 0,
-        "distinct": len(c),
-        "top5": 100 * sum(v for _, v in c.most_common(5)) / total,
-        "top1": 100 * c.most_common(1)[0][1] / total if c else 0,
-        "counter": c,
+        "words": words,
+        "count": len(values),
+        "rate": 1000 * len(values) / words if words else 0,
+        "distinct": len(counter),
+        "top5": 100 * sum(count for _, count in counter.most_common(5)) / total,
+        "top1": 100 * counter.most_common(1)[0][1] / total if counter else 0,
+        "counter": counter,
     }
 
 
-def strip_gutenberg(t):
-    m = re.search(r"\*\*\* ?START OF.*?\*\*\*", t, re.S)
-    if m:
-        t = t[m.end():]
-    m = re.search(r"\*\*\* ?END OF", t)
-    return t[: m.start()] if m else t
+def strip_gutenberg(text):
+    match = re.search(r"\*\*\* ?START OF.*?\*\*\*", text, re.S)
+    if match:
+        text = text[match.end():]
+    match = re.search(r"\*\*\* ?END OF", text)
+    return text[: match.start()] if match else text
 
 
 def corpus_profiles():
     out = []
-    for d in CORPUS:
-        if not d.is_dir():
+    for directory in CORPUS:
+        if not directory.is_dir():
             continue
-        for f in sorted(d.glob("*.txt")):
-            if "stripped" in f.stem:
+        for text_path in sorted(directory.glob("*.txt")):
+            if "stripped" in text_path.stem:
                 continue
-            out.append((f.stem, profile(strip_gutenberg(
-                f.read_text(encoding="utf-8", errors="replace")))))
+            out.append((text_path.stem, profile(strip_gutenberg(
+                text_path.read_text(encoding="utf-8", errors="replace")))))
     return out
 
 
 def band(label, value, vals, higher_is_worse=True):
-    lo, med, hi = min(vals), st.median(vals), max(vals)
+    minimum, med, maximum = min(vals), statistics.median(vals), max(vals)
     flag = ""
-    if higher_is_worse and value > hi:
+    if higher_is_worse and value > maximum:
         flag = "   above every book in the corpus"
-    elif not higher_is_worse and value < lo:
+    elif not higher_is_worse and value < minimum:
         flag = "   below every book in the corpus"
-    print(f"  {label:34}{value:8.1f}   corpus {lo:.1f} / {med:.1f} / {hi:.1f}{flag}")
+    print(f"  {label:34}{value:8.1f}   corpus {minimum:.1f} / {med:.1f} / {maximum:.1f}{flag}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("path", nargs="?", type=Path, default=MANUSCRIPT)
-    ap.add_argument("--chapters", action="store_true", help="one row per chapter")
-    ap.add_argument("--value", help="print every line containing this number")
-    ap.add_argument("--top", type=int, default=20)
-    a = ap.parse_args()
+    parser.add_argument("path", nargs="?", type=Path, default=MANUSCRIPT)
+    parser.add_argument("--chapters", action="store_true", help="one row per chapter")
+    parser.add_argument("--value", help="print every line containing this number")
+    parser.add_argument("--top", type=int, default=20)
+    args = parser.parse_args()
 
-    if a.value:
-        pat = re.compile(rf"\b{re.escape(a.value)}\b", re.I)
-        for f in sorted(CHAPTERS_DIR.glob("*.md")):
-            for i, line in enumerate(f.read_text(encoding="utf-8").split("\n"), 1):
+    if args.value:
+        pat = re.compile(rf"\b{re.escape(args.value)}\b", re.I)
+        for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+            for line_number, line in enumerate(chapter_path.read_text(encoding="utf-8").split("\n"), 1):
                 if pat.search(line):
-                    for m in pat.finditer(line):
-                        s = max(0, m.start() - 45)
-                        print(f"{f.stem}:{i}  ...{line[s:m.end() + 45]}...")
+                    for match in pat.finditer(line):
+                        start = max(0, match.start() - 45)
+                        print(f"{chapter_path.stem}:{line_number}  ...{line[start:match.end() + 45]}...")
         return
 
-    if a.chapters:
+    if args.chapters:
         print(f"{'chapter':24}{'nums':>6}{'/1k':>7}{'distinct':>10}{'top5 %':>8}  commonest")
-        for f in sorted(CHAPTERS_DIR.glob("*.md")):
-            p = profile(f.read_text(encoding="utf-8"))
-            top = ", ".join(f"{k} x{v}" for k, v in p["counter"].most_common(3))
-            print(f"{f.stem[:23]:24}{p['count']:>6}{p['rate']:>7.1f}"
-                  f"{p['distinct']:>10}{p['top5']:>8.1f}  {top}")
+        for chapter_path in sorted(CHAPTERS_DIR.glob("*.md")):
+            chapter_profile = profile(chapter_path.read_text(encoding="utf-8"))
+            top = ", ".join(f"{value} x{count}" for value, count in chapter_profile["counter"].most_common(3))
+            print(f"{chapter_path.stem[:23]:24}{chapter_profile['count']:>6}{chapter_profile['rate']:>7.1f}"
+                  f"{chapter_profile['distinct']:>10}{chapter_profile['top5']:>8.1f}  {top}")
         return
 
-    if not a.path.is_file():
-        sys.exit(f"error: no such file {a.path}")
-    me = profile(a.path.read_text(encoding="utf-8"))
+    if not args.path.is_file():
+        sys.exit(f"error: no such file {args.path}")
+    book_profile = profile(args.path.read_text(encoding="utf-8"))
     ref = corpus_profiles()
 
-    print(f"{a.path.name}: {me['count']:,} numbers in {me['words']:,} words, "
-          f"{me['distinct']} distinct values")
+    print(f"{args.path.name}: {book_profile['count']:,} numbers in {book_profile['words']:,} words, "
+          f"{book_profile['distinct']} distinct values")
     if not ref:
         print("\nno corpus texts available, printing the book's own figures only")
     else:
         print("\n  measure                             this   corpus low / median / high")
-        band("numbers per 1000 words", me["rate"], [p["rate"] for _, p in ref])
-        band("share on the commonest 5 values %", me["top5"], [p["top5"] for _, p in ref])
-        band("share on the single commonest %", me["top1"], [p["top1"] for _, p in ref])
-        band("distinct values used", me["distinct"],
-             [p["distinct"] for _, p in ref], higher_is_worse=False)
+        band("numbers per 1000 words", book_profile["rate"], [chapter_profile["rate"] for ignored, chapter_profile in ref])
+        band("share on the commonest 5 values %", book_profile["top5"], [chapter_profile["top5"] for ignored, chapter_profile in ref])
+        band("share on the single commonest %", book_profile["top1"], [chapter_profile["top1"] for ignored, chapter_profile in ref])
+        band("distinct values used", book_profile["distinct"],
+             [chapter_profile["distinct"] for ignored, chapter_profile in ref], higher_is_worse=False)
 
-    print(f"\n  the {a.top} commonest, as a share of all numbers, against the corpus:")
+    print(f"\n  the {args.top} commonest, as a share of all numbers, against the corpus:")
     print(f"    {'value':<10}{'uses':>6}{'share':>8}{'corpus med':>12}{'corpus max':>12}")
-    for k, v in me["counter"].most_common(a.top):
-        share = 100 * v / me["count"]
+    for value, count in book_profile["counter"].most_common(args.top):
+        share = 100 * count / book_profile["count"]
         if ref:
-            others = [100 * p["counter"].get(k, 0) / max(p["count"], 1) for _, p in ref]
-            med, hi = st.median(others), max(others)
-            flag = "   <-- above every book" if share > hi else ""
-            print(f"    {k:<10}{v:>6}{share:>7.1f}%{med:>11.1f}%{hi:>11.1f}%{flag}")
+            others = [100 * chapter_profile["counter"].get(value, 0) / max(chapter_profile["count"], 1) for ignored, chapter_profile in ref]
+            med, highest = statistics.median(others), max(others)
+            flag = "   <-- above every book" if share > highest else ""
+            print(f"    {value:<10}{count:>6}{share:>7.1f}%{med:>11.1f}%{highest:>11.1f}%{flag}")
         else:
-            print(f"    {k:<10}{v:>6}{share:>7.1f}%")
+            print(f"    {value:<10}{count:>6}{share:>7.1f}%")
 
 
 # Run from grade.py, not on its own. Every measure in measures/ reports one
