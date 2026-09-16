@@ -54,6 +54,7 @@ grade.py                 the entry point: one manuscript in, structured report o
 build_corpus.py          acquire public-domain text from the configured providers
 build_manuscript.py      assemble numbered chapter files into one manuscript
 benchmark.py             time every step on your own machine and text
+validate_corpus.py       leave-one-out check: does the corpus comparison hold up
 
 config.json              the only file that describes YOUR project
 data/                    reference data shipped with TextGrader
@@ -601,6 +602,41 @@ frequency table. Runtime grading needs only the profile, never the raw books.
 
 For byte-reproducible output set `SOURCE_DATE_EPOCH`, or call `build_profile`
 with a fixed `built_at`.
+
+## Does the corpus comparison actually work?
+
+A reference corpus is a claim about a population, and a tool that compares
+against it should be checked against that claim rather than trusted. Every book
+in a reference corpus belongs to the population it describes, so grading one
+against the others ought to flag very little. Whatever it flags anyway is a
+false positive, and counting those per metric says which measurements are
+trustworthy.
+
+```console
+python3 validate_corpus.py corpus/books
+python3 validate_corpus.py corpus/books --enable-family sentence_rhythm
+python3 validate_corpus.py corpus/books --json-out validation.json
+```
+
+For each text it drops that text, rebuilds the reference from the rest, grades
+the dropped text against it, and records every corpus outlier. Then it
+aggregates into a per-metric rate.
+
+Dropping a text's value from the pooled distribution is exactly what rebuilding
+from the remaining texts gives, because a profile stores per-text values rather
+than a fitted summary. That identity is what makes the check affordable -
+otherwise it would re-measure every book once per hold-out - and
+`tests/test_validate_corpus.py` asserts it against a genuine rebuild rather
+than assuming it.
+
+Read the output with one caveat in mind: a varied corpus **should** contain
+outliers, and a metric that finds them is doing its job. What this separates is
+"this metric flags a few unusual books" from "this metric flags half the
+corpus", and only the second is a calibration problem. The companion column is
+each metric's coefficient of variation across the corpus, because a metric that
+never flags anything may be well behaved or may simply be constant, and those
+are not the same thing.
+
 
 ## Project reports
 
