@@ -10,6 +10,7 @@ import argparse
 import importlib.util
 import importlib
 import json
+import os
 import statistics
 import subprocess
 import sys
@@ -20,6 +21,13 @@ from textgrader.results import MetricResult, Report, StatusType
 from textgrader.metrics import MODULES, NLP_METRICS
 
 ROOT = Path(__file__).resolve().parent
+BUNDLED_MEASURES = {
+    "absolutes": (), "banned_phrases": (), "check_edits": (),
+    "dialogue_study": ("{manuscript_dir}",), "number_report": ("{manuscript}",),
+    "prose_check": ("{manuscript}",), "quotable": (), "quote_length": (),
+    "register": (), "style_report": ("{manuscript}",), "tics": (),
+    "verify_citations": ("{manuscript}",), "voice_separation": (),
+}
 METRIC_NAMES = {
     "fk": ("Flesch-Kincaid grade", "grade"), "ari": ("Automated Readability Index", "grade"),
     "wps": ("Words per sentence", "words/sentence"), "slcv": ("Sentence-length variation", "%"),
@@ -76,6 +84,39 @@ def run_metric_process(metric_id, command):
                              error=f"invalid metric JSON: {exc}")]
 
 
+def run_bundled_measure(name, manuscript, config):
+    """Run a bundled report as a structured metric, never via a shell."""
+    if name == "quote_length" and not config.get("dialogue_targets"):
+        return MetricResult(
+            "measure.quote_length", "Quote Length", status="unavailable",
+            status_type=StatusType.UNAVAILABLE,
+            warning="quote_length requires configured dialogue_targets")
+    arguments = [part.format(manuscript=str(manuscript), manuscript_dir=str(manuscript.parent))
+                 for part in BUNDLED_MEASURES[name]]
+    command = [sys.executable, str(ROOT / "measures" / f"{name}.py"), *arguments]
+    try:
+        environment = {**os.environ, "HALSTEAD_VIA_GRADE": "1"}
+        completed = subprocess.run(command, cwd=config.get("_config_dir", ROOT), env=environment,
+                                   capture_output=True, text=True,
+                                   check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return MetricResult(f"measure.{name}", name.replace("_", " ").title(), status="error",
+                            status_type=StatusType.INTERNAL_ERROR, error=str(exc))
+    output = completed.stdout.strip()
+    error = completed.stderr.strip()
+    crashed = "Traceback (most recent call last)" in error
+    if completed.returncode not in (0, 1) or crashed:
+        return MetricResult(f"measure.{name}", name.replace("_", " ").title(), status="error",
+                            status_type=StatusType.INTERNAL_ERROR,
+                            error=error or output or f"process exited {completed.returncode}")
+    details = [{"output": output}] if output else []
+    return MetricResult(f"measure.{name}", name.replace("_", " ").title(),
+                        status="review" if completed.returncode else "available",
+                        status_type=(StatusType.DIAGNOSTIC if completed.returncode
+                                     else StatusType.INFORMATIONAL),
+                        details=details, warning=error or None)
+
+
 def _distribution(profile, key):
     if not profile:
         return []
@@ -102,8 +143,10 @@ def _corpus_result(key, value, profile):
     deviations = [abs(item - median) for item in values]
     mad = statistics.median(deviations)
     percentile = 100 * (sum(item < value for item in values) + .5 * sum(item == value for item in values)) / len(values)
+    # A zero MAD means every central observation is identical.  A differing
+    # value is therefore maximally, rather than immeasurably, distant.
     robust_distance = (value - median) / (1.4826 * mad) if mad else (0.0 if value == median else None)
-    outlier = robust_distance is not None and abs(robust_distance) > 3.5
+    outlier = (value != median) if mad == 0 else abs(robust_distance) > 3.5
     stats = {"profile_name": profile.get("corpus_name", profile.get("metadata", {}).get("corpus_name")),
              "count": len(values), "median": median, "mad": mad,
              "percentile": percentile, "robust_distance": robust_distance,
@@ -162,6 +205,9 @@ def analyze(path, config):
                     key: profile.get(key) for key in ("schema_version", "corpus_name", "build_timestamp",
                                                       "parser_version", "metric_definition_version")
                 })
+                if not report.corpus_profile.get("corpus_name"):
+                    report.corpus_profile["corpus_name"] = candidate.stem
+                    report.corpus_profile["book_count"] = len(profile.get("books", profile))
             except (OSError, ValueError) as exc:
                 report.results.append(MetricResult("corpus.profile", "Corpus profile", status="unavailable",
                                                    status_type=StatusType.UNAVAILABLE, warning=str(exc)))
@@ -170,16 +216,25 @@ def analyze(path, config):
             continue
         report.results.append(_corpus_result(key, value, profile))
     report.results.extend(_rules(text, config.get("project_rules", {})))
-    # Every advanced measurement is deliberately opt-in.  Modules are loaded
-    # independently so one optional dependency or metric cannot hide the rest.
+    # Every configurable measurement uses the same switch map. Modules are
+    # loaded independently so one optional dependency cannot hide the rest.
     metric_config = config.get("metrics", {})
     def metric_enabled(name):
-        setting = metric_config.get(name, {})
+        setting = metric_config.get(name, name in BUNDLED_MEASURES)
         return setting is True or (isinstance(setting, dict) and setting.get("enabled", False))
 
     def metric_options(name):
         setting = metric_config.get(name, {})
         return setting if isinstance(setting, dict) else {}
+
+    def comparison_is_compatible(name):
+        if not profile or "metric_settings" not in profile:
+            return False
+        expected = dict(profile["metric_settings"].get(name, {}))
+        actual = dict(metric_options(name))
+        expected.pop("enabled", None)
+        actual.pop("enabled", None)
+        return expected == actual
 
     enabled = [name for name in MODULES if metric_enabled(name)]
     nlp = None
@@ -198,7 +253,7 @@ def analyze(path, config):
                 value = finding.get("value")
                 # Scalar measures use exactly the same corpus machinery as the
                 # longstanding prose metrics when a profile has that feature.
-                if value is not None and _distribution(profile, metric_id):
+                if value is not None and _distribution(profile, metric_id) and comparison_is_compatible(name):
                     item = _corpus_result(metric_id, value, profile)
                     item.metric_id, item.name = metric_id, finding["name"]
                     item.unit = finding.get("unit")
@@ -206,18 +261,32 @@ def analyze(path, config):
                     item.warning = finding.get("warning")
                 else:
                     unavailable = value is None and finding.get("warning")
+                    mismatch = (value is not None and _distribution(profile, metric_id)
+                                and not comparison_is_compatible(name))
                     item = MetricResult(metric_id, finding["name"], value, finding.get("unit"),
                                         status="unavailable" if unavailable else "available",
                                         status_type=StatusType.UNAVAILABLE if unavailable else StatusType.INFORMATIONAL,
-                                        details=finding.get("details", []), warning=finding.get("warning"))
+                                        details=finding.get("details", []),
+                                        warning=("Corpus distribution was built with different or unrecorded metric options"
+                                                 if mismatch else finding.get("warning")))
                 report.results.append(item)
         except Exception as exc:
             report.results.append(MetricResult(f"metric.{name}", name.replace("_", " ").title(),
                                                status="error", status_type=StatusType.INTERNAL_ERROR,
                                                error=f"{type(exc).__name__}: {exc}"))
-    for item in config.get("metric_commands", []):
-        command = [part.format(manuscript=str(path)) for part in item["command"]]
-        report.results.extend(run_metric_process(item["id"], command))
+    commands = config.get("metric_commands", [])
+    if commands and not config.get("allow_external_metric_commands", False):
+        report.results.append(MetricResult(
+            "metric.external_commands", "External metric commands", status="unavailable",
+            status_type=StatusType.UNAVAILABLE,
+            warning="metric_commands are disabled; set allow_external_metric_commands=true only for trusted configuration"))
+    else:
+        for item in commands:
+            command = [part.format(manuscript=str(path)) for part in item["command"]]
+            report.results.extend(run_metric_process(item["id"], command))
+    for name in BUNDLED_MEASURES:
+        if metric_enabled(name):
+            report.results.append(run_bundled_measure(name, path, config))
     return report
 
 

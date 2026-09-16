@@ -61,6 +61,22 @@ Advanced users can configure external structured metrics with
 `metric_commands`. Each command must exit zero and print one result object or a
 list of objects as JSON. `{manuscript}` in an argument is replaced with the
 input path. Non-zero exits and invalid JSON become visible internal errors.
+Commands are never run unless `allow_external_metric_commands` is explicitly
+set to `true`; only enable this for a configuration you trust.
+
+The earlier reports in `measures/` use the same `metrics` configuration as the
+newer metric modules. They are enabled in the checked-in defaults while the
+newer optional metrics are disabled. Toggle any report individually, for
+example `{"metrics": {"number_report": false, "mattr": true}}`. Bundled
+reports run as fixed Python commands without a
+shell, have a 60-second timeout, and place their textual output in the result's
+`details`. Project-wide reports still use the paths and policies in the project
+configuration.
+
+The dependency-free sentence splitter remains the default. Enable the optional
+`sentence_segmentation` metric and install `pysbd` to report sentence count and
+mean sentence length from a library designed to handle abbreviations and other
+boundaries that punctuation-plus-whitespace cannot distinguish.
 
 ## Build a self-contained corpus profile
 
@@ -105,7 +121,15 @@ the profile builder:
 python3 corpus_profile.py books/ another/book.txt \
   --name "Public-domain fiction sample" -o corpus_profile.json
 python3 corpus_profile.py books/ --manifest corpus-manifest.json -o profile.json
+python3 corpus_profile.py books/ --config config.json -o profile.json
 ```
+
+Core prose distributions are built by default; `--no-core-metrics` is the
+explicit opt-out. Pass the same project configuration used for grading so
+option-sensitive metrics (for example, MATTR's window) are computed alike.
+TextGrader records those settings and refuses unlike corpus comparisons.
+The checked-in default configuration uses `prose_reference.json`, the bundled
+23-book reference.
 
 The profile contains its schema/parser/metric versions, corpus name, build
 timestamp, preprocessing settings, source IDs, filenames, SHA-256 hashes,
@@ -171,6 +195,7 @@ uncharacteristic prose. Enable only the measurements useful to your project:
 Available switches are `repeated_ngrams`, `sentence_openings`,
 `local_repetition`, `function_words`, `mattr`, `punctuation`,
 `length_quantiles`, `pov_pronouns`, `dialogue_contractions`, `dialogue_tags`,
+`sentence_segmentation`,
 `passive_voice`, `clause_structure`, `pos_distribution`, `tense_consistency`,
 `nominalizations`, and `character_voice`. Each implementation lives in its own
 module under `textgrader/metrics/`. Corpus profiles include distributions for

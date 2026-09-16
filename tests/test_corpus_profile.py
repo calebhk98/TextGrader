@@ -7,6 +7,24 @@ from corpus_profile import build_profile, load_profile, write_profile
 
 
 class CorpusProfileTests(unittest.TestCase):
+    def test_core_prose_distributions_are_built_by_default(self):
+        expected = {"fk", "ari", "slcv", "spp", "long7", "sttr", "top100",
+                    "commas", "subord", "relcl", "simple", "u10", "b2035",
+                    "shortruns", "front", "and2", "andrate", "negative"}
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "book.txt"
+            source.write_text(("Although it rained, we stayed. And then we left! " * 125), encoding="utf-8")
+            profile = build_profile([source], built_at="2026-01-01T00:00:00Z")
+        self.assertTrue(expected <= profile["distributions"].keys())
+        self.assertTrue(all(profile["distributions"][key]["count"] == 1 for key in expected))
+
+    def test_core_prose_distributions_can_be_disabled_explicitly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "book.txt"
+            source.write_text("A sentence.", encoding="utf-8")
+            profile = build_profile([source], include_core_metrics=False)
+        self.assertNotIn("fk", profile["distributions"])
+
     def test_duplicate_filenames_do_not_overwrite(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

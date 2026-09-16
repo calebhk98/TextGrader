@@ -15,7 +15,7 @@ from corpus_builder import builder
 from corpus_builder.config import Settings, from_mapping
 from corpus_builder.extractors import epub_text, html_text
 from corpus_builder.metadata import enrich_first
-from corpus_builder.net import NetworkError
+from corpus_builder.net import NetworkError, fetch
 from corpus_builder.providers import PROVIDER_TYPES
 from corpus_builder.providers.gutenberg import GutenbergProvider
 from textgrader.corpus import build_profile
@@ -78,6 +78,33 @@ def test_html_and_epub_extractors_are_dependency_free() -> None:
         book.writestr("chapter.xhtml", "<html><body><h1>One</h1><p>Story text.</p></body></html>")
     extracted = epub_text(archive.getvalue())
     assert "One" in extracted and "Story text." in extracted
+
+
+def test_epub_rejects_excessively_compressed_entries() -> None:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as book:
+        book.writestr("chapter.xhtml", "x" * 100_000)
+    try:
+        epub_text(archive.getvalue())
+    except ValueError as exc:
+        assert "compression ratio" in str(exc)
+    else:
+        raise AssertionError("compression bomb was accepted")
+
+
+def test_fetch_enforces_streaming_response_limit() -> None:
+    class Response(io.BytesIO):
+        headers = {}
+        def __enter__(self): return self
+        def __exit__(self, *_): return None
+    class Opener:
+        def open(self, *_args, **_kwargs): return Response(b"12345")
+    try:
+        fetch(Opener(), "https://example.test", 1, attempts=1, max_bytes=4)
+    except NetworkError as exc:
+        assert "exceeds" in str(exc)
+    else:
+        raise AssertionError("oversized response was accepted")
 
 
 def test_nested_project_config_and_author_limits_are_supported() -> None:

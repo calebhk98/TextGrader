@@ -426,8 +426,8 @@ def paras_of(body):
     return [paragraph for paragraph in re.split(r'\n\s*\n', body) if paragraph.strip()]
 
 
-# Run from grade.py, not on its own. Every measure in measures/ reports one
-# slice; the scorecard is the whole picture and it is the thing that says
+# Run from grade.py, not on its own. Each script in measures/ reports one
+# diagnostic; grade.py assembles enabled checks and is the interface that says
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
@@ -435,7 +435,7 @@ def _solo_notice():
     import sys, os
     if os.environ.get("HALSTEAD_VIA_GRADE"):
         return
-    print("  [one measure of thirteen. the scorecard is: python3 grade.py]",
+    print("  [bundled diagnostic; use grade.py for the structured report]",
           file=sys.stderr)
 
 if __name__ == '__main__':

@@ -7,6 +7,11 @@ import re
 import zipfile
 from html.parser import HTMLParser
 
+MAX_EPUB_FILES = 10_000
+MAX_EPUB_ENTRY_BYTES = 20 * 1024 * 1024
+MAX_EPUB_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 200
+
 
 class _HTMLText(HTMLParser):
     BLOCKS = {"p", "div", "br", "li", "h1", "h2", "h3", "h4", "blockquote", "section", "article"}
@@ -52,6 +57,16 @@ def html_text(data: bytes) -> str:
 def epub_text(data: bytes) -> str:
     """Extract reading-order XHTML when possible, falling back to archive order."""
     with zipfile.ZipFile(io.BytesIO(data)) as book:
+        infos = book.infolist()
+        if len(infos) > MAX_EPUB_FILES:
+            raise ValueError("EPUB contains too many files")
+        if sum(item.file_size for item in infos) > MAX_EPUB_UNCOMPRESSED_BYTES:
+            raise ValueError("EPUB uncompressed contents exceed the safety limit")
+        for item in infos:
+            if item.file_size > MAX_EPUB_ENTRY_BYTES:
+                raise ValueError(f"EPUB entry is too large: {item.filename}")
+            if item.file_size and item.file_size / max(item.compress_size, 1) > MAX_COMPRESSION_RATIO:
+                raise ValueError(f"EPUB entry has a suspicious compression ratio: {item.filename}")
         names = book.namelist()
         ordered: list[str] = []
         container = next((n for n in names if n.endswith("META-INF/container.xml")), None)

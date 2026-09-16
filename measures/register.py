@@ -123,14 +123,14 @@ def main():
     return 0
 
 
-# Run from grade.py, not on its own. Every measure in measures/ reports one
-# slice; the scorecard is the whole picture and it is the thing that says
+# Run from grade.py, not on its own. Each script in measures/ reports one
+# diagnostic; grade.py assembles enabled checks and is the interface that says
 # whether a pass helped.
 def _solo_notice():
     import sys, os
     if os.environ.get("HALSTEAD_VIA_GRADE"):
         return
-    print("  [one measure of thirteen. the scorecard is: python3 grade.py]",
+    print("  [bundled diagnostic; use grade.py for the structured report]",
           file=sys.stderr)
 
 

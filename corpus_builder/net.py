@@ -12,18 +12,34 @@ class NetworkError(RuntimeError):
     pass
 
 
+MAX_RESPONSE_BYTES = 50 * 1024 * 1024
+
+
 def make_opener(user_agent: str) -> urllib.request.OpenerDirector:
     opener = urllib.request.build_opener()
     opener.addheaders = [("User-Agent", user_agent), ("Accept-Encoding", "identity")]
     return opener
 
 
-def fetch(opener, url: str, timeout: float, attempts: int = 3) -> bytes:
+def fetch(opener, url: str, timeout: float, attempts: int = 3,
+          max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
     last: Exception | None = None
     for attempt in range(attempts):
         try:
             with opener.open(url, timeout=timeout) as response:
-                return response.read()
+                length = response.headers.get("Content-Length")
+                if length and int(length) > max_bytes:
+                    raise NetworkError(f"Response from {url} exceeds {max_bytes} bytes")
+                chunks: list[bytes] = []
+                total = 0
+                while chunk := response.read(min(64 * 1024, max_bytes - total + 1)):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise NetworkError(f"Response from {url} exceeds {max_bytes} bytes")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+        except NetworkError:
+            raise
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last = exc
             if attempt + 1 < attempts:
