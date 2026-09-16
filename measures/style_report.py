@@ -50,7 +50,7 @@ def paragraphs(t):
     per-paragraph number was meaningless (chapter 1: "1 paras", 321
     sentences/paragraph). Splitting inside each blank-line block, rather than
     picking one convention per file, also keeps a mixed file honest, which
-    HALSTEAD.md is: chapters 1-6 hard-break, 7-20 blank-line.
+    The original manuscript is: chapters 1-6 hard-break, 7-20 blank-line.
 
     A plain newline is a soft wrap and does not end a paragraph, so
     conventionally wrapped text still measures correctly.
@@ -83,7 +83,7 @@ def quoted_words(body):
     """Count words inside double quotes, counting curly quotes as quotes.
 
     The original scanned the whole file with '"[^"]*"'. That regex cannot see
-    the 12 paragraphs of HALSTEAD.md that use curly quotes, so straight
+    the 12 manuscript paragraphs that use curly quotes, so straight
     quotes on either side of them paired across the intervening narration and
     counted it as dialogue. The manuscript came out at 38.2% quoted against a
     ~30% target, a FAIL, when the real figure is 28.1%, a PASS.

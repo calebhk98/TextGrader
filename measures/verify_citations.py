@@ -26,7 +26,10 @@ from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
-SOURCES = ["chapters/*.md", "HALSTEAD.md"]
+sys.path.insert(0, str(HERE))
+from project_config import CHARACTERS_DIR, CHAPTERS_DIR, MANUSCRIPT
+
+SOURCES = [*sorted(CHAPTERS_DIR.glob("*.md")), MANUSCRIPT]
 # Quotes in these are about the sheets themselves, not about the manuscript.
 SKIP_FILES = {"_TEMPLATE.md", "_DIFFERENTIATION.md", "_ALLOCATIONS.md",
               "CHARACTER_SHEETS.md"}
@@ -40,8 +43,8 @@ def norm(t):
 
 def load_manuscript(root):
     blob = []
-    for pat in SOURCES:
-        for f in sorted(root.glob(pat)):
+    for f in SOURCES:
+        if f.is_file():
             blob.append(f.read_text(encoding="utf-8", errors="replace"))
     if not blob:
         sys.exit(f"error: no manuscript files under {root}")
@@ -78,7 +81,7 @@ def main():
     a = ap.parse_args()
 
     book = load_manuscript(a.root)
-    files = a.sheets or sorted((a.root / "characters").glob("*.md"))
+    files = a.sheets or sorted(CHARACTERS_DIR.glob("*.md"))
 
     checked = missing = 0
     bad = {}

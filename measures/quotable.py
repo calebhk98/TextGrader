@@ -50,11 +50,8 @@ from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
-
-CORPUS_DIRS = (
-    "/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/scratchpad/agent_gutenberg/raw",
-    "/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/scratchpad/agent_modern/texts",
-)
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR, CORPUS_DIRS
 
 WORD = re.compile(r"[A-Za-z']+")
 QUOTE = re.compile(r'["“]([^"“”]{25,1500})["”]')
@@ -138,7 +135,7 @@ def measure(paths):
 def corpus_rates():
     rows = []
     for d in CORPUS_DIRS:
-        for f in sorted(glob.glob(d + "/*")):
+        for f in sorted(glob.glob(str(d / "*"))):
             # The corpus carries a stripped copy of each modern book; counting
             # both would weight those authors twice.
             if "strip" in Path(f).name:
@@ -169,7 +166,7 @@ def main():
         print(f"\n  median {median:.2f}%   maximum {ceiling:.2f}%   {len(rows)} books")
         return 0
 
-    hits, total = measure(sorted(glob.glob(str(HERE / "chapters" / "*.md"))))
+    hits, total = measure(sorted(glob.glob(str(CHAPTERS_DIR / "*.md"))))
     pct = len(hits) / total * 100 if total else 0.0
 
     print(f"  {len(hits)} of {total} multi-sentence speeches end on a maxim: "

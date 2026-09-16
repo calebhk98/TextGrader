@@ -29,10 +29,10 @@ from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
-CORPUS = [
-    Path("/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/scratchpad/agent_gutenberg/raw"),
-    Path("/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/scratchpad/agent_modern/texts"),
-]
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR, CORPUS_DIRS, MANUSCRIPT
+
+CORPUS = CORPUS_DIRS
 
 WORDS = ("one two three four five six seven eight nine ten eleven twelve thirteen "
          "fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty forty "
@@ -100,7 +100,7 @@ def band(label, value, vals, higher_is_worse=True):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("path", nargs="?", type=Path, default=HERE / "HALSTEAD.md")
+    ap.add_argument("path", nargs="?", type=Path, default=MANUSCRIPT)
     ap.add_argument("--chapters", action="store_true", help="one row per chapter")
     ap.add_argument("--value", help="print every line containing this number")
     ap.add_argument("--top", type=int, default=20)
@@ -108,7 +108,7 @@ def main():
 
     if a.value:
         pat = re.compile(rf"\b{re.escape(a.value)}\b", re.I)
-        for f in sorted((HERE / "chapters").glob("*.md")):
+        for f in sorted(CHAPTERS_DIR.glob("*.md")):
             for i, line in enumerate(f.read_text(encoding="utf-8").split("\n"), 1):
                 if pat.search(line):
                     for m in pat.finditer(line):
@@ -118,7 +118,7 @@ def main():
 
     if a.chapters:
         print(f"{'chapter':24}{'nums':>6}{'/1k':>7}{'distinct':>10}{'top5 %':>8}  commonest")
-        for f in sorted((HERE / "chapters").glob("*.md")):
+        for f in sorted(CHAPTERS_DIR.glob("*.md")):
             p = profile(f.read_text(encoding="utf-8"))
             top = ", ".join(f"{k} x{v}" for k, v in p["counter"].most_common(3))
             print(f"{f.stem[:23]:24}{p['count']:>6}{p['rate']:>7.1f}"

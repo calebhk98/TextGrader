@@ -17,13 +17,11 @@ import os
 import re
 import statistics
 import sys
+from pathlib import Path
 
-CORPUS_DIRS = [
-    "/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/"
-    "scratchpad/agent_gutenberg/raw",
-    "/tmp/claude-0/-home-user-test/e98b5ab4-e37f-5614-9ff3-15e67e5c0180/"
-    "scratchpad/agent_modern/texts",
-]
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR, CORPUS_DIRS
 
 # ---------------------------------------------------------------------------
 # TARGETS. Read this before changing any number below.
@@ -146,9 +144,9 @@ def corpus():
 
 
 def main():
-    files = sorted(glob.glob("chapters/*.md"))
+    files = sorted(glob.glob(str(CHAPTERS_DIR / "*.md")))
     if not files:
-        sys.exit("run from the halstead directory")
+        sys.exit(f"no chapters found in {CHAPTERS_DIR}")
     book = profile("\n".join(open(f).read() for f in files))
     ref = corpus()
 

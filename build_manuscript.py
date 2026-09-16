@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build HALSTEAD.md from chapters/. One direction only.
+"""Build the configured manuscript file from chapters/. One direction only.
 
 chapters/ is the source of truth. Every edit is made there, one file per
 chapter, so agents and people can work on different chapters without
@@ -10,7 +10,7 @@ manuscript file has been deleted, because running it discarded work: it reverts
 every chapter to whatever the manuscript last held, and the manuscript is
 always the stale copy.
 
-    python3 build_manuscript.py            write HALSTEAD.md
+    python3 build_manuscript.py            write the configured manuscript
     python3 build_manuscript.py --check    say what would change, write nothing
 
 **Order comes from the filenames and nothing else.** chapters/NN_slug.md sorts
@@ -27,9 +27,11 @@ import re
 import sys
 from pathlib import Path
 
+from project_config import CHAPTERS_DIR, MANUSCRIPT
+
 HERE = Path(__file__).resolve().parent
-CHAPTERS = HERE / "chapters"
-OUT = HERE / "HALSTEAD.md"
+CHAPTERS = CHAPTERS_DIR
+OUT = MANUSCRIPT
 
 WORDS = ("One Two Three Four Five Six Seven Eight Nine Ten Eleven Twelve "
          "Thirteen Fourteen Fifteen Sixteen Seventeen Eighteen Nineteen Twenty"

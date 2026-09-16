@@ -19,6 +19,8 @@ from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+from project_config import CHAPTERS_DIR
 
 # (pattern, what it is, why it is out)
 BANNED = [
@@ -73,7 +75,7 @@ def main():
     ap.add_argument("--show", type=int)
     a = ap.parse_args()
 
-    paths = sorted(glob.glob(str(HERE / "chapters" / "*.md")))
+    paths = sorted(glob.glob(str(CHAPTERS_DIR / "*.md")))
     hits = scan(paths)
 
     if a.show is not None:
