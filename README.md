@@ -64,8 +64,42 @@ input path. Non-zero exits and invalid JSON become visible internal errors.
 
 ## Build a self-contained corpus profile
 
-TextGrader does **not** download corpus texts. Supply locally acquired UTF-8
-`.txt` files (or directories) to the profile builder:
+Corpus acquisition is a separate, dependency-free step. The downloader has a
+small provider interface and can search Gutenberg, Standard Ebooks, Internet
+Archive, Wikisource, Google Books, and the Library of Congress. A failed source
+does not prevent the remaining configured sources from being searched:
+
+```console
+python3 build_corpus.py --list-providers
+python3 build_corpus.py --config corpus_scifi_third.json
+python3 build_corpus.py --config config.json
+python3 build_corpus.py --config config.json --healthcheck
+```
+
+The last two commands read the `corpus_builder` object in the ordinary project
+configuration, so a second JSON file is optional. API keys and contact details
+can be set there, but secrets should normally be supplied through a private,
+untracked configuration file.
+
+`--work-type` accepts `fiction`, `short_story`, `essay`, `speech`, `poetry`,
+`drama`, or `any`, and can be repeated. These are transparent catalog-metadata
+filters, not claims about literary form. There is no built-in ban on short
+works. Adjust `min_words` and `max_words` when selecting them. Use repeated
+`--include-author` options to allow particular authors, `--max-authors 1` for a
+single-author corpus, and `max_books_per_author: null` in JSON to remove the
+per-author cap. `max_authors` can also constrain a niche corpus to, for example,
+five distinct authors without limiting how many works each contributes.
+
+Providers return a shared candidate/document model and the selector
+deduplicates across sources before download. Open Library and Google Books are
+replaceable metadata enrichers; if one is unavailable, the chain tries the
+next. Plain text, HTML, and EPUB extraction use only the Python standard
+library. Google Books items are acquired only when its API exposes a full EPUB,
+and the other providers likewise skip records without a usable full-text
+format; a search result is not treated as permission or proof of availability.
+
+After acquisition, supply the generated UTF-8 `.txt` files (or directories) to
+the profile builder:
 
 ```console
 python3 corpus_profile.py books/ another/book.txt \
@@ -80,7 +114,8 @@ frequency table. Runtime analysis needs only the profile, never the raw books.
 Duplicate filename stems remain distinct through hash-derived source IDs.
 
 For byte-reproducible output, set `SOURCE_DATE_EPOCH` or build programmatically
-with a fixed `built_at`. Corpus acquisition is intentionally outside this tool.
+with a fixed `built_at`. Runtime grading uses only the derived profile and does
+not contact acquisition providers.
 
 The optional manifest is JSON whose `sources` member is keyed by relative
 filename (or is a list with `filename`/`path` fields). Values can include an

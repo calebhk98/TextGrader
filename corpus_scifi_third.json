@@ -1,0 +1,64 @@
+{
+  "output_dir": "corpus",
+  "count": 40,
+  "minimum_count": 30,
+  "language": "en",
+  "providers": [
+    "gutenberg",
+    "standard_ebooks",
+    "internet_archive",
+    "wikisource",
+    "google_books",
+    "library_of_congress"
+  ],
+  "metadata_providers": [
+    "openlibrary",
+    "google_books"
+  ],
+  "work_types": [
+    "fiction"
+  ],
+  "genres": [
+    "science_fiction"
+  ],
+  "include_terms": [],
+  "include_authors": [],
+  "exclude_terms": [
+    "poetry",
+    "poems",
+    "drama",
+    "plays",
+    "essays",
+    "speeches",
+    "correspondence",
+    "letters",
+    "bibliography",
+    "periodicals",
+    "short stories",
+    "short story",
+    "collection",
+    "anthologies",
+    "anthology"
+  ],
+  "pov": "third",
+  "min_pov_confidence": 0.35,
+  "tense": "past",
+  "min_tense_confidence": 0.25,
+  "min_year": null,
+  "max_year": 1989,
+  "year_policy": "best_effort",
+  "min_words": 30000,
+  "max_words": 250000,
+  "max_books_per_author": 2,
+  "max_authors": null,
+  "max_candidates": 800,
+  "seed": 20260916,
+  "request_delay": 2.0,
+  "timeout": 30.0,
+  "catalog_url": "https://www.gutenberg.org/cache/epub/feeds/pg_catalog.csv.gz",
+  "refresh_catalog": false,
+  "openlibrary_email": null,
+  "google_books_api_key": null,
+  "year_lookup_limit": 100,
+  "keep_failed_downloads": false
+}
