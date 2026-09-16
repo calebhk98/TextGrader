@@ -29,7 +29,6 @@ HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 from project_config import CHARACTERS_DIR, CHAPTERS_DIR, MANUSCRIPT
 
-SOURCES = [*sorted(CHAPTERS_DIR.glob("*.md")), MANUSCRIPT]
 # Quotes in these are about the sheets themselves, not about the manuscript.
 SKIP_FILES = {"_TEMPLATE.md", "_DIFFERENTIATION.md", "_ALLOCATIONS.md",
               "CHARACTER_SHEETS.md"}
@@ -42,8 +41,12 @@ def norm(text):
 
 
 def load_manuscript(root):
+    root = Path(root)
+    chapters_dir = root / CHAPTERS_DIR.relative_to(HERE)
+    manuscript = root / MANUSCRIPT.relative_to(HERE)
+    sources = [*sorted(chapters_dir.glob("*.md")), manuscript]
     blob = []
-    for source_path in SOURCES:
+    for source_path in sources:
         if source_path.is_file():
             blob.append(source_path.read_text(encoding="utf-8", errors="replace"))
     if not blob:
@@ -81,7 +84,8 @@ def main():
     args = parser.parse_args()
 
     book = load_manuscript(args.root)
-    files = args.sheets or sorted(CHARACTERS_DIR.glob("*.md"))
+    files = args.sheets or sorted((args.root / CHARACTERS_DIR.relative_to(HERE)).glob("*.md"))
+    files = [path if path.is_absolute() else args.root / path for path in files]
 
     checked = missing = 0
     bad = {}

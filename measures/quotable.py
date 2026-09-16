@@ -45,13 +45,14 @@ that needs building, not this one.
     python3 quotable.py            report
     python3 quotable.py --corpus   the per-book corpus table
 """
-import argparse, glob, re, sys
+import argparse, glob, re, statistics, sys
 from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 from project_config import CHAPTERS_DIR, CORPUS_DIRS
+from textgrader.text import strip_gutenberg
 
 WORD = re.compile(r"[A-Za-z']+")
 QUOTE = re.compile(r'["“]([^"“”]{25,1500})["”]')
@@ -132,6 +133,12 @@ def measure(paths):
     return hits, total
 
 
+def measure_text(text, source="text"):
+    candidates = closers(text)
+    hits = [(source, candidate) for candidate in candidates if is_maxim(candidate)]
+    return hits, len(candidates)
+
+
 def corpus_rates():
     rows = []
     for directory in CORPUS_DIRS:
@@ -140,7 +147,9 @@ def corpus_rates():
             # both would weight those authors twice.
             if "strip" in Path(text_path).name:
                 continue
-            hits, total = measure([text_path])
+            # Corpus files can include distribution boilerplate which is not prose.
+            cleaned = strip_gutenberg(Path(text_path).read_text(encoding="utf-8", errors="replace"))
+            hits, total = measure_text(cleaned, Path(text_path).stem)
             if total >= 50:
                 rows.append((Path(text_path).stem, len(hits), total, len(hits) / total * 100))
     rows.sort(key=lambda r: r[3])
@@ -158,7 +167,7 @@ def main():
         print("  corpus texts not readable; nothing to compare against")
         return 0
     ceiling = max(row[3] for row in rows)
-    median = rows[len(rows) // 2][3]
+    median = statistics.median(row[3] for row in rows)
 
     if args.corpus:
         for stem, hits, total, pct in rows:

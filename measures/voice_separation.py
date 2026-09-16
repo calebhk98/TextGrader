@@ -126,11 +126,17 @@ def profile(lines):
     flat = [word.lower() for tokens in tokens for word in tokens]
     if not flat:
         return None
+    # Mean segmental TTR compares equal-size samples rather than rewarding a
+    # speaker merely for having fewer total words. Fifty words is deliberately
+    # small enough for dialogue samples; incomplete trailing windows are kept.
+    window = 50
+    segments = [flat[index:index + window] for index in range(0, len(flat), window)]
+    msttr = st.fmean(len(set(segment)) / len(segment) for segment in segments)
     return {
         "n": len(lines),
         "words": len(flat),
         "wpl": len(flat) / len(lines),
-        "ttr": 100 * len(set(flat)) / len(flat),
+        "ttr": 100 * msttr,
         "q": 100 * sum(1 for line in lines if "?" in line) / len(lines),
         "short": 100 * sum(1 for tokens in tokens if len(tokens) <= 3) / len(lines),
         "long": 100 * sum(1 for tokens in tokens if len(tokens) > 15) / len(lines),
@@ -152,7 +158,8 @@ def show(title, data, floor, note):
     for key, label in (("wpl", "words per line"), ("short", "1-3 word share")):
         vals = [speaker_profile[key] for speaker_profile in rows.values()]
         minimum, maximum = min(vals), max(vals)
-        spread = (maximum - minimum) / st.fmean(vals)
+        mean = st.fmean(vals)
+        spread = (maximum - minimum) / mean if mean else 0.0
         print(f"  {label:16} {minimum:.1f} to {maximum:.1f}   "
               f"spread {100 * spread:.0f}% of the mean"
               f"{'   <- speakers barely differ' if spread < 0.5 else ''}")

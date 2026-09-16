@@ -23,45 +23,9 @@ sys.path.insert(0, str(HERE))
 from project_config import BANNED_CONSTRUCTIONS, CHAPTERS_DIR
 
 # (pattern, what it is, why it is out)
-BANNED = [
-    (r"\b(?:say|said|read|reads) (?:it|that|them) again[^.!?\"]{0,30}\bslower\b"
-     r"|\bagain,? slower\b",
-     "say that again, slower",
-     "The author, on finding three of these still in the manuscript after being "
-     "told they were gone: bad writing. A character asking for a repeat at "
-     "reduced speed is a stock beat that stands in for a reaction. Removed from "
-     "chapters 11, 27 and 29."),
+BANNED = []
 
-    (r"\bI want to be clear about (?:that|this)\b",
-     "I want to be clear about that",
-     "A speaker announcing the importance of what they are about to say. The "
-     "author has flagged this one on sight every time it has appeared."),
-
-    (r"\bbefore anything else\b(?=[^.!?]*\bclear\b)|\bclear about that before anything else\b",
-     "clear about that before anything else",
-     "The same construction with its tail attached."),
-
-    (r"\blet me be clear\b",
-     "let me be clear",
-     "Same move, different opening."),
-
-    (r"\bthe (?:simple|honest|plain) truth is\b",
-     "the simple truth is",
-     "Announcing that what follows is true, which is the narrator or a speaker "
-     "putting a thumb on the scale."),
-
-    (r"\bwhat (?:he|she|they) (?:did not|didn't) (?:know|realise|realize) (?:was|then)\b",
-     "what she did not know was",
-     "Withholding announced to the reader. Rule 1."),
-
-    (r"\bit (?:would|will) be (?:years|a long time) before\b",
-     "it would be years before",
-     "Narrator stepping outside the scene to flag a future the camera cannot see."),
-]
-
-# Leave ``banned_constructions`` null to use the defaults above. A configured
-# list replaces them, making project-specific rulings possible without editing
-# this script. Each item has ``pattern``, ``name``, and ``reason`` fields.
+# Personal bans are disabled by default and supplied only through configuration.
 if BANNED_CONSTRUCTIONS is not None:
     BANNED = [
         (item["pattern"], item["name"], item.get("reason", "Configured rule."))

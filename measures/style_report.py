@@ -24,6 +24,16 @@ from statistics import fmean, median, stdev
 ABBR = r'(?:Mrs|Mr|Ms|Dr|St|Jr|Sr|vs|etc|[A-Z])'
 
 
+def in_ten_to_twenty(word_count):
+    """Return whether a sentence belongs to the 10–under-20 bucket."""
+    return 10 <= word_count < 20
+
+
+def in_twenty_to_thirty_five(word_count):
+    """Return whether a sentence belongs to the inclusive 20–35 bucket."""
+    return 20 <= word_count <= 35
+
+
 def load(path):
     return open(path, encoding='utf-8').read()
 
@@ -166,10 +176,10 @@ def report(path, label):
           f"sd {sentence_length_deviation:.2f}  CV {sentence_length_variation:.1f}%  max {max(sentence_lengths)}")
     print(f"  mode<median<mean  {status(mode < median(sentence_lengths) < fmean(sentence_lengths))}     "
           f"mean 11-18  {status(11 <= fmean(sentence_lengths) <= 18)}     "
-          f"CV 68-100%  {status(66 <= sentence_length_variation <= 100)}")
+          f"CV 68-100%  {status(68 <= sentence_length_variation <= 100)}")
     for name, predicate, lower_bound, upper_bound in [('<10', lambda value: value < 10, 35, 45),
-                            ('10-20', lambda value: 10 <= value <= 20, 30, 35),
-                            ('20-35', lambda value: 20 < value <= 35, 15, 20),
+                            ('10-20', in_ten_to_twenty, 30, 35),
+                            ('20-35', in_twenty_to_thirty_five, 15, 20),
                             ('>35', lambda value: value > 35, 0, 5)]:
         pct = 100 * sum(1 for value in sentence_lengths if predicate(value)) / len(sentence_lengths)
         print(f"  {name:>6}: {pct:5.1f}%  target {lower_bound}-{upper_bound}%  {status(lower_bound <= pct <= upper_bound)}")
@@ -349,8 +359,8 @@ def summarise(paths):
     # the author has ruled out. These are the observed range across the
     # eleven reference novels, with the median printed beside them.
     for name, predicate, lower_bound, upper_bound, med in [('under 10', lambda value: value < 10, 21.7, 50.7, 42.7),
-                                  ('10-20', lambda value: 10 <= value < 20, 26.1, 38.8, 31.0),
-                                  ('20-35', lambda value: 20 <= value <= 35, 15.2, 30.3, 19.9),
+                                  ('10-20', in_ten_to_twenty, 26.1, 38.8, 31.0),
+                                  ('20-35', in_twenty_to_thirty_five, 15.2, 30.3, 19.9),
                                   ('over 35', lambda value: value > 35, 4.9, 18.9, 6.9)]:
         pct = 100 * sum(1 for value in sentence_lengths if predicate(value)) / len(sentence_lengths)
         print(f"    {name:<10}{pct:>6.1f}%   corpus {lower_bound}-{upper_bound}%  median {med}%   "

@@ -200,7 +200,8 @@ def main():
         if not (word_count and ref):
             continue
         side_rates = [reference_values.get(side + "_per1000", 0) for reference_values in ref.values()]
-        side_rates = sorted(rate for rate in side_rates if rate)
+        # Zero is a real observation (a book with no uses), not missing data.
+        side_rates = sorted(side_rates)
         book_rate = 1000 * absolute_count / word_count
         percentile = 100 * sum(1 for rate in side_rates if rate < book_rate) / len(side_rates)
         print(f"\n  {label}: this book {book_rate:.2f} per 1000, at the {percentile:.0f}th "
