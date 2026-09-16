@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-"""Grade prose maturity against a reference corpus, not against invented targets.
+"""Measure prose and optionally compare it with a supplied reference corpus.
 
-style_report.py checks a chapter against the numbers written into
-STYLE_GUIDES.md. Several of those have no source behind them, and some have
-floors that reward choppier writing: chapter 8, the most grown-up chapter in
-the book, fails there partly for not having ENOUGH short sentences.
-
-This grades differently. Every measure is compared against 23 real books, and
-reported as a percentile in that field plus a straight type_token_windows/loss against one
-named book. The default benchmark is Peter Pan, which is below the target
-audience, so losing to it on a measure is a clear signal rather than a
-judgement call.
+The reusable ``measure`` function supplies TextGrader's default core metrics.
+The legacy command-line reporting functions remain for compatibility with old
+reference files, but no named manuscript, reader age, or maturity target is
+assumed by the measurement itself.
 
     python3 prose_grade.py MANUSCRIPT.md
     python3 prose_grade.py chapters/*.md --brief
@@ -62,22 +56,13 @@ SUBORDINATOR = (r"\b(because|although|though|while|whereas|since|unless|until|af
                 r"|if|when|whenever|as|so that|even though|rather than|whether)\b")
 RELATIVE = r"\b(who|whom|whose|which|that)\b"
 
-# A sentence that opens on a subordinate clause and closes it with a comma:
-# "Because the room was cold, she kept her coat on." Front-loading is the
-# natural replacement for a banned trailing clause, so it is worth watching
-# for the same overuse that got the trailing form banned. An opening quote is
-# allowed for, since dialogue does this too.
-# A line of the group chat: "ruth: what percentage of americans" and so on.
-# These are not prose and must not be measured as prose. Chapter 32 is 76%
-# transcript, chapter 24 is 47%, and grading those files as if the transcript
-# were narration says the writing is simple when what it is is a chat log.
-TRANSCRIPT = re.compile(r"^[a-z][a-z0-9_]{1,9}: ")
+# A sentence that opens on a subordinate clause and closes it with a comma.
+# An opening quote is allowed because dialogue may use this construction too.
 
 # The narrative negative: a sentence whose beat is an action not taken or a
 # reaction that did not happen. "He doesn't look up." "Nobody says anything."
 # "She reads it twice and doesn't add to the thread." One of these is a device.
-# One in six sentences is a tic, and the book has been running above every book
-# in the corpus on it.
+# This is a lexical proxy, not a judgement about the purpose of the negative.
 NEGATIVE = re.compile(
     r"\b(?:doesn't|does not|didn't|did not|don't|do not|isn't|is not|wasn't"
     r"|was not|aren't|weren't|never)\s+[a-z]"
@@ -118,8 +103,7 @@ METRICS = {
     "lexile":    ("Lexile (approximate, see note)", True),
 }
 
-# The twelve the book was first graded on. Kept so the headline number stays
-# comparable with every earlier measurement in the notes.
+# Historical CLI summary group, kept for output compatibility.
 CORE12 = ("fk wps sttr commas subord relcl b2035 long7 u10 simple shortruns "
           "top100").split()
 
@@ -481,8 +465,8 @@ def main():
             print(f"{name[:29]:30}{pct:>11.0f}%{lost:>12}")
 
 
-# Run from grade.py, not on its own. Every measure in measures/ reports one
-# slice; the scorecard is the whole picture and it is the thing that says
+# Run from grade.py, not on its own. Each script in measures/ reports one
+# diagnostic; grade.py assembles enabled checks and is the interface that says
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
@@ -490,7 +474,7 @@ def _solo_notice():
     import sys, os
     if os.environ.get("HALSTEAD_VIA_GRADE"):
         return
-    print("  [one measure of thirteen. the scorecard is: python3 grade.py]",
+    print("  [bundled diagnostic; use grade.py for the structured report]",
           file=sys.stderr)
 
 if __name__ == "__main__":

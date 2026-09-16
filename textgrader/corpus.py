@@ -12,6 +12,7 @@ import json
 import os
 import statistics
 import importlib
+import importlib.util
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,24 @@ METRIC_DEFINITION_VERSION = "1"
 
 from .text import paragraphs, sentences, strip_gutenberg, words
 from .metrics import MODULES, NLP_METRICS
+
+CORE_METRIC_KEYS = (
+    "fk", "ari", "wps", "slcv", "wpp", "spp", "wlen", "long7", "sttr",
+    "top100", "commas", "subord", "relcl", "simple", "u10", "b2035",
+    "shortruns", "front", "and2", "andrate", "negative", "_words",
+    "_sentences", "_paragraphs",
+)
+
+
+def _core_measure(text: str) -> dict[str, Any]:
+    """Load the legacy core calculator without making ``measures`` a package."""
+    path = Path(__file__).resolve().parents[1] / "measures" / "prose_grade.py"
+    spec = importlib.util.spec_from_file_location("textgrader_corpus_prose_grade", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - installation damage
+        raise RuntimeError(f"cannot load core prose metrics from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.measure(text, floor=1)
 
 
 def _words(text: str) -> list[str]:
@@ -86,7 +105,9 @@ def _timestamp(value: str | None) -> str:
 
 def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local corpus",
                   manifest: Mapping[str, Any] | None = None, built_at: str | None = None,
-                  preprocessing: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                  preprocessing: Mapping[str, Any] | None = None,
+                  metrics: Mapping[str, Any] | None = None,
+                  include_core_metrics: bool = True) -> dict[str, Any]:
     """Profile local text files without retaining or later requiring raw books."""
     files = _source_files(inputs)
     if not files:
@@ -97,6 +118,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     used_ids: Counter[str] = Counter()
     frequency: Counter[str] = Counter()
     feature_profiles: dict[str, list[dict[str, float]]] = {"function_words": []}
+    metric_settings = dict(metrics or {})
 
     for input_index, path, relative_name in files:
         raw_bytes = path.read_bytes()
@@ -129,13 +151,19 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
             "metadata": {key: value for key, value in item_meta.items()
                          if key not in {"id", "filename", "path"}},
         }
+        if include_core_metrics:
+            core = _core_measure(clean)
+            book.update({key: core[key] for key in CORE_METRIC_KEYS
+                         if core.get(key) is not None})
         # Dependency-free opt-in metrics are precomputed so enabling one at
         # grading time can compare like with like without retaining raw books.
         for metric_name, module_name in MODULES.items():
             if metric_name in NLP_METRICS or metric_name in {"character_voice", "function_words"}:
                 continue
             module = importlib.import_module(f"textgrader.metrics.{module_name}")
-            for finding in module.measure(clean, config={}, profile=None, nlp=None):
+            setting = metric_settings.get(metric_name, {})
+            options = setting if isinstance(setting, Mapping) else {}
+            for finding in module.measure(clean, config=options, profile=None, nlp=None):
                 if isinstance(finding.get("value"), (int, float)):
                     book[finding["metric_id"]] = finding["value"]
         function_words = importlib.import_module("textgrader.metrics.function_words")
@@ -160,6 +188,9 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     advanced_keys = sorted({key for book in books for key in book if key.startswith(("style.", "nlp."))})
     distributions.update({key: _distribution([book[key] for book in books if key in book])
                           for key in advanced_keys})
+    if include_core_metrics:
+        distributions.update({key: _distribution([book[key] for book in books if key in book])
+                              for key in CORE_METRIC_KEYS})
     return {
         "schema_version": SCHEMA_VERSION,
         "textgrader_version": "0.1.0",
@@ -168,6 +199,8 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "corpus_name": corpus_name,
         "build_timestamp": _timestamp(built_at),
         "preprocessing": preprocessing_settings,
+        "core_metrics": include_core_metrics,
+        "metric_settings": metric_settings,
         "book_count": len(books), "books": books,
         "distributions": distributions,
         "word_frequency": {word: frequency[word] for word in sorted(frequency)},
@@ -196,9 +229,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--name", default="local corpus")
     parser.add_argument("--manifest", type=Path, help="optional JSON metadata manifest")
+    parser.add_argument("--config", type=Path, help="project config whose metric options must be reproduced")
+    parser.add_argument("--no-core-metrics", action="store_true", help="omit the default core prose distributions")
     args = parser.parse_args(argv)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8")) if args.manifest else None
-    write_profile(build_profile(args.inputs, corpus_name=args.name, manifest=manifest), args.output)
+    config = json.loads(args.config.read_text(encoding="utf-8")) if args.config else {}
+    write_profile(build_profile(args.inputs, corpus_name=args.name, manifest=manifest,
+                                metrics=config.get("metrics", {}),
+                                include_core_metrics=not args.no_core_metrics), args.output)
     return 0
 
 
