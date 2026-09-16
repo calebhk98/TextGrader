@@ -20,7 +20,7 @@ from pathlib import Path
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-from project_config import CHAPTERS_DIR
+from project_config import BANNED_CONSTRUCTIONS, CHAPTERS_DIR
 
 # (pattern, what it is, why it is out)
 BANNED = [
@@ -58,6 +58,15 @@ BANNED = [
      "it would be years before",
      "Narrator stepping outside the scene to flag a future the camera cannot see."),
 ]
+
+# Leave ``banned_constructions`` null to use the defaults above. A configured
+# list replaces them, making project-specific rulings possible without editing
+# this script. Each item has ``pattern``, ``name``, and ``reason`` fields.
+if BANNED_CONSTRUCTIONS is not None:
+    BANNED = [
+        (item["pattern"], item["name"], item.get("reason", "Configured rule."))
+        for item in BANNED_CONSTRUCTIONS
+    ]
 
 
 def scan(paths):

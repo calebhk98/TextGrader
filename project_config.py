@@ -29,3 +29,6 @@ MANUSCRIPT = project_path("manuscript")
 CHAPTERS_DIR = project_path("chapters_dir")
 CHARACTERS_DIR = project_path("characters_dir")
 CORPUS_DIRS = tuple((ROOT / path).resolve() for path in CONFIG["corpus_dirs"])
+READING_TARGETS = CONFIG["reading_targets"]
+DIALOGUE_TARGETS = CONFIG["dialogue_targets"]
+BANNED_CONSTRUCTIONS = CONFIG.get("banned_constructions")
