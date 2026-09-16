@@ -43,9 +43,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from project_config import CHAPTERS_DIR, MANUSCRIPT
+
 HERE = Path(__file__).resolve().parent
-CHAPTERS = sorted((HERE / "chapters").glob("*.md"))
-BOOK = HERE / "HALSTEAD.md"
+CHAPTERS = sorted(CHAPTERS_DIR.glob("*.md"))
+BOOK = MANUSCRIPT
 
 LEXILE_TARGET = 1000
 
@@ -159,7 +161,8 @@ def dialogue_share(path):
     four per cent dialogue. Always read the share and the count beside the mean.
     """
     import statistics as _st
-    spec2 = importlib.util.spec_from_file_location("ds", HERE / "dialogue_study.py")
+    spec2 = importlib.util.spec_from_file_location(
+        "ds", HERE / "measures" / "dialogue_study.py")
     ds = importlib.util.module_from_spec(spec2)
     import sys as _sys
     _argv, _sys.argv = _sys.argv, ["x"]

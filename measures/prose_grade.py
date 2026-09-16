@@ -12,7 +12,7 @@ named book. The default benchmark is Peter Pan, which is below the target
 audience, so losing to it on a measure is a clear signal rather than a
 judgement call.
 
-    python3 prose_grade.py HALSTEAD.md
+    python3 prose_grade.py MANUSCRIPT.md
     python3 prose_grade.py chapters/*.md --brief
     python3 prose_grade.py draft.md --benchmark treasure_island
     python3 prose_grade.py --list-benchmarks

@@ -24,6 +24,8 @@ from pathlib import Path
 
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+from project_config import CHARACTERS_DIR
 SKIP = {"_TEMPLATE.md", "_CALIBRATION.md", "_ALLOCATIONS.md", "_DIFFERENTIATION.md",
         "_SHEET_RULES.md", "_APPEARANCES.md"}
 
@@ -137,7 +139,7 @@ def main():
     elif a.rule == 3:
         rules = BOOK_REFERENCE
 
-    files = a.sheets or sorted((a.root / "characters").glob("*.md"))
+    files = a.sheets or sorted(CHARACTERS_DIR.glob("*.md"))
     total = 0
     for f in files:
         if f.name in SKIP or not f.is_file():
