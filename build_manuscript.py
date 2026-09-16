@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 from project_config import CHAPTERS_DIR, MANUSCRIPT
+from textgrader.chapters import chapter_number
 
 HERE = Path(__file__).resolve().parent
 CHAPTERS = CHAPTERS_DIR
@@ -54,30 +55,20 @@ def number_word(number):
 
 
 def chapters():
-    """Every chapters/NN_*.md in filename order, which is reading order."""
-    found = []
-    for path in sorted(CHAPTERS.glob("*.md")):
-        match = re.match(r"(\d+)_", path.name)
-        if match:
-            found.append((int(match.group(1)), path))
-    return found
+    """Markdown files in natural numeric order, with lexical fallbacks."""
+    paths = list(CHAPTERS.glob("*.md"))
+    paths.sort(key=lambda path: (chapter_number(path) is None,
+                                chapter_number(path) or 0, path.name.casefold()))
+    return [(chapter_number(path), path) for path in paths]
 
 
 def check(found):
-    """Numbering gaps, duplicates, and headings that disagree with filenames."""
+    """Reject ambiguous duplicate numbers without prescribing headings."""
     problems = []
-    nums = [chapter_number for chapter_number, _ in found]
-    for position, chapter_number in enumerate(nums, start=1):
-        if chapter_number != position:
-            problems.append(f"numbering: expected {position:02d}, found {chapter_number:02d} "
-                            f"({found[position-1][1].name})")
-            break
-    for chapter_number, path in found:
-        head = path.read_text(encoding="utf-8").split("\n", 1)[0]
-        want = f"## Chapter {number_word(chapter_number)}:"
-        if not head.startswith(want):
-            problems.append(f"{path.name}: heading is {head!r}, expected it to "
-                            f"start {want!r}")
+    numbers = [number for number, _ in found if number is not None]
+    duplicates = sorted({number for number in numbers if numbers.count(number) > 1})
+    if duplicates:
+        problems.append("duplicate chapter number(s): " + ", ".join(map(str, duplicates)))
     return problems
 
 

@@ -32,13 +32,28 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 from project_config import CHAPTERS_DIR
+from textgrader.chapters import chapter_number
 DATELINE = re.compile(r"^\*[A-Z][a-z]+ \d{4}(?:\s*[–-]\s*[A-Z][a-z]+ \d{4})?\*$")
 WORD = re.compile(r"[A-Za-z][A-Za-z']*")
 
 
-def at_revision(rev, relpath):
+def git_root(path):
+    """Find the repository containing *path* without assuming its layout."""
+    result = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                            capture_output=True, text=True, cwd=path)
+    return Path(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def at_revision(rev, path):
+    repo = git_root(path.parent)
+    if repo is None:
+        return None
+    try:
+        relpath = path.resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError:
+        return None
     result = subprocess.run(["git", "show", f"{rev}:{relpath}"],
-                       capture_output=True, text=True, cwd=HERE.parent)
+                            capture_output=True, text=True, cwd=repo)
     return result.stdout if result.returncode == 0 else None
 
 
@@ -68,19 +83,18 @@ def main():
         # "0 problem(s)", so every caller who wrote it got a silent pass. Two
         # agents and this script's own caller were misled by that before it
         # was found; an argument matching no chapter is now an error.
-        want = {chapter_number.strip().zfill(2)
-                for arg in args.chapters for chapter_number in arg.split(",") if chapter_number.strip()}
-        files = [chapter_path for chapter_path in files if chapter_path.name[:2] in want]
-        missing = want - {chapter_path.name[:2] for chapter_path in files}
+        want = {int(number.strip())
+                for arg in args.chapters for number in arg.split(",") if number.strip()}
+        files = [path for path in files if chapter_number(path) in want]
+        missing = want - {chapter_number(path) for path in files}
         if missing or not files:
-            sys.exit(f"no chapter matches: {', '.join(sorted(missing)) or '(none given)'}")
+            sys.exit(f"no chapter matches: {', '.join(map(str, sorted(missing))) or '(none given)'}")
 
     problems = 0
     print(f"{'chapter':<24}{'words':>8}{'hard breaks':>14}{'em dash':>9}{'curly':>7}")
     for chapter_path in files:
-        rel = f"{HERE.name}/chapters/{chapter_path.name}"
         now = chapter_path.read_text(encoding="utf-8")
-        old = at_revision(args.since, rel)
+        old = at_revision(args.since, chapter_path)
         current_counts, old_counts = counts(now), counts(old) if old else None
 
         note = []

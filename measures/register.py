@@ -31,6 +31,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 from project_config import CHAPTERS_DIR
+from textgrader.chapters import chapter_number
 
 WORD = re.compile(r"[A-Za-z']+")
 LONG = 9
@@ -81,7 +82,11 @@ def main():
         return 0
 
     median = statistics.median(row[1] for row in rows)
-    ceiling = median * RATIO
+    # When the overall median is zero, compare against the typical non-zero
+    # chapter instead of making every occurrence an automatic outlier.
+    positive = [row[1] for row in rows if row[1] > 0]
+    baseline = median if median > 0 else (statistics.median(positive) if positive else 0.0)
+    ceiling = baseline * RATIO
     over = [row for row in rows if row[1] > ceiling and row[0] not in EXEMPT]
     excused = [row for row in rows if row[1] > ceiling and row[0] in EXEMPT]
 
@@ -104,7 +109,7 @@ def main():
             print(f"\n  {stem}: " + ", ".join(f"{word} ({count})" for word, count in common))
 
     if over:
-        names = ", ".join(f"{row[0][:2]} ({row[1]:.2f}%)" for row in over)
+        names = ", ".join(f"{chapter_number(row[0])} ({row[1]:.2f}%)" for row in over)
         # One verdict line, matching how the scorecard reads every other
         # measure. The per-chapter rows above are the detail to fix from; the
         # scorecard has been burned once already by matching a detail line.

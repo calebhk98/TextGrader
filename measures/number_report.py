@@ -60,6 +60,7 @@ def profile(text):
         "count": len(values),
         "rate": 1000 * len(values) / words if words else 0,
         "distinct": len(counter),
+        "distinct_rate": 1000 * len(counter) / words if words else 0,
         "top5": 100 * sum(count for _, count in counter.most_common(5)) / total,
         "top1": 100 * counter.most_common(1)[0][1] / total if counter else 0,
         "counter": counter,
@@ -139,8 +140,8 @@ def main():
         band("numbers per 1000 words", book_profile["rate"], [chapter_profile["rate"] for ignored, chapter_profile in ref])
         band("share on the commonest 5 values %", book_profile["top5"], [chapter_profile["top5"] for ignored, chapter_profile in ref])
         band("share on the single commonest %", book_profile["top1"], [chapter_profile["top1"] for ignored, chapter_profile in ref])
-        band("distinct values used", book_profile["distinct"],
-             [chapter_profile["distinct"] for ignored, chapter_profile in ref], higher_is_worse=False)
+        band("distinct values per 1000 words", book_profile["distinct_rate"],
+             [chapter_profile["distinct_rate"] for ignored, chapter_profile in ref], higher_is_worse=False)
 
     print(f"\n  the {args.top} commonest, as a share of all numbers, against the corpus:")
     print(f"    {'value':<10}{'uses':>6}{'share':>8}{'corpus med':>12}{'corpus max':>12}")

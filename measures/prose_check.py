@@ -139,7 +139,8 @@ def main():
     elif args.rule == 3:
         rules = BOOK_REFERENCE
 
-    files = args.sheets or sorted(CHARACTERS_DIR.glob("*.md"))
+    files = args.sheets or sorted((args.root / CHARACTERS_DIR.relative_to(HERE)).glob("*.md"))
+    files = [path if path.is_absolute() else args.root / path for path in files]
     total = 0
     for sheet_path in files:
         if sheet_path.name in SKIP or not sheet_path.is_file():

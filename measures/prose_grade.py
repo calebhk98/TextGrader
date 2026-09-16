@@ -45,10 +45,17 @@ import statistics as statistics
 import sys
 from pathlib import Path
 
-from style_report import paragraphs, sents, words
-
 # The measures live in measures/; the manuscript is a level up.
 HERE = Path(__file__).resolve().parent.parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+from textgrader.text import (paragraphs, sentences as sents,
+                             remove_markdown_headings, strip_gutenberg,
+                             strip_transcript, words)
+
+
+def in_twenty_to_thirty_five(word_count):
+    return 20 <= word_count <= 35
 REFERENCE = HERE / "prose_reference.json"
 
 SUBORDINATOR = (r"\b(because|although|though|while|whereas|since|unless|until|after|before"
@@ -133,34 +140,21 @@ def syllables(word):
     return max(count, 1)
 
 
-def strip_transcript(text):
-    """Remove chat-transcript lines, and report what share of the words they were."""
-    lines = text.split("\n")
-    kept = [line for line in lines if not TRANSCRIPT.match(line.strip())]
-    total = len(re.findall(r"[A-Za-z][A-Za-z']*", text))
-    left = len(re.findall(r"[A-Za-z][A-Za-z']*", "\n".join(kept)))
-    share = 100 * (total - left) / total if total else 0.0
-    return "\n".join(kept), share
-
-
 WORDFREQ = HERE / "word_frequency.json"
 _FREQ = None
 
 
 def word_frequency():
-    """Occurrences per million, built from the 23-book reference corpus.
+    """Return no implicit frequency table.
 
-    The real Lexile measure uses a proprietary frequency corpus that is not
-    available here. This is the same shape of input drawn from the same books
-    the rest of the script grades against, which is the best substitute on hand
-    and is why the Lexile column is labelled approximate.
+    The historical bundled table included Gutenberg boilerplate and its fitted
+    coefficients could not be reproduced.  Approximate Lexile is therefore
+    unavailable until an explicit, versioned calibration is supplied rather
+    than silently presenting an untrustworthy value.
     """
     global _FREQ
     if _FREQ is None:
-        try:
-            _FREQ = json.loads(WORDFREQ.read_text())["freq_per_million"]
-        except Exception:
-            _FREQ = {}
+        _FREQ = {}
     return _FREQ
 
 
@@ -207,6 +201,7 @@ def measure(text, floor=40):
     chapter by twenty points or more. The sampled form exists to remove that
     dependence, and it cannot do so without a full window.
     """
+    text = remove_markdown_headings(strip_gutenberg(text))
     full_words = len(words(text))
     text, transcript_share = strip_transcript(text)
     paras = [paragraph for paragraph in paragraphs(text) if paragraph.strip() != "---"]
@@ -229,7 +224,7 @@ def measure(text, floor=40):
             runs = 0
     short_run_sentences += runs if runs >= 3 else 0
 
-    type_token_windows = [len(set(long_words[index:index + 1000])) / 1000 for index in range(0, len(long_words) - 1000, 1000)]
+    type_token_windows = [len(set(long_words[index:index + 1000])) / 1000 for index in range(0, len(long_words) - 999, 1000)]
     words_per_sentence = statistics.fmean(sentence_lengths)
 
     # Paragraph shape. A paragraph with no words in it is a stray marker line,
@@ -254,7 +249,7 @@ def measure(text, floor=40):
         "commas": text.count(",") / sentence_count,
         "subord": 100 * sum(1 for sentence in sentences if re.search(SUBORDINATOR, sentence, re.I)) / sentence_count,
         "relcl": 100 * sum(1 for sentence in sentences if re.search(RELATIVE, sentence, re.I)) / sentence_count,
-        "b2035": 100 * sum(1 for value in sentence_lengths if 20 < value <= 35) / sentence_count,
+        "b2035": 100 * sum(1 for value in sentence_lengths if in_twenty_to_thirty_five(value)) / sentence_count,
         "long7": 100 * sum(1 for length in word_tokens if len(length) >= 7) / word_count,
         "u10": 100 * sum(1 for value in sentence_lengths if value < 10) / sentence_count,
         "simple": 100 * sum(1 for sentence in sentences
@@ -282,11 +277,6 @@ def measure(text, floor=40):
     }
 
 
-def strip_gutenberg(text):
-    match = re.search(r"\*\*\* ?START OF.*?\*\*\*(.*?)\*\*\* ?END OF", text, re.S)
-    return match.group(1) if match else text
-
-
 def build_reference(dirs, out):
     books = {}
     for directory in dirs:
@@ -302,7 +292,7 @@ def build_reference(dirs, out):
 
 
 def percentile(values, candidate):
-    return 100 * sum(1 for value in values if value < candidate) / len(values)
+    return 100 * sum(1 for value in values if value < candidate) / len(values) if values else None
 
 
 def grade(path, ref, benchmark, brief):
@@ -314,36 +304,45 @@ def grade(path, ref, benchmark, brief):
         print(f"{Path(path).name}: too short to grade (needs 40+ sentences)")
         return None
 
-    bench = ref[benchmark]
+    if not ref:
+        print(f"{Path(path).name}: corpus comparison unavailable (empty reference)")
+        return None
+    bench = ref.get(benchmark) if benchmark else None
     losses, pcts, core, skipped = [], [], [], []
     lines = []
     for key, (label, higher) in METRICS.items():
         if got[key] is None:
             skipped.append(label)
             continue
-        vals = [benchmark_value[key] for benchmark_value in ref.values()]
-        path = percentile(vals, got[key])
+        vals = [benchmark_value[key] for benchmark_value in ref.values()
+                if benchmark_value.get(key) is not None]
+        if not vals:
+            skipped.append(label)
+            continue
+        metric_percentile = percentile(vals, got[key])
         if not higher:
-            path = 100 - path
-        pcts.append(path)
+            metric_percentile = 100 - metric_percentile
+        pcts.append(metric_percentile)
         if key in CORE12:
-            core.append(path)
+            core.append(metric_percentile)
         # >= / <= so a book tied with the benchmark, including the benchmark
         # itself, is not scored as a loss.
-        beat = got[key] >= bench[key] if higher else got[key] <= bench[key]
+        beat = None if bench is None or bench.get(key) is None else (
+            got[key] >= bench[key] if higher else got[key] <= bench[key])
         # Distance from the benchmark in corpus standard deviations, so gaps on
         # measures with different units can be ranked against each other.
-        standard_deviation = statistics.stdev(vals)
-        gap = (bench[key] - got[key]) / standard_deviation * (1 if higher else -1)
-        if not beat:
+        standard_deviation = statistics.stdev(vals) if len(vals) > 1 else 0.0
+        gap = ((bench[key] - got[key]) / standard_deviation * (1 if higher else -1)
+               if bench is not None and standard_deviation else 0.0)
+        if beat is False:
             losses.append((-gap, label, got[key], bench[key], gap))
-        lines.append((path, label, got[key], bench[key], beat))
+        lines.append((metric_percentile, label, got[key], bench.get(key) if bench else None, beat))
 
     print("=" * 78)
     print(f"{Path(path).name}  |  {got['_words']:,} words  |  "
-          f"benchmark: {benchmark}  |  corpus: {len(ref)} books")
+          f"benchmark: {benchmark or 'none'}  |  corpus: {len(ref)} books")
     metric_count = len(METRICS) - len(skipped)
-    print(f"\nmaturity percentile (median of {metric_count} measures): {statistics.median(pcts):.0f}"
+    print(f"\nstyle percentile (descriptive median of {metric_count} measures): {statistics.median(pcts):.0f}"
           f"      lost to benchmark on {len(losses)} of {metric_count}")
     print(f"  on the original 12 measures: {statistics.median(core):.0f}")
     if got["_transcript"] >= 1:
@@ -352,8 +351,9 @@ def grade(path, ref, benchmark, brief):
     if not brief:
         print(f"\n  {'measure':46}{'this':>8}{'bench':>8}{'pct':>6}")
         for path, label, mine, theirs, beat in sorted(lines):
-            print(f"  {label:46}{mine:>8.2f}{theirs:>8.2f}{path:>5.0f}%  "
-                  f"{'' if beat else '<-- loses'}")
+            theirs_text = f"{theirs:8.2f}" if theirs is not None else f"{'—':>8}"
+            print(f"  {label:46}{mine:>8.2f}{theirs_text}{path:>5.0f}%  "
+                  f"{'<-- differs' if beat is False else ''}")
     if skipped:
         print(f"  not measurable in a text this short: {', '.join(skipped)}")
     if not brief:
@@ -439,7 +439,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("paths", nargs="*", type=Path)
-    parser.add_argument("--benchmark", default="peter_pan")
+    parser.add_argument("--benchmark", help="optional named-book diagnostic")
     parser.add_argument("--reference", type=Path, default=REFERENCE)
     parser.add_argument("--brief", action="store_true", help="summary line per file only")
     parser.add_argument("--summary", action="store_true",
@@ -462,7 +462,7 @@ def main():
         return
     if not args.paths:
         sys.exit("error: give one or more files to grade")
-    if args.benchmark not in ref:
+    if args.benchmark and args.benchmark not in ref:
         sys.exit(f"error: no book named {args.benchmark}; try --list-benchmarks")
 
     if args.summary:
