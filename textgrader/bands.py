@@ -3,26 +3,25 @@
 A single whole-book target cannot express a book whose reading level is
 *supposed* to change - a coming-of-age novel whose protagonist ages, a
 textbook, a tutorial series, a graded reader, documentation running from
-quickstart to reference. Worse, a flat target actively hides the change: a
-manuscript measured here reads Flesch-Kincaid 6.8 against a target of 7.0,
-which looks slightly under and fine, while its last fourteen chapters average
-8.85 against a floor of 7.2 with three of them between 10.8 and 11.2. The flat
-number averages a real structural problem into invisibility.
+quickstart to reference. Worse, a flat target actively hides the change. A
+book whose early chapters sit comfortably below a whole-book target and whose
+late chapters run three or four grades above it averages out to a number that
+looks slightly under target and fine, and the structural problem never
+surfaces. See ``tests/test_chapter_bands.py`` for that case in numbers.
 
-Two details are load-bearing, both learned the hard way in the tool this came
-from.
+Two details below are load-bearing.
 
-The BAND AVERAGE is what gets judged, not each chapter. An earlier version
-judged the band average and then also failed the band whenever its own
-footnote listed a chapter below the floor, which made two bands permanently
-unfixable: the average cleared, a chapter did not, and nothing a writer could
-do satisfied both. The chapters below the floor are listed because they say
-where to look, and they do not themselves fail the band.
+The BAND AVERAGE is what gets judged, not each chapter. Judging the average
+and ALSO failing the band whenever any single chapter falls below the floor
+makes bands that no revision can satisfy: the average clears, one chapter does
+not, and both conditions cannot be met at once. The chapters below the floor
+are listed because they say where to look, and they do not themselves fail the
+band.
 
-A band may carry a CEILING as well as a floor. The original had floors only,
-which is why nothing in it flagged three chapters running at Flesch-Kincaid 11
-in a book aimed at ninth graders. A target that can only be undershot is half
-a target.
+A band may carry a CEILING as well as a floor. Floors alone cannot flag a
+chapter running several grades ABOVE where it should be, which is the same
+structural problem pointing the other way. A target that can only be
+undershot is half a target.
 """
 
 from __future__ import annotations

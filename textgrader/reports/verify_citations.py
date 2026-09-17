@@ -3,7 +3,7 @@
 
 A sheet writer working from memory can produce a quotation that reads exactly
 like the book, attach a real file and line number to it, and mark it [text].
-That is worse than an honest gap: the author revises toward a line that was
+That is worse than an honest gap: revision then proceeds toward a line that was
 never written.
 
 This finds them. For every quoted string in a character sheet that is long
@@ -16,7 +16,7 @@ ARGUMENT CONTRACT (read this before wiring up a caller):
 
     python3 verify_citations.py
     python3 verify_citations.py --min-words 4
-    python3 verify_citations.py --sheets characters/RUTH.md
+    python3 verify_citations.py --sheets characters/SOME_CHARACTER.md
     python3 verify_citations.py --manuscript MANUSCRIPT.md
 
 There is no bare positional argument. A caller checking one manuscript file's
@@ -46,6 +46,7 @@ import re
 import sys
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 
 
@@ -161,13 +162,7 @@ def main(argv=None):
 # Run from grade.py, not on its own. Each script in measures/ reports one
 # diagnostic; grade.py assembles enabled checks and is the interface that says
 # whether a pass helped.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     sys.exit(main())

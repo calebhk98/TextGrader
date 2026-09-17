@@ -1,7 +1,7 @@
 """How each spoken turn is attributed to its speaker, and how reliably.
 
 Fiction marks who is talking three ways: a speech tag adjacent to the quote
-("Ruth said"), an action beat that stands in for a tag ("Ruth crossed the
+("Maya said"), an action beat that stands in for a tag ("Maya crossed the
 room." right before or after the line, with no verb of speaking at all), or
 nothing, leaving the reader to infer the speaker from context.  The existing
 ``dialogue_tags.py`` looks for a speech verb in a fixed +/-100 character
@@ -24,7 +24,7 @@ could tell the two apart; this fast, dependency-free pass cannot, and says so
 in its evidence rather than pretending otherwise.
 
 Speaker names, where one is found, come from a capitalized token sitting
-immediately next to the matched speech verb ("Ruth said" / "said Ruth"), not
+immediately next to the matched speech verb ("Maya said" / "said Maya"), not
 from any list of character names, so the same code works on any novel.  A
 turn with a tag but no adjacent capitalized token (most commonly a pronoun,
 "she said") is still classified as ``speech_tag`` but carries no speaker; the

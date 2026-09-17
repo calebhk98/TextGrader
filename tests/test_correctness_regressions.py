@@ -108,28 +108,28 @@ class PerChannelCast(unittest.TestCase):
         directory = Path(tempfile.mkdtemp())
         (directory / "01_chat.md").write_text(
             "\n".join(f"{who}: {msg}" for who, msg in
-                      [("Chloe", "are you coming to the thing or not"),
-                       ("Ruth", "i think so maybe later on tonight"),
-                       ("Sam", "cant sorry busy with the whole thing")] * 6),
+                      [("Alice", "are you coming to the thing or not"),
+                       ("Bob", "i think so maybe later on tonight"),
+                       ("Carol", "cant sorry busy with the whole thing")] * 6),
             encoding="utf-8")
         (directory / "02_prose.md").write_text(
-            "\n".join(["Deb: the word came out flat and nobody said anything at all."] * 6),
+            "\n".join(["Dave: the word came out flat and nobody said anything at all."] * 6),
             encoding="utf-8")
         return sorted(directory.glob("*.md"))
 
     def test_a_prose_only_name_is_not_a_chat_speaker(self):
         paths = self._chapters()
-        merged = collect_chat(paths, ["Chloe", "Ruth", "Sam", "Deb"])
-        self.assertEqual(len(merged["deb"]), 6)   # the regression, reproduced
-        split = collect_chat(paths, ["Chloe", "Ruth", "Sam"])
-        self.assertNotIn("deb", split)
-        self.assertEqual(sorted(split), ["chloe", "ruth", "sam"])
+        merged = collect_chat(paths, ["Alice", "Bob", "Carol", "Dave"])
+        self.assertEqual(len(merged["dave"]), 6)   # the regression, reproduced
+        split = collect_chat(paths, ["Alice", "Bob", "Carol"])
+        self.assertNotIn("dave", split)
+        self.assertEqual(sorted(split), ["alice", "bob", "carol"])
 
     def test_chat_speakers_defaults_to_speakers(self):
         # A project with one cast configures one list and nothing changes.
-        settings = {"speakers": ["Chloe", "Ruth"]}
+        settings = {"speakers": ["Alice", "Bob"]}
         chat_speakers = settings.get("chat_speakers", settings["speakers"])
-        self.assertEqual(chat_speakers, ["Chloe", "Ruth"])
+        self.assertEqual(chat_speakers, ["Alice", "Bob"])
 
 
 class BundledFrequencyTable(unittest.TestCase):

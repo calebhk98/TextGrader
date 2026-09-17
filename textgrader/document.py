@@ -348,7 +348,7 @@ class DocumentAnalysis:
     def turns(self) -> list[str]:
         """Spoken turns, rejoining a quotation split by its own attribution.
 
-        ``"A," she says, "B."`` is one turn; ``"A," Ruth says. "B," Sam says.``
+        ``"A," she says, "B."`` is one turn; ``"A," he says. "B," she says.``
         is two.  The difference is whether the narration between the spans
         closes a sentence, which is the only signal available without knowing
         who is speaking.

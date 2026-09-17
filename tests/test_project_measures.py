@@ -1,6 +1,7 @@
 """The bundled reports carry no manuscript of their own any more."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -14,18 +15,65 @@ REPORTS = ROOT / "textgrader" / "reports"
 EXAMPLE = ROOT / "examples" / "project_measures.example.json"
 
 # Names and fragments from the one manuscript this repository was extracted
-# from.  None of them may appear in the code any more; they live in the example
-# configuration instead.
-FORBIDDEN = ["chloe", "kavi", "nadia", "kayleigh", "marisol", "aldana",
-             "28_nineteen", "tom_sawyer", "treasure_island", "wind_in_willows",
-             "puts it back down", "both hands", "MANUSCRIPT_FULL"]
+# from. None of them may appear in the code, the tests or the example config.
+#
+# Matched on word boundaries, because several are substrings of ordinary words
+# and a plain "in" test made this guard useless for exactly the short names
+# that are hardest to spot: "sam" is in "same", "theo" in "theory", "deb" in
+# "debug" and "debt", "fen" in "often".
+FORBIDDEN_WORDS = [
+    "chloe", "ruth", "sam", "nadia", "kavi", "theo", "odile", "priya", "fen",
+    "kayleigh", "bryce", "marisol", "aldana", "vance", "prahl", "baptiste",
+    "kowalczyk", "pruitt", "sinclair", "amberg", "sandoval", "prentice",
+    "ammons", "whitaker", "ruiz",
+]
+
+# Substrings that are distinctive enough not to need a boundary.
+FORBIDDEN_FRAGMENTS = [
+    # "halstead" is a fragment, not a word: the name it has to catch is
+    # HALSTEAD_VIA_GRADE, where the underscore is a word character and \b
+    # therefore never matches after it.
+    "halstead",
+    "28_nineteen", "manuscript_full", "prose_rules.md", "agency.py",
+    "_differentiation", "_allocations", "chapters_\\d", "ruth.md",
+    "puts it back down", "hand somebody a", "calls the count",
+    "and i want to be clear about",
+]
+
+# The pattern is built once so the two lists cannot drift apart.
+FORBIDDEN_PATTERN = re.compile(
+    "|".join([rf"\b{re.escape(word)}\b" for word in FORBIDDEN_WORDS]
+             + [re.escape(fragment) for fragment in FORBIDDEN_FRAGMENTS]),
+    re.IGNORECASE)
+
+#: Everything that ships. Narrowing this to reports/ is what let the
+#: environment variable named after the old project survive in sixteen files,
+#: and let the reports keep docstrings quoting the manuscript they came from.
+SHIPPED = (sorted((ROOT / "textgrader").rglob("*.py"))
+           + sorted(ROOT.glob("*.py"))
+           + sorted(ROOT.glob("tests/*.py"))
+           + [EXAMPLE, ROOT / "README.md", ROOT / "config.json"])
 
 
-@pytest.mark.parametrize("path", sorted(REPORTS.glob("*.py")))
-def test_no_measure_names_one_manuscript(path):
-    body = path.read_text(encoding="utf-8").lower()
-    found = [needle for needle in FORBIDDEN if needle.lower() in body]
-    assert not found, f"{path.name} still hard-codes {found}"
+@pytest.mark.parametrize("path", [path for path in SHIPPED if path.name != Path(__file__).name])
+def test_nothing_shipped_names_one_manuscript(path):
+    if not path.is_file():
+        return
+    found = sorted({match.group(0).lower()
+                    for match in FORBIDDEN_PATTERN.finditer(
+                        path.read_text(encoding="utf-8", errors="replace"))})
+    assert not found, f"{path.name} still names {found}"
+
+
+def test_the_guard_would_catch_a_regression():
+    # A guard nothing can fail is a guard nobody maintains.
+    assert FORBIDDEN_PATTERN.search("Ruth said")
+    assert FORBIDDEN_PATTERN.search("HALSTEAD_VIA_GRADE")
+    assert FORBIDDEN_PATTERN.search("characters/RUTH.md")
+    # ... and would not fire on ordinary English containing the short names.
+    for innocent in ("the same thing", "a theory of prose", "debug output",
+                     "often enough", "samples", "truth"):
+        assert not FORBIDDEN_PATTERN.search(innocent), innocent
 
 
 def test_the_example_config_is_valid_json_and_marked_as_an_example():
@@ -81,7 +129,7 @@ def test_every_bundled_report_runs_clean_with_no_policy(name, tmp_path, sample_t
     completed = subprocess.run(
         [sys.executable, "-m", f"textgrader.reports.{name}", *arguments],
         cwd=tmp_path, capture_output=True, text=True, timeout=180,
-        env={"PATH": "/usr/bin:/bin", "HALSTEAD_VIA_GRADE": "1",
+        env={"PATH": "/usr/bin:/bin", grade.VIA_GRADE_ENV_VAR: "1",
              "TEXTGRADER_CONFIG": str(config),
              "PYTHONPATH": str(ROOT)})
     assert "Traceback" not in completed.stderr, completed.stderr[-2000:]
@@ -105,7 +153,7 @@ def test_a_bundled_report_reads_the_file_it_was_given(tmp_path):
     completed = subprocess.run(
         [sys.executable, "-m", "textgrader.reports.register", str(target)],
         cwd=tmp_path, capture_output=True, text=True, timeout=120,
-        env={"PATH": "/usr/bin:/bin", "HALSTEAD_VIA_GRADE": "1",
+        env={"PATH": "/usr/bin:/bin", grade.VIA_GRADE_ENV_VAR: "1",
              "TEXTGRADER_CONFIG": str(config), "PYTHONPATH": str(ROOT)})
     assert completed.returncode == 0, completed.stderr[-1500:]
     assert "given" in completed.stdout

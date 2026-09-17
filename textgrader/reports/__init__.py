@@ -46,8 +46,8 @@ TARGETS = ("{manuscript}", "{chapters_dir}", "{manuscript_dir}")
 #: ``register`` was the clearest casualty, because it judges each chapter
 #: against the book's own median: with one row the median IS the row, nothing
 #: can exceed it, and the report printed a pass in the same words it uses for a
-#: real one. Run against the chapters directory, the same data puts two
-#: chapters within a twentieth of a point of the flag line.
+#: real one. Run against the chapters directory, the chapters that actually
+#: sit above the line are visible again.
 #:
 #: Nothing in the reports themselves needed changing. Each already resolves a
 #: directory argument through ``resolve_paths`` and already falls back to
@@ -68,4 +68,26 @@ REPORTS = {
     "voice_separation": ("{chapters_dir}",),
 }
 
-__all__ = ["REPORTS", "TARGETS"]
+#: Set by ``grade.py`` on every report it launches.  A report that does not see
+#: it is being run by hand, and says so on stderr: these print tables for a
+#: person to read, and ``grade.py`` is what turns one into a structured result.
+VIA_GRADE_ENV_VAR = "TEXTGRADER_VIA_GRADE"
+
+
+def solo_notice():
+    """Say on stderr that this report was run outside ``grade.py``.
+
+    One definition rather than the fourteen identical copies this used to
+    have, each naming the environment variable in its own string literal.
+    """
+
+    import os
+    import sys
+
+    if os.environ.get(VIA_GRADE_ENV_VAR):
+        return
+    print("  [bundled diagnostic; use grade.py for the structured report]",
+          file=sys.stderr)
+
+
+__all__ = ["REPORTS", "TARGETS", "VIA_GRADE_ENV_VAR", "solo_notice"]

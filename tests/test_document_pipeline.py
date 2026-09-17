@@ -54,7 +54,7 @@ def test_split_attribution_rejoins_into_one_turn():
 
 
 def test_separate_turns_are_not_joined():
-    analysis = DocumentAnalysis.from_text('"First." Ruth says. "Second," Sam says.')
+    analysis = DocumentAnalysis.from_text('"First." Alice says. "Second," Bob says.')
     assert len(analysis.turns) == 2
 
 

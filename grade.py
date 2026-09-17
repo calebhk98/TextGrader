@@ -31,7 +31,7 @@ from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings
                                  TextProcessing, resolve_unit, units_comparable)
 from textgrader.core_metrics import measure as core_measure
 from textgrader.metrics import REGISTRY
-from textgrader.reports import REPORTS
+from textgrader.reports import REPORTS, VIA_GRADE_ENV_VAR
 from textgrader.results import Action, MetricResult, Polarity, Report, StatusType
 from textgrader.rules import compile_rules
 from textgrader import stats
@@ -331,7 +331,7 @@ def run_bundled_measure(name, manuscript, config, timeout=120):
 
     command = [sys.executable, "-m", f"textgrader.reports.{name}",
                *measure_arguments(name, manuscript, config)]
-    environment = {**os.environ, "HALSTEAD_VIA_GRADE": "1",
+    environment = {**os.environ, VIA_GRADE_ENV_VAR: "1",
                    CONFIG_ENV_VAR: str(config.get("_config_path", config_path())),
                    # ``-m`` resolves the package from the working directory, and
                    # the working directory is the project's, not ours.

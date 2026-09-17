@@ -41,6 +41,7 @@ from collections import Counter
 from pathlib import Path
 from statistics import fmean, median, stdev
 
+from . import solo_notice
 from .. import project as project_config
 
 ABBR = r'(?:Mrs|Mr|Ms|Dr|St|Jr|Sr|vs|etc|[A-Z])'
@@ -142,10 +143,10 @@ def split_speech(paras):
         for match in re.finditer(r'"[^"]*"', paragraph):
             gap = paragraph[pos:match.start()]
             told.append(gap)
-            # A split quote ("A," she says, "B.") is one utterance and must be
-            # rejoined. Two utterances ("A," Ruth says. "B," Sam says.) must
-            # not be. The difference is whether the narration between them
-            # closes a sentence.
+            # A split quote ("A," she says, "B.") is one utterance and must
+            # be rejoined. Two consecutive speeches ("A," he says. "B," she
+            # says.) are two and must not be. The difference is whether the
+            # narration between them closes a sentence.
             if current and re.search(r'[.!?]', gap):
                 utterances.append(' '.join(current))
                 current = []
@@ -453,12 +454,6 @@ def resolve_paths(explicit, default_dir):
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
-def _solo_notice():
-    import os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 
 def main(argv):
@@ -497,5 +492,5 @@ def main(argv):
 
 
 if __name__ == '__main__':
-    _solo_notice()
+    solo_notice()
     sys.exit(main(sys.argv[1:]) or 0)

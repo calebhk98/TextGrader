@@ -231,15 +231,17 @@ def main():
             print(f"{name[:29]:30}{pct:>11.0f}%{lost:>12}")
 
 
-def _solo_notice():
+def solo_notice():
     """One line reminding a human that grade.py is the supported entry point."""
 
     import os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
+
+    from . import VIA_GRADE_ENV_VAR
+    if os.environ.get(VIA_GRADE_ENV_VAR):
         return
     print("  [one report; use grade.py for the structured report]", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     main()

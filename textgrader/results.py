@@ -166,21 +166,19 @@ class Report:
         """How many measurements were taken, and how many sit inside their reference.
 
         A severity-ranked findings list has no denominator, and a denominator
-        is the point. "3 to review" says nothing without knowing whether 91
-        things were measured or 65: the tool this one replaces printed only
-        failures for a while, and its author's note on why that changed reads
-
-            Seeing only you failed 5 metrics, when there are 300, hides that
-            you passed 295.
+        is the point. "3 to review" says nothing without knowing whether
+        ninety things were measured or sixty: reporting only failures hides
+        how much passed, and hides it getting smaller.
 
         ``not_taken`` is reported as its own number and folded into neither
         side, because that is the one that moves silently. A metric that
         errored is not a pass; a metric that was unavailable is not a failure;
-        both are measurements that did not happen. The same tool once ran for
-        weeks with three measures crashing and printing empty sections while
-        its scorecard read "23 of 23 measures passing (100%)" - a measure
-        producing no output contributed neither a pass nor a failure, so
-        losing one was invisible. The real count was 59.
+        both are measurements that did not happen. A measure producing no
+        output contributes neither a pass nor a failure, so without this count
+        a tool can report "23 of 23 passing (100%)" while three of its
+        measures have been crashing for weeks and the real denominator is
+        fifty-nine. A measure that can leave the count is worse than a measure
+        that fails.
 
         Configuration results are counted apart. A misspelt key is worth
         seeing, but it is not a measurement that failed to happen, and putting
@@ -234,10 +232,10 @@ class Report:
         argument for this. Severity-ranked findings answer "what is furthest
         out right now". They cannot answer "did this revision make the prose
         better or worse", because every individual metric can stay comfortably
-        inside its band while the whole moves. The project this tool came out
-        of recorded exactly that: a revision pass dropped the aggregate from
-        91 to 83 and nobody noticed, because every metric involved stayed an
-        inlier and there was no finding to see.
+        inside its band while the whole moves. A revision that pushes eighteen
+        measures a little toward the corpus floor produces no finding at all
+        and a clearly lower aggregate, and without the aggregate there is
+        nothing to notice.
 
         It is also the number you can automate against. A single integer fits
         in a commit message, a CI gate, or a chart over time; a list of 91

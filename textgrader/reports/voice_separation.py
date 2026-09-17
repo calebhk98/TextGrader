@@ -40,6 +40,7 @@ import statistics as st
 import sys
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 from ..text import TranscriptConfig, transcript_lines
 
@@ -173,9 +174,11 @@ def profile(lines, hedge_pattern=None):
     # MSTTR exists to remove. A four-word tail scores at or near 100% and is
     # then averaged with the SAME WEIGHT as a full fifty-word window, so its
     # pull on the mean is 1/segments: largest for the speakers with least
-    # text, which is the direction of the plain-TTR artefact. Measured on
-    # tagged dialogue, a 94-word speaker read 7.3 points high, enough to move
-    # them from mid-pack to narrowest vocabulary in the book.
+    # text, which is the direction of the plain-TTR artefact. A speaker with
+    # two windows and a short tail can read several points high - enough to
+    # move them from mid-pack to the narrowest vocabulary in a cast, which is
+    # the difference between a finding and no finding on a report whose whole
+    # purpose is separating voices.
     #
     # ``metrics/dialogue_channels._window_ttr`` drops only tails under half a
     # window, which is right there: it reports a median over the windows, so a
@@ -196,13 +199,14 @@ def profile(lines, hedge_pattern=None):
         "wpl": len(flat) / len(lines),
         # Plain type-token ratio, reported beside MSTTR rather than replaced by
         # it. It is a poor vocabulary measure: it falls mechanically as a
-        # sample grows, and across this project's tagged dialogue it ranked
-        # speakers at Spearman rho -0.976 against their word counts, which is
-        # very nearly a pure inverse ranking of who talks most. It is kept
-        # because it is the diagnostic for its own replacement (that rho is
-        # what demonstrates the confound), because existing work is calibrated
-        # against it, and because a speaker whose two ranks diverge is a
-        # speaker whose apparent vocabulary was an artefact of line volume.
+        # sample grows, so on tagged dialogue it tends to rank speakers almost
+        # perfectly inversely by how much they talk - a strong negative rank
+        # correlation with word count is the normal result, not an anomaly.
+        # It is kept because it is the diagnostic for its own replacement
+        # (that correlation is what demonstrates the confound, in whatever
+        # text you are measuring), because existing work may be calibrated
+        # against it, and because a speaker whose two ranks diverge sharply is
+        # a speaker whose apparent vocabulary was an artefact of line volume.
         # What it must not do is wear MSTTR's name, or the column silently
         # changes scale under readers holding the old numbers.
         "ttr": 100 * len(set(flat)) / len(flat),
@@ -269,8 +273,8 @@ def main(argv=None):
     # A book's chat participants are usually a handful of the prose cast, so a
     # prose-only name in the chat regex turns any line shaped "Name: text" -
     # which ordinary prose produces - into a chat message from someone who
-    # never posts. Measured on a real manuscript, that credited 46 chat lines
-    # to a character with zero. chat_speakers falls back to speakers, so a
+    # never posts, and those phantom lines carry the prose's sentence lengths
+    # rather than the chat's. chat_speakers falls back to speakers, so a
     # project with one cast configures one list and nothing changes for it.
     chat_speakers = [name for name in settings.get("chat_speakers", speakers)
                      if isinstance(name, str)]
@@ -318,13 +322,7 @@ def main(argv=None):
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     sys.exit(main() or 0)

@@ -1,10 +1,10 @@
 """Repeated rhetorical templates, discovered rather than listed.
 
 This is the generalised, de-hardcoded replacement for the old ``measures/tics.py``
-script, which hand-coded one author's habits ("I'd rather X than Y", "both
-hands", "puts it back down") as regular expressions found by a human reading
-the manuscript. That approach cannot see a different writer's habit, and it
-stops being honest the moment it is pointed at anyone else's prose.
+script, which hand-coded one author's habits as regular expressions found by a
+human reading their own manuscript. That approach cannot see a different
+writer's habit, and it stops being honest the moment it is pointed at anyone
+else's prose.
 
 The idea it keeps is sound: a sentence can be abstracted into a *skeleton* by
 keeping its function words and punctuation and replacing everything else with

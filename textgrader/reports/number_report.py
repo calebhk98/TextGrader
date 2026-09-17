@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Count the numbers in the manuscript and say whether the same few keep coming back.
+"""Count the numbers in a document and say whether the same few keep coming back.
 
-The suspicion this answers is that the book reaches for the same handful of
+The suspicion this answers is that a text reaches for the same handful of
 numbers over and over. That is measurable two ways, and the second is the one
 that matters:
 
-  rate      how many numbers per thousand words. A dense book is not a problem
-            by itself; this manuscript counts things because its narrator counts
-            things.
+  rate      how many numbers per thousand words. A dense text is not a problem
+            by itself - a narrator who counts things produces a high rate for
+            a good reason - so this is context, not a verdict.
   spread    how much of that total sits on the few commonest values. A writer
-            with a tic uses four and eleven for everything; a writer without one
-            spreads the same number of numbers across more values.
+            with a tic uses the same four numbers for everything; a writer
+            without one spreads the same quantity of numbers across more
+            values.
 
-Both are printed against the 23-book corpus, so "too many" means more than real
-books do rather than more than felt right on the day.
+Both are printed against the reference corpus, so "too many" means more than
+real books do rather than more than felt right on the day.
 
-    python3 number_report.py                     the book, against the corpus
+    python3 number_report.py                     the document, against the corpus
     python3 number_report.py --chapters          one row per chapter
     python3 number_report.py --value four        every use of one number
 """
@@ -27,6 +28,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 
 WORDS = ("one two three four five six seven eight nine ten eleven twelve thirteen "
@@ -170,13 +172,7 @@ def main():
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     main()
