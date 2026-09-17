@@ -133,6 +133,8 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                   nlp: Mapping[str, Any] | None = None,
                   metrics: Mapping[str, Any] | None = None,
                   comparison_unit: str = "book",
+                  split_sections: bool = False,
+                  min_section_words: int = 500,
                   include_core_metrics: bool = True,
                   include_parse_metrics: bool = False,
                   include_model_metrics: bool = False,
@@ -159,6 +161,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     frequency: Counter[str] = Counter()
     feature_profiles: dict[str, list[dict[str, float]]] = {"function_words": []}
     metric_errors: dict[str, str] = {}
+    skipped: list[str] = []
 
     for _, path, relative_name in files:
         raw_bytes = path.read_bytes()
@@ -167,56 +170,74 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         except UnicodeDecodeError as exc:
             raise ValueError(f"corpus source is not UTF-8: {path}") from exc
         digest = hashlib.sha256(raw_bytes).hexdigest()
-        analysis = DocumentAnalysis.from_text(raw, processing=processing,
+        document = DocumentAnalysis.from_text(raw, processing=processing,
                                               nlp_settings=nlp_settings,
                                               source=relative_name,
                                               comparison_unit=comparison_unit)
-        item_meta = entries.get(relative_name, entries.get(path.name, {}))
-        if not isinstance(item_meta, dict):
-            raise ValueError(f"manifest entry for {relative_name!r} must be an object")
-        base_id = str(item_meta.get("id") or f"{path.stem}-{digest[:12]}")
-        used_ids[base_id] += 1
-        source_id = base_id if used_ids[base_id] == 1 else f"{base_id}-{used_ids[base_id]}"
-        frequency.update(analysis.tokens)
-        book = {
-            "source_id": source_id, "source_filename": path.name,
-            "source_path": relative_name, "source_hash": f"sha256:{digest}",
-            "word_count": analysis.word_count,
-            "sentence_count": analysis.sentence_count,
-            "paragraph_count": analysis.paragraph_count,
-            "mean_sentence_words": (statistics.fmean(analysis.sentence_lengths)
-                                    if analysis.sentence_lengths else None),
-            "mean_paragraph_words": (statistics.fmean(analysis.paragraph_lengths)
-                                     if analysis.paragraph_lengths else None),
-            "mean_word_characters": (statistics.fmean(map(len, analysis.words))
-                                     if analysis.words else None),
-            "metadata": {key: value for key, value in item_meta.items()
-                         if key not in {"id", "filename", "path"}},
-        }
-        if include_core_metrics:
-            core = core_measure(analysis, floor=1)
-            if core:
-                book.update({key: core[key] for key in CORE_METRIC_KEYS
-                             if core.get(key) is not None})
-        for name in wanted:
-            spec = REGISTRY[name]
-            setting = metric_settings.get(name, {})
-            options = dict(spec.defaults)
-            if isinstance(setting, Mapping):
-                options.update({key: value for key, value in setting.items() if key != "enabled"})
-            try:
-                module = importlib.import_module(f"textgrader.metrics.{spec.module}")
-                findings = module.measure(analysis, config=options, profile=None)
-            except Exception as exc:
-                metric_errors[name] = f"{type(exc).__name__}: {exc}"
+        # One observation per section rather than per file, so a chapter can be
+        # compared with chapters.  Comparing a 4,000-word chapter against whole
+        # novels measures how books are divided rather than how they are
+        # written, which ``units_comparable`` refuses; splitting is how you
+        # build a corpus it will accept.
+        parts = [(relative_name, document)]
+        if split_sections:
+            parts = [(f"{relative_name}#{title or index + 1}", view)
+                     for index, (title, view) in enumerate(document.sections)
+                     if view.word_count >= min_section_words]
+            # A file with no detectable chapter heading must be skipped, not
+            # fall back to itself: adding a whole novel to a corpus of chapters
+            # is the unit contamination this option exists to avoid, and it is
+            # invisible afterwards because the profile records one unit name.
+            if len(parts) < 2:
+                skipped.append(relative_name)
                 continue
-            for finding in findings or []:
-                value = finding.get("value")
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    book[finding["metric_id"]] = value
-        function_words = importlib.import_module("textgrader.metrics.function_words")
-        feature_profiles["function_words"].append(function_words.vector(analysis.text))
-        books.append(book)
+        for relative_name, analysis in parts:
+            item_meta = entries.get(relative_name, entries.get(path.name, {}))
+            if not isinstance(item_meta, dict):
+                raise ValueError(f"manifest entry for {relative_name!r} must be an object")
+            base_id = str(item_meta.get("id") or f"{path.stem}-{digest[:12]}")
+            used_ids[base_id] += 1
+            source_id = base_id if used_ids[base_id] == 1 else f"{base_id}-{used_ids[base_id]}"
+            frequency.update(analysis.tokens)
+            book = {
+                "source_id": source_id, "source_filename": path.name,
+                "source_path": relative_name, "source_hash": f"sha256:{digest}",
+                "word_count": analysis.word_count,
+                "sentence_count": analysis.sentence_count,
+                "paragraph_count": analysis.paragraph_count,
+                "mean_sentence_words": (statistics.fmean(analysis.sentence_lengths)
+                                        if analysis.sentence_lengths else None),
+                "mean_paragraph_words": (statistics.fmean(analysis.paragraph_lengths)
+                                         if analysis.paragraph_lengths else None),
+                "mean_word_characters": (statistics.fmean(map(len, analysis.words))
+                                         if analysis.words else None),
+                "metadata": {key: value for key, value in item_meta.items()
+                             if key not in {"id", "filename", "path"}},
+            }
+            if include_core_metrics:
+                core = core_measure(analysis, floor=1)
+                if core:
+                    book.update({key: core[key] for key in CORE_METRIC_KEYS
+                                 if core.get(key) is not None})
+            for name in wanted:
+                spec = REGISTRY[name]
+                setting = metric_settings.get(name, {})
+                options = dict(spec.defaults)
+                if isinstance(setting, Mapping):
+                    options.update({key: value for key, value in setting.items() if key != "enabled"})
+                try:
+                    module = importlib.import_module(f"textgrader.metrics.{spec.module}")
+                    findings = module.measure(analysis, config=options, profile=None)
+                except Exception as exc:
+                    metric_errors[name] = f"{type(exc).__name__}: {exc}"
+                    continue
+                for finding in findings or []:
+                    value = finding.get("value")
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        book[finding["metric_id"]] = value
+            function_words = importlib.import_module("textgrader.metrics.function_words")
+            feature_profiles["function_words"].append(function_words.vector(analysis.text))
+            books.append(book)
         if progress:
             progress(relative_name, book)
 
@@ -260,12 +281,53 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "model_metrics": include_model_metrics,
         "metric_settings": effective,
         "metric_errors": metric_errors,
+        "skipped_sources": skipped,
         "book_count": len(books), "books": books,
         "distributions": distributions,
         "word_frequency": {word: frequency[word] for word in sorted(frequency)},
         "word_frequency_total": sum(frequency.values()),
         "feature_profiles": feature_profiles,
     }
+
+
+def without_source(profile: dict, source_id: str) -> dict:
+    """The profile that building from every text except ``source_id`` gives.
+
+    Distributions are the pooled per-text values, so removing a text is exactly
+    removing its value from each list: there is no need to re-measure the other
+    other texts once per hold-out, which would make this quadratic in
+    parsing rather than in arithmetic.  The identity is worth stating because it
+    is what makes the check affordable, and it holds only for distributions
+    built this way.
+    """
+
+    kept = [book for book in profile["books"] if book["source_id"] != source_id]
+    dropped = next(book for book in profile["books"] if book["source_id"] == source_id)
+    index = profile["books"].index(dropped)
+    out = dict(profile)
+    out["books"] = kept
+    out["book_count"] = len(kept)
+    out["corpus_name"] = f"{profile.get('corpus_name', 'corpus')} minus {source_id}"
+
+    distributions = {}
+    for key, entry in profile["distributions"].items():
+        values = [book[key] for book in kept
+                  if isinstance(book.get(key), (int, float))
+                  and not isinstance(book.get(key), bool)]
+        if not values and isinstance(entry, dict) and entry.get("values"):
+            # An alias distribution whose per-book column has another name.
+            continue
+        summary = summarize(values)
+        summary["values"] = sorted(values)
+        distributions[key] = summary
+    out["distributions"] = distributions
+
+    features = profile.get("feature_profiles", {})
+    out["feature_profiles"] = {
+        name: [row for position, row in enumerate(rows) if position != index]
+        for name, rows in features.items()}
+    return out
+
 
 
 def write_profile(profile: Mapping[str, Any], destination: str | Path) -> None:
@@ -295,7 +357,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="project config whose text_processing and metric options "
                              "must be reproduced")
     parser.add_argument("--comparison-unit", choices=COMPARISON_UNITS, default="book",
-                        help="what one input file is: a whole book, a chapter, a scene")
+                        help="what ONE OBSERVATION is: a whole book, a chapter, a scene")
+    parser.add_argument("--split-sections", action="store_true",
+                        help="profile each chapter of each file separately, so a chapter "
+                             "can be compared with chapters; set --comparison-unit to match")
+    parser.add_argument("--min-section-words", type=int, default=500,
+                        help="sections shorter than this are skipped when splitting")
     parser.add_argument("--no-core-metrics", action="store_true",
                         help="omit the default core prose distributions")
     parser.add_argument("--parse-metrics", action="store_true",
@@ -316,12 +383,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.inputs, corpus_name=args.name, manifest=manifest,
         text_processing=config.get("text_processing"), nlp=config.get("nlp"),
         metrics=config.get("metrics", {}), comparison_unit=args.comparison_unit,
+        split_sections=args.split_sections, min_section_words=args.min_section_words,
         include_core_metrics=not args.no_core_metrics,
         include_parse_metrics=args.parse_metrics,
         include_model_metrics=args.model_metrics, progress=progress)
     write_profile(profile, args.output)
     if not args.quiet:
         print(f"\nwrote {profile['book_count']} {args.comparison_unit}(s) to {args.output}")
+        if profile["skipped_sources"]:
+            print(f"skipped {len(profile['skipped_sources'])} file(s) with no detectable "
+                  f"sections to split on:")
+            for name in profile["skipped_sources"][:10]:
+                print(f"  {name}")
         if profile["metric_errors"]:
             print("metrics that could not be profiled:")
             for name, reason in sorted(profile["metric_errors"].items()):

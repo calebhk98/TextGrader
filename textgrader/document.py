@@ -39,12 +39,26 @@ from .optional import require
 # Paragraphs that are only a scene-break marker are not prose.
 MARKER_RE = re.compile(r"^[\s*_=—-]+$")
 
+#: Markdown headings, and the plain-text chapter headings a .txt novel uses.
+#: Without the second form every Project Gutenberg book is one section, so a
+#: chapter-level comparison has no chapters to build from and the book-drift
+#: metrics fall back to fixed windows on every corpus text.
+SECTION_RE = re.compile(
+    r"(?m)^(?:"
+    r"[ \t]{0,3}\#{1,6}[ \t]+(?P<atx>[^\n]*)"
+    r"|(?P<setext>[^\n]*\S[^\n]*)\n[ \t]{0,3}(?:=+|-+)[ \t]*"
+    r"|[ \t]{0,3}(?P<plain>(?:CHAPTER|Chapter|BOOK|Book|PART|Part)"
+    r"[ \t]+[IVXLCDM0-9][^\n]{0,80})"
+    r")[ \t]*$")
+
 COMPARISON_UNITS = ("book", "chapter", "scene", "passage", "unknown")
 
-#: Metrics whose value depends on how much text you hand them.  Comparing a
-#: chapter's word count with a corpus of whole novels is not a finding about
-#: the chapter, so :func:`units_comparable` refuses it.
-SCALE_DEPENDENT_SUFFIXES = ("_words", "_sentences", "_paragraphs")
+#: The core size metrics: these ARE how much text there is.
+SCALE_DEPENDENT_IDS = frozenset({
+    "_words", "_sentences", "_paragraphs",
+    "word_count", "sentence_count", "paragraph_count",
+    "prose.words", "prose.sentences", "prose.paragraphs",
+})
 
 
 @dataclass(frozen=True)
@@ -401,10 +415,10 @@ class DocumentAnalysis:
         what lets a book-level metric fall back to :meth:`windows`.
         """
 
-        pattern = re.compile(r"(?m)^(?:[ \t]{0,3}(#{1,6})[ \t]+(?P<atx>[^\n]*)"
-                             r"|(?P<setext>[^\n]*\S[^\n]*)\n[ \t]{0,3}(?:=+|-+)[ \t]*)$")
-        marks = [(match.start(), (match.group("atx") or match.group("setext") or "").strip(),
-                  match.end()) for match in pattern.finditer(self.raw)]
+        marks = [(match.start(),
+                  (match.group("atx") or match.group("setext")
+                   or match.group("plain") or "").strip(),
+                  match.end()) for match in SECTION_RE.finditer(self.raw)]
         if not marks:
             return [("", self)]
         out: list[tuple[str, DocumentAnalysis]] = []
@@ -646,21 +660,28 @@ def is_scale_dependent(metric_id: str) -> bool:
     express a measurement as a rate.
     """
 
-    return (metric_id.endswith(SCALE_DEPENDENT_SUFFIXES)
-            or metric_id.startswith(("length.", "count."))
+    # Matched by id, not by suffix.  A loose "ends with _words" test caught
+    # every ``*_per_1000_words`` rate, which are the most carefully normalized
+    # measurements in the tool, and refused to compare them across units.
+    return (metric_id in SCALE_DEPENDENT_IDS
             or metric_id.endswith(("_count", "_total")))
 
 
 def units_comparable(metric_id: str, document_unit: str, corpus_unit: str) -> bool:
     """Whether a scale-dependent metric may be compared across these units.
 
-    A chapter's word count against a corpus of novels is a fact about how books
-    are divided, not about the chapter, so it is refused.  Rate and ratio
-    metrics are unaffected: they are what units exist for.
+    Only the size metrics are refused: a chapter's word count against a corpus
+    of novels is a fact about how books are divided, not about the chapter.
 
-    An unspecified unit on either side resolves to ``book``, so the common case
-    of one whole document against a corpus of whole documents still compares.
-    Declaring ``chapter`` or ``scene`` is what turns the protection on.
+    Everything else compares freely, because everything else is a rate, and a
+    rate does not care how much text produced it.  More text makes a rate a
+    better estimate, not a different number, which is why a corpus of short
+    works is a perfectly good corpus.  What a rate DOES depend on is how much
+    text each observation had: the centre is the same at any granularity, but
+    the spread is not, so an outlier threshold has to come from a corpus built
+    at the granularity you are grading.  ``--split-sections`` builds one.
+
+    An unspecified unit on either side resolves to ``book``.
     """
 
     if not is_scale_dependent(metric_id):

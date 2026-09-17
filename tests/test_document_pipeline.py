@@ -97,3 +97,20 @@ def test_scale_dependent_metrics_refuse_unit_mismatch():
 def test_nlp_settings_reject_unknown_options():
     with pytest.raises(ValueError):
         NlpSettings.from_config({"modell": "en_core_web_sm"})
+
+
+def test_only_size_metrics_are_gated_by_unit():
+    """A rate does not care how much text produced it.
+
+    A loose "ends with _words" test caught every ``*_per_1000_words`` rate and
+    refused to compare it across units, which are the most carefully normalized
+    measurements in the tool. Gating is by metric id now.
+    """
+
+    from textgrader.document import units_comparable
+    for rate in ("style.mattr", "punct.comma_per_1000_words", "lexical.word_zipf",
+                 "rhythm.sentence_length_entropy", "dialogue.turn_words"):
+        assert units_comparable(rate, "chapter", "book"), rate
+    for size in ("_words", "prose.words", "word_count", "drift.change_point_count"):
+        assert not units_comparable(size, "chapter", "book"), size
+        assert units_comparable(size, "book", "book"), size

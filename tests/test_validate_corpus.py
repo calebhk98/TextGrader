@@ -3,7 +3,7 @@
 import pytest
 
 import validate_corpus
-from textgrader.corpus import build_profile
+from textgrader.corpus import build_profile, without_source
 
 
 @pytest.fixture(scope="module")
@@ -18,7 +18,7 @@ def profile(tmp_path_factory, prose):
 def test_holdout_removes_exactly_one_text(profile):
     _, full = profile
     target = full["books"][3]["source_id"]
-    reduced = validate_corpus.holdout_profile(full, target)
+    reduced = without_source(full, target)
     assert reduced["book_count"] == full["book_count"] - 1
     assert target not in {book["source_id"] for book in reduced["books"]}
     assert len(reduced["feature_profiles"]["function_words"]) == full["book_count"] - 1
@@ -35,7 +35,7 @@ def test_holdout_distribution_matches_a_real_rebuild(profile):
 
     directory, full = profile
     target = full["books"][2]
-    shortcut = validate_corpus.holdout_profile(full, target["source_id"])
+    shortcut = without_source(full, target["source_id"])
     rebuilt = build_profile(
         [path for path in sorted(directory.glob("*.txt"))
          if path.name != target["source_filename"]],

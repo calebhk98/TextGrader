@@ -49,50 +49,10 @@ from pathlib import Path
 from typing import Sequence
 
 import grade
-from textgrader.corpus import build_profile, write_profile
+from textgrader.corpus import build_profile, without_source, write_profile
 from textgrader.metrics import REGISTRY
 from textgrader.project import load_config
 from textgrader.results import Action, StatusType
-
-
-def holdout_profile(profile: dict, source_id: str) -> dict:
-    """The profile that building from every text except ``source_id`` gives.
-
-    Distributions are the pooled per-text values, so removing a text is exactly
-    removing its value from each list: there is no need to re-measure the other
-    twenty-nine books once per hold-out, which would make this quadratic in
-    parsing rather than in arithmetic.  The identity is worth stating because it
-    is what makes the check affordable, and it holds only for distributions
-    built this way.
-    """
-
-    kept = [book for book in profile["books"] if book["source_id"] != source_id]
-    dropped = next(book for book in profile["books"] if book["source_id"] == source_id)
-    index = profile["books"].index(dropped)
-    out = dict(profile)
-    out["books"] = kept
-    out["book_count"] = len(kept)
-    out["corpus_name"] = f"{profile.get('corpus_name', 'corpus')} minus {source_id}"
-
-    distributions = {}
-    for key, entry in profile["distributions"].items():
-        values = [book[key] for book in kept
-                  if isinstance(book.get(key), (int, float))
-                  and not isinstance(book.get(key), bool)]
-        if not values and isinstance(entry, dict) and entry.get("values"):
-            # An alias distribution whose per-book column has another name.
-            continue
-        from textgrader.stats import summarize
-        summary = summarize(values)
-        summary["values"] = sorted(values)
-        distributions[key] = summary
-    out["distributions"] = distributions
-
-    features = profile.get("feature_profiles", {})
-    out["feature_profiles"] = {
-        name: [row for position, row in enumerate(rows) if position != index]
-        for name, rows in features.items()}
-    return out
 
 
 def grade_holdout(text_path: Path, profile: dict, config: dict, workspace: Path) -> dict:
@@ -148,7 +108,7 @@ def validate(sources, config, *, limit=None, quiet=False, parse_metrics=False,
                 path = _locate(sources, book)
             if path is None:
                 continue
-            outcome = grade_holdout(path, holdout_profile(full, book["source_id"]),
+            outcome = grade_holdout(path, without_source(full, book["source_id"]),
                                     config, workspace)
             rows.append({"source_id": book["source_id"],
                          "name": book["source_path"], **outcome})
