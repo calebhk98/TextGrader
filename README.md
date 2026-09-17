@@ -76,6 +76,16 @@ A comparison is withheld, with a reason, when the corpus is too small, the
 document is too small, or a count-based metric would be compared across
 different units (a chapter against a shelf of novels).
 
+`summary.scorecard` is the census: how many measures were taken, how many sit
+inside their reference, and how many were `not_taken`. That last one is
+reported separately and folded into neither side, because it is the number
+that moves when instrumentation breaks: a metric that errored is not a pass
+and an unavailable one is not a failure, so a tool that counts only failures
+can read 100% while three of its measures are silently dead. `failing` is
+grouped by family, since eleven findings in one family is a habit and eleven
+across eleven families is noise. It is a count, not a quality score, and a run
+still always exits zero.
+
 ## Configure
 
 `config.json`, resolved relative to itself. `--config other.json` reaches the

@@ -699,11 +699,47 @@ def render(report):
           f"{summary['by_action']['rule_violation']} project-rule violations; "
           f"{summary['by_action']['insufficient_data']} without enough data; "
           f"{summary['by_status_type']['internal_error']} internal errors.")
+    print_scorecard(summary["scorecard"])
     if summary["top_findings"]:
         print("\nFurthest from the corpus, most distant first:")
         for item in summary["top_findings"][:8]:
             severity = "-" if item["severity"] is None else f"{item['severity']:.1f}"
             print(f"  {item['metric_id']:<44} {item['direction']:<8} severity {severity}")
+
+
+def print_scorecard(scorecard):
+    """The census, with its denominator.
+
+    ``not_taken`` is printed whether or not it is zero. It is the number that
+    moves silently when instrumentation breaks, and a count that only appears
+    when it is interesting is a count nobody learns to look for.
+    """
+
+    share = scorecard["passing_share"]
+    print("\nSCORECARD")
+    if scorecard["measured"]:
+        print(f"  {scorecard['passing']} of {scorecard['measured']} measures "
+              f"inside their reference ({share:.0f}%)")
+    else:
+        print("  no measure produced a comparable result")
+    print(f"  {scorecard['not_taken']} not taken "
+          "(no data, unavailable, or errored - neither a pass nor a failure)")
+    if scorecard["configuration_issues"]:
+        print(f"  {scorecard['configuration_issues']} configuration issue(s); "
+              "see the config.* results above")
+    families = {name: counts for name, counts in scorecard["by_family"].items()
+                if counts["failing"]}
+    if families:
+        print("  outside their reference, by family:")
+        for name, counts in sorted(families.items(), key=lambda kv: -kv[1]["failing"]):
+            total = counts["passing"] + counts["failing"]
+            print(f"    {name:<28}{counts['failing']:>3} of {total}")
+    if scorecard["not_taken_detail"]:
+        errors = [item for item in scorecard["not_taken_detail"] if item["action"] == "error"]
+        if errors:
+            print("  errored, so they left the count entirely:")
+            for item in errors:
+                print(f"    {item['metric_id']:<32}{(item['warning'] or '')[:60]}")
 
 
 def list_metrics():

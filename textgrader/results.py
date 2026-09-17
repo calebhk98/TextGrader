@@ -48,6 +48,13 @@ class Action(str, Enum):
     ERROR = "error"
 
 
+#: How each action counts in :meth:`Report.scorecard`.  Every member of
+#: ``Action`` appears in exactly one of these, so a new action cannot be added
+#: without deciding what it means for the count.
+_PASSING = frozenset({Action.INFORMATIONAL})
+_FAILING = frozenset({Action.REVIEW, Action.RULE_VIOLATION})
+_NOT_TAKEN = frozenset({Action.INSUFFICIENT_DATA, Action.UNAVAILABLE, Action.ERROR})
+
 _ACTION_BY_STATUS = {
     StatusType.CORPUS_OUTLIER: Action.REVIEW,
     StatusType.DIAGNOSTIC: Action.REVIEW,
@@ -121,6 +128,67 @@ class Report:
                 "results": [result.to_dict() for result in self.results],
                 "summary": self.summary()}
 
+    def scorecard(self):
+        """How many measurements were taken, and how many sit inside their reference.
+
+        A severity-ranked findings list has no denominator, and a denominator
+        is the point. "3 to review" says nothing without knowing whether 91
+        things were measured or 65: the tool this one replaces printed only
+        failures for a while, and its author's note on why that changed reads
+
+            Seeing only you failed 5 metrics, when there are 300, hides that
+            you passed 295.
+
+        ``not_taken`` is reported as its own number and folded into neither
+        side, because that is the one that moves silently. A metric that
+        errored is not a pass; a metric that was unavailable is not a failure;
+        both are measurements that did not happen. The same tool once ran for
+        weeks with three measures crashing and printing empty sections while
+        its scorecard read "23 of 23 measures passing (100%)" - a measure
+        producing no output contributed neither a pass nor a failure, so
+        losing one was invisible. The real count was 59.
+
+        Configuration results are counted apart. A misspelt key is worth
+        seeing, but it is not a measurement that failed to happen, and putting
+        it in that number would blunt the number's one job.
+
+        This is not a quality score and does not make a run fail. It counts
+        what was measured and how much of it sits outside its reference, both
+        of which this tool already computes and already prints one at a time.
+        """
+
+        measures = [item for item in self.results if item.family != "configuration"]
+        passing = [item for item in measures if item.action in _PASSING]
+        failing = [item for item in measures if item.action in _FAILING]
+        not_taken = [item for item in measures if item.action in _NOT_TAKEN]
+        by_family: dict[str, dict[str, int]] = {}
+        for bucket, items in (("passing", passing), ("failing", failing),
+                              ("not_taken", not_taken)):
+            for item in items:
+                family = by_family.setdefault(item.family or "other",
+                                              {"passing": 0, "failing": 0, "not_taken": 0})
+                family[bucket] += 1
+        measured = len(passing) + len(failing)
+        return {
+            "passing": len(passing),
+            "failing": len(failing),
+            "measured": measured,
+            "not_taken": len(not_taken),
+            "passing_share": round(100.0 * len(passing) / measured, 1) if measured else None,
+            "configuration_issues": len(self.results) - len(measures),
+            # Grouped, because eleven findings in one family is a habit and
+            # eleven across eleven families is noise.
+            "by_family": dict(sorted(by_family.items())),
+            "failing_detail": [
+                {"metric_id": item.metric_id, "family": item.family,
+                 "severity": item.severity, "action": item.action.value}
+                for item in sorted(failing, key=lambda item: -(item.severity or 0.0))],
+            "not_taken_detail": [
+                {"metric_id": item.metric_id, "family": item.family,
+                 "action": item.action.value, "warning": item.warning or item.error}
+                for item in not_taken],
+        }
+
     def summary(self):
         """Accounting plus the short list an agent should act on first."""
 
@@ -138,6 +206,7 @@ class Report:
             "total": len(self.results),
             "by_status_type": counts,
             "by_action": actions,
+            "scorecard": self.scorecard(),
             "has_internal_errors": bool(counts[StatusType.INTERNAL_ERROR.value]),
             "review_families": families,
             "top_findings": [
