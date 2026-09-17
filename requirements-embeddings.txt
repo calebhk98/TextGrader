@@ -1,0 +1,9 @@
+# Semantic-repetition metrics only.  Kept out of requirements.txt because
+# sentence-transformers pulls in torch, which is a multi-gigabyte install that
+# most TextGrader users do not need.
+#
+# Without it, the four `semantic_*` metrics fall back to a TF-IDF lexical
+# overlap.  That is a different quantity from an embedding similarity, and both
+# the finding's warning and its evidence say which backend produced the number.
+-r requirements.txt
+sentence-transformers>=2.2

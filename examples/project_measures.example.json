@@ -1,0 +1,463 @@
+{
+  "_comment": "EXAMPLE configuration extracted from one specific manuscript's legacy measures/ scripts during the pass that removed that manuscript's content from the shared codebase. This is a ready-to-paste EXAMPLE for one project, not a shipped default: the repository's own config.json ships project_measures: {}. Copy only the sections your own project wants into your own config.json; values here (cast lists, per-chapter exemptions, target bands, formatting policy) describe somebody else's book.",
+  "project_measures": {
+    "voice_separation": {
+      "_comment": "Originally two separate lists: CAST, the seven names who ever post in a group chat embedded in the later chapters, and SPEAKERS, the full 30-name prose cast used to tag quoted dialogue. The rewritten script uses one 'speakers' list for both channels; chat lines from a name not in this list are simply not attributed.",
+      "speakers": [
+        "Chloe",
+        "Ruth",
+        "Sam",
+        "Kavi",
+        "Nadia",
+        "Eli",
+        "Theo",
+        "Odile",
+        "Priya",
+        "Fen",
+        "Owen",
+        "Kayleigh",
+        "Bryce",
+        "Marisol",
+        "Aldana",
+        "Vance",
+        "Prahl",
+        "Baptiste",
+        "Bell",
+        "Hearn",
+        "Kowalczyk",
+        "Doyle",
+        "Pruitt",
+        "Sinclair",
+        "Amberg",
+        "Sandoval",
+        "Prentice",
+        "Ammons",
+        "Whitaker",
+        "Deb",
+        "Ruiz"
+      ],
+      "chat_participants_reference_only": [
+        "chloe",
+        "ruth",
+        "sam",
+        "kavi",
+        "nadia",
+        "eli",
+        "theo"
+      ],
+      "min_lines": 8
+    },
+    "register": {
+      "long_word_letters": 9,
+      "ratio": 1.6,
+      "exempt": {
+        "28_nineteen": "long words are the job: registrar, signature, contracts, coordinator"
+      }
+    },
+    "tics": {
+      "patterns": {
+        "reads it twice": {
+          "pattern": "read(?:s|)\\s+(?:it|them|the\\s+\\w+)\\s+(?:twice|a\\s+(?:second|third)\\s+time)",
+          "target_per_100k": 3.5,
+          "case_sensitive": false
+        },
+        "habit stated for the reader": {
+          "pattern": "\\b(?:the way|as)\\s+(?:he|she|they)\\s+(?:(?:always|normally|usually|invariably|generally)\\s+\\w+|(?:says?|said|does?|did|answers?|handles?|takes?|reads?)\\s+(?:everything|anything|it all|all of it|every\\s+\\w+|each\\s+\\w+)|does\\s+with\\b)",
+          "target_per_100k": 0.0,
+          "case_sensitive": false
+        },
+        "hedged exact (about N)": {
+          "pattern": "\\babout (?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|a hundred)\\b",
+          "target_per_100k": 18.0,
+          "case_sensitive": false
+        },
+        "hand(s) flat": {
+          "pattern": "\\bhands? (?:flat|pressed flat)\\b|\\bflat on the (?:table|counter|desk|bench|wall|floor)\\b",
+          "target_per_100k": 10.0,
+          "case_sensitive": false
+        },
+        "both hands": {
+          "pattern": "\\bboth hands\\b",
+          "target_per_100k": 10.0,
+          "case_sensitive": false
+        },
+        "the word 'rather'": {
+          "pattern": "\\brather\\b",
+          "target_per_100k": null,
+          "case_sensitive": false
+        },
+        "', because' inside speech": {
+          "pattern": "\"[^\"]{10,400}?[,?]\\s+[Bb]ecause\\b[^\"]{0,400}?\"",
+          "target_per_100k": 48.0,
+          "case_sensitive": false
+        },
+        "cap: leaves it / lets it go": {
+          "pattern": "\\b(?:leaves?|left)\\s+(?:it|that|them|the\\s+\\w+)\\s+(?:there|alone|where|at\\s+that|be)\\b|\\blets?\\s+(?:it|that|them)\\s+(?:go|sit|stand|lie|drop|rest)\\b|\\blet\\s+(?:it|that|them)\\s+(?:go|sit|stand|lie|drop|rest)\\b",
+          "target_per_100k": 13.3,
+          "case_sensitive": false
+        },
+        "cap: puts it back down": {
+          "pattern": "\\b(?:puts?|put|sets?|set|lays?|laid|places?)\\s+(?:it|them|the\\s+\\w+|his\\s+\\w+|her\\s+\\w+)\\s+(?:back\\s+)?down\\b|\\b(?:puts?|put|sets?|set)\\s+(?:it|them|the\\s+\\w+)\\s+back\\b",
+          "target_per_100k": 29.4,
+          "case_sensitive": false
+        },
+        "cap: does X instead": {
+          "pattern": "\\binstead\\b",
+          "target_per_100k": 53.5,
+          "case_sensitive": false
+        },
+        "'I'd rather X than Y'": {
+          "pattern": "\\b(?:I'?d|I would|he'?d|she'?d|they'?d)\\s+rather\\b[^.;!?]{0,80}\\bthan\\b",
+          "target_per_100k": 2.0,
+          "case_sensitive": false
+        },
+        "the word 'flat'": {
+          "pattern": "\\bflat(?:ly)?\\b",
+          "target_per_100k": 35.0,
+          "case_sensitive": false
+        },
+        "'the way you/she would'": {
+          "pattern": "\\bthe way (?:you|she|he|they|somebody|a person|anybody)\\b",
+          "target_per_100k": 20.0,
+          "case_sensitive": false
+        },
+        "announced withholding": {
+          "pattern": "\\bkeeps? (?:it|that|the rest of it|them) to (?:him|her|them)sel(?:f|ves)\\b|\\bkept (?:it|that) to (?:him|her)self\\b",
+          "target_per_100k": 3.0,
+          "case_sensitive": false
+        },
+        "'that's not X, that's Y'": {
+          "pattern": "\\b(?:that|this|it)'s not [^.,;!?]{1,40}, (?:that|it)'s\\b",
+          "target_per_100k": 2.0,
+          "case_sensitive": false
+        },
+        "'the whole/rest of it'": {
+          "pattern": "\\bthe (?:whole|rest|entire) of it\\b",
+          "target_per_100k": 10.0,
+          "case_sensitive": false
+        },
+        "'in order' (not 'in order to')": {
+          "pattern": "\\bin order\\b(?!\\s+to\\b)",
+          "target_per_100k": 8.8,
+          "case_sensitive": false
+        },
+        "the word 'same'": {
+          "pattern": "\\bsame\\b",
+          "target_per_100k": 125.0,
+          "case_sensitive": false
+        },
+        "'though' at clause end": {
+          "pattern": ",\\s+though\\b",
+          "target_per_100k": null,
+          "case_sensitive": false
+        },
+        "'except' as connector": {
+          "pattern": ",\\s+except\\b",
+          "target_per_100k": null,
+          "case_sensitive": false
+        },
+        "turning an object": {
+          "pattern": "\\bturn(?:s|ing|ed)? (?:it|the \\w+) over\\b",
+          "target_per_100k": 6.0,
+          "case_sensitive": false
+        },
+        "eyes on / eyes down": {
+          "pattern": "\\beyes (?:on|down|still on)\\b|\\bnot looking up\\b",
+          "target_per_100k": 12.0,
+          "case_sensitive": false
+        },
+        "sentence opens She/He + verb": {
+          "pattern": "(?:^|(?<=[.!?]\\s))(?:She|He) [a-z]+s\\b",
+          "target_per_100k": 120.0,
+          "case_sensitive": true
+        }
+      },
+      "number_words": true,
+      "number_targets": {
+        "one": 515.7,
+        "two": 282.1,
+        "three": 172.7,
+        "four": 119.3,
+        "five": 112.4,
+        "six": 57.3,
+        "seven": 45.9,
+        "eight": 45.9,
+        "nine": 31.2,
+        "ten": 73.4,
+        "eleven": 10.3,
+        "twelve": 18.9,
+        "thirteen": 9.7,
+        "fourteen": 11.3,
+        "fifteen": 14.5,
+        "forty": 30.0
+      }
+    },
+    "style_report": {
+      "_comment": "The original script hard-coded two DIFFERENT sets of sentence-length bands: report() (per chapter) used a YA style guide's bands, which its own docstring admits were partly wrong for this book; summarise() (whole book) used bands and medians observed directly across an 11-book reference corpus. The rewritten script uses one 'sentence_bands' structure in both places; the corpus-observed numbers are kept below as the more defensible of the two. report()'s original YA-derived bands (under_10 35-45%, 10_20 30-35%, 20_35 15-20%, over_35 0-5%) are recorded here only for the historical record, not applied.",
+      "targets": {
+        "sentence_mean": [
+          11,
+          18
+        ],
+        "sentence_cv": [
+          68,
+          100
+        ],
+        "sentence_bands": {
+          "under_10": [
+            21.7,
+            50.7
+          ],
+          "10_20": [
+            26.1,
+            38.8
+          ],
+          "20_35": [
+            15.2,
+            30.3
+          ],
+          "over_35": [
+            4.9,
+            18.9
+          ]
+        },
+        "quoted_share": [
+          26,
+          34
+        ],
+        "spoken_mean": [
+          8,
+          10
+        ],
+        "narration_mean": [
+          14,
+          17
+        ],
+        "narration_under_10_max": 40,
+        "paragraph_sentence_mean": [
+          2.9,
+          3.5
+        ],
+        "paragraph_sentence_cv_min": 100,
+        "paragraph_distribution_reference": {
+          "1": 36.7,
+          "2": 24.0,
+          "3": 15.1,
+          "4": 8.0,
+          "5": 5.9,
+          "6-7": 5.3,
+          "8-9": 2.2,
+          "10+": 2.8
+        },
+        "conjunctions": {
+          "and": [
+            2.5,
+            3.5
+          ],
+          "but": [
+            0.25,
+            0.75
+          ],
+          "so": [
+            0.2,
+            0.6
+          ],
+          "because": [
+            0.2,
+            0.7
+          ],
+          "which": [
+            0.1,
+            0.4
+          ]
+        },
+        "multi_and_max": 10,
+        "section_breaks": [
+          2,
+          6
+        ]
+      }
+    },
+    "check_edits": {
+      "require_heading_prefix": "## ",
+      "dateline_pattern": "^\\*[A-Z][a-z]+ \\d{4}(?:\\s*[–-]\\s*[A-Z][a-z]+ \\d{4})?\\*$",
+      "dateline_line": 3,
+      "forbid_em_dash": true,
+      "quote_style": "straight",
+      "forbid_hard_line_breaks": true
+    },
+    "prose_check": {
+      "_comment": "PROSE_RULES.md rules 1-3, once hard-coded as VERDICT/NEGATION/BOOK_REFERENCE.",
+      "verdict_patterns": [
+        {
+          "pattern": "\\b(?:that|this|it|which|he|she|they)(?:'s| is| was)\\s+(?:the\\s+)?(?:correct|right|wrong|best|worst|strongest|weakest)\\b(?!\\w)",
+          "label": "verdict"
+        },
+        {
+          "pattern": "\\bI (?:was|am) wrong\\b",
+          "label": "verdict"
+        },
+        {
+          "pattern": "\\b(?:you|you're|youre)\\s+right\\b",
+          "label": "verdict"
+        },
+        {
+          "pattern": "\\bthat is a better\\b",
+          "label": "verdict"
+        },
+        {
+          "pattern": "\\bthe (?:correct|right) (?:answer|way|version|reading|call)\\b",
+          "label": "verdict"
+        },
+        {
+          "pattern": "\\bwhich is the good part\\b",
+          "label": "verdict"
+        },
+        {
+          "pattern": "\\b(?:correctly|rightly)\\s+(?:identifies|reads|sees|says|notes|calls)\\b",
+          "label": "verdict"
+        }
+      ],
+      "negation_patterns": [
+        {
+          "pattern": "\\bnever as\\b",
+          "label": "denies a reading"
+        },
+        {
+          "pattern": "\\bnot (?:as )?(?:modesty|arrogance|stoicism|cruelty|kindness|pity|weakness)\\b",
+          "label": "denies a reading"
+        },
+        {
+          "pattern": "\\bit (?:is|isn't|is not|was|wasn't)\\s+n?o?t?\\s*(?:modesty|stoicism|arrogance)\\b",
+          "label": "denies a reading"
+        },
+        {
+          "pattern": "\\bthat (?:reads|looks|sounds) (?:like|as) \\w+ from outside\\.? It (?:isn't|is not)\\b",
+          "label": "denies a reading"
+        },
+        {
+          "pattern": "\\brather than (?:as )?(?:modesty|humility|arrogance|stoicism|a performance)\\b",
+          "label": "denies a reading"
+        },
+        {
+          "pattern": "\\bnot because \\w+,? but because\\b",
+          "label": "not-A-but-B"
+        },
+        {
+          "pattern": "\\bnot (?:a|an|the) \\w+ (?:but|so much as) (?:a|an|the)\\b",
+          "label": "not-A-but-B"
+        },
+        {
+          "pattern": "\\b(?:which|that) is not (?:to say|the same as)\\b",
+          "label": "undercut"
+        },
+        {
+          "pattern": "\\bwithout (?:being|reading as) \\w+ about it\\b",
+          "label": "undercut"
+        }
+      ],
+      "book_reference_patterns": [
+        {
+          "pattern": "\\bchapters?\\s+\\d",
+          "label": "chapter reference"
+        },
+        {
+          "pattern": "\\bchapters?\\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\\b",
+          "label": "chapter reference"
+        },
+        {
+          "pattern": "\\bappears in\\b",
+          "label": "navigation"
+        },
+        {
+          "pattern": "\\bthe (?:camp|school) chapters\\b",
+          "label": "chapter reference"
+        },
+        {
+          "pattern": "\\b(?:his|her|their) viewpoint chapters?\\b",
+          "label": "chapter reference"
+        }
+      ],
+      "skip_files": [
+        "_TEMPLATE.md",
+        "_CALIBRATION.md",
+        "_ALLOCATIONS.md",
+        "_DIFFERENTIATION.md",
+        "_SHEET_RULES.md",
+        "_APPEARANCES.md"
+      ]
+    },
+    "verify_citations": {
+      "citation_patterns": [
+        "chapters/\\w+\\.md",
+        "CHAPTERS_\\d+_\\d+_v2\\.md",
+        "MANUSCRIPT_FULL\\.md"
+      ],
+      "skip_files": [
+        "_TEMPLATE.md",
+        "_DIFFERENTIATION.md",
+        "_ALLOCATIONS.md",
+        "CHARACTER_SHEETS.md"
+      ],
+      "min_words": 5
+    },
+    "quote_length": {
+      "_comment": "PEER_BOOKS and their measured rows were hard-coded; the exact DIALOGUE_TARGETS numbers that used to live in this project's own config were already reset to {} before this extraction and could not be recovered from source. The bands below are reconstructed from the docstring's stated aims (mean 'about 20ish', CV 'about 115-135', short share 'max ~30, goal 20-25') rather than copied from a working config, and should be treated as illustrative, not authoritative.",
+      "peer_books": [
+        "tom_sawyer",
+        "treasure_island",
+        "little_women",
+        "wind_in_willows"
+      ],
+      "peer_book_rows_reference": {
+        "tom_sawyer": {
+          "mean": 17.0,
+          "cv": 148,
+          "short_pct": 26.2,
+          "mid_pct": 58.4,
+          "long_pct": 15.4
+        },
+        "treasure_island": {
+          "mean": 22.2,
+          "cv": 148,
+          "short_pct": 25.6,
+          "mid_pct": 52.1,
+          "long_pct": 22.3
+        },
+        "little_women": {
+          "mean": 23.4,
+          "cv": 113,
+          "short_pct": 13.4,
+          "mid_pct": 61.1,
+          "long_pct": 25.5
+        },
+        "wind_in_willows": {
+          "mean": 27.8,
+          "cv": 152,
+          "short_pct": 20.4,
+          "mid_pct": 50.8,
+          "long_pct": 28.8
+        }
+      },
+      "targets": {
+        "quotation_word_mean": [
+          18,
+          24
+        ],
+        "quotation_word_cv": [
+          115,
+          135
+        ],
+        "short_quotation_share": [
+          20,
+          25
+        ],
+        "short_quotation_hard_max": 30,
+        "long_quotation_share": [
+          15.4,
+          28.8
+        ]
+      }
+    }
+  }
+}

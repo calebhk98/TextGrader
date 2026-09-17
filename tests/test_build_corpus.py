@@ -187,7 +187,7 @@ def test_main_reports_invalid_nested_config_without_traceback(tmp_path: Path, ca
 
 
 def test_checked_in_example_config_enables_all_sources() -> None:
-    config = Path(__file__).resolve().parents[1] / "corpus_scifi_third.json"
+    config = Path(__file__).resolve().parents[1] / "examples/corpus_builder.science_fiction.json"
     settings = from_mapping(json.loads(config.read_text(encoding="utf-8")))
     assert set(settings.providers) == set(PROVIDER_TYPES)
     assert settings.genres == ["science_fiction"]

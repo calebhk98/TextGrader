@@ -1,0 +1,59 @@
+# TextGrader has no mandatory third-party dependency.  Core analysis, the
+# corpus builder and every dependency-free metric run on the standard library
+# alone, and every optional package below degrades to a visible "unavailable"
+# result rather than to a crash.  `python3 grade.py --list-metrics` prints which
+# metric wants which package.
+#
+#   pip install -r requirements.txt            everything except the embeddings
+#   pip install -r requirements-embeddings.txt the semantic-similarity extra
+#   python -m spacy download en_core_web_sm    the English model spaCy needs
+#
+# To prove the graceful-degradation path on a machine that HAS these installed:
+#   TEXTGRADER_DISABLE_OPTIONAL=all python3 grade.py draft.md
+
+# Sentence segmentation, parsing, POS, morphology, lemmas, dependencies.
+# Needed by every metric whose cost is "parse".
+spacy>=3.7
+# The English pipeline spaCy loads.  pip cannot install it from PyPI; run
+# `python -m spacy download en_core_web_sm` after installing spacy.
+
+# Rule-based sentence boundary detection.  Default segmenter when present.
+pysbd>=0.3.4
+
+# Robust statistics, Wasserstein distance between whole distributions.
+scipy>=1.10
+numpy>=1.24
+
+# General-language word frequencies, replacing the contaminated bundled table.
+wordfreq>=3.0
+
+# MATTR, MTLD, HD-D and friends.  TextGrader implements MTLD and HD-D itself,
+# so this is a cross-check rather than a requirement, and the metrics report
+# which implementation produced the number.
+#
+# Note: as of writing, lexicalrichness fails to build against setuptools 68+
+# ("AttributeError: install_layout"). If that happens, skip it; nothing breaks.
+lexicalrichness>=0.5
+
+# Unicode-aware matching AND a matching timeout, so a user-supplied regex in
+# project_rules cannot hang a grading run.
+regex>=2023.0
+
+# Change-point detection for book-level style drift.
+ruptures>=1.1.9
+
+# Multivariate style distance and robust covariance.
+scikit-learn>=1.3
+
+# Tabular convenience for corpus work.
+pandas>=2.0
+
+# Descriptive statistics, readability, dependency distance and coherence on top
+# of spaCy.  TextGrader computes these directly from the shared parse, so this
+# is here for users who want its extra features in their own code rather than
+# because a metric needs it.
+textdescriptives>=2.8
+
+# Test runner.  The suite is pytest-based; `unittest discover` silently skipped
+# the pytest-style tests in tests/test_build_corpus.py.
+pytest>=7.0

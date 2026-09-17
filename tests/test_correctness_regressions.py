@@ -8,11 +8,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "measures"))
 
-import prose_grade
+from textgrader import core_metrics as prose_grade
 from textgrader.chapters import chapter_number
-from voice_separation import profile, show
+from textgrader.reports.voice_separation import profile, show
 
 
 class CorrectnessRegressions(unittest.TestCase):
