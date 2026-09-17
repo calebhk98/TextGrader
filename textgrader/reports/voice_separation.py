@@ -167,15 +167,47 @@ def profile(lines, hedge_pattern=None):
         return None
     # Mean segmental TTR compares equal-size samples rather than rewarding a
     # speaker merely for having fewer total words. Fifty words is deliberately
-    # small enough for dialogue samples; incomplete trailing windows are kept.
+    # small enough for dialogue samples.
+    #
+    # The trailing window is dropped, because keeping it puts back the bias
+    # MSTTR exists to remove. A four-word tail scores at or near 100% and is
+    # then averaged with the SAME WEIGHT as a full fifty-word window, so its
+    # pull on the mean is 1/segments: largest for the speakers with least
+    # text, which is the direction of the plain-TTR artefact. Measured on
+    # tagged dialogue, a 94-word speaker read 7.3 points high, enough to move
+    # them from mid-pack to narrowest vocabulary in the book.
+    #
+    # ``metrics/dialogue_channels._window_ttr`` drops only tails under half a
+    # window, which is right there: it reports a median over the windows, so a
+    # short one distorts little. The mean here weighs every segment equally,
+    # so this needs the stricter rule.
     window = 50
     segments = [flat[index:index + window] for index in range(0, len(flat), window)]
-    msttr = st.fmean(len(set(segment)) / len(segment) for segment in segments)
+    if len(segments) > 1 and len(segments[-1]) < window:
+        segments.pop()
+    # Under one full window there is no equal-size comparison to make, so the
+    # number is withheld rather than computed from a single short sample and
+    # printed as though it meant the same as the others.
+    complete = len(flat) >= window
+    msttr = st.fmean(len(set(segment)) / len(segment) for segment in segments) if complete else None
     return {
         "n": len(lines),
         "words": len(flat),
         "wpl": len(flat) / len(lines),
-        "ttr": 100 * msttr,
+        # Plain type-token ratio, reported beside MSTTR rather than replaced by
+        # it. It is a poor vocabulary measure: it falls mechanically as a
+        # sample grows, and across this project's tagged dialogue it ranked
+        # speakers at Spearman rho -0.976 against their word counts, which is
+        # very nearly a pure inverse ranking of who talks most. It is kept
+        # because it is the diagnostic for its own replacement (that rho is
+        # what demonstrates the confound), because existing work is calibrated
+        # against it, and because a speaker whose two ranks diverge is a
+        # speaker whose apparent vocabulary was an artefact of line volume.
+        # What it must not do is wear MSTTR's name, or the column silently
+        # changes scale under readers holding the old numbers.
+        "ttr": 100 * len(set(flat)) / len(flat),
+        "msttr": 100 * msttr if msttr is not None else None,
+        "msttr_segments": len(segments) if complete else 0,
         "q": 100 * sum(1 for line in lines if "?" in line) / len(lines),
         "short": 100 * sum(1 for tokens in tokens if len(tokens) <= 3) / len(lines),
         "long": 100 * sum(1 for tokens in tokens if len(tokens) > 15) / len(lines),
@@ -193,9 +225,16 @@ def show(title, data, floor, note, hedges=None):
         return
     print(f"\n{title}   ({note})")
     print(f"  {'speaker':10}{'lines':>7}{'words':>7}{'w/line':>8}{'TTR%':>7}"
-          f"{'quest%':>8}{'1-3w%':>7}{'>15w%':>7}{'hedge%':>8}")
+          f"{'MSTTR%':>8}{'seg':>5}{'quest%':>8}{'1-3w%':>7}{'>15w%':>7}{'hedge%':>8}")
     for speaker, speaker_profile in sorted(rows.items(), key=lambda kv: -kv[1]["wpl"]):
+        # The segment count travels with MSTTR because the value alone cannot
+        # say whether it averaged two windows or twenty, and those are not the
+        # same evidence. A dash means the speaker has under one full window.
+        msttr = speaker_profile["msttr"]
+        msttr_column = f"{msttr:>8.1f}" if msttr is not None else f"{'-':>8}"
+        segments = speaker_profile["msttr_segments"]
         print(f"  {speaker:10}{speaker_profile['n']:>7}{speaker_profile['words']:>7}{speaker_profile['wpl']:>8.1f}{speaker_profile['ttr']:>7.1f}"
+              f"{msttr_column}{(segments or '-'):>5}"
               f"{speaker_profile['q']:>8.0f}{speaker_profile['short']:>7.0f}{speaker_profile['long']:>7.0f}{speaker_profile['hedge']:>8.0f}")
     for key, label in (("wpl", "words per line"), ("short", "1-3 word share")):
         vals = [speaker_profile[key] for speaker_profile in rows.values()]

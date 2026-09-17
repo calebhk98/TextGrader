@@ -43,9 +43,50 @@ class CorrectnessRegressions(unittest.TestCase):
         self.assertIn("spread 0%", output.getvalue())
 
     def test_voice_lexical_diversity_is_segment_standardized(self):
-        short = profile(["same"] * 50)["ttr"]
-        long = profile(["same"] * 100)["ttr"]
+        short = profile(["same"] * 50)["msttr"]
+        long = profile(["same"] * 100)["msttr"]
         self.assertEqual(short, long)
+
+    def test_msttr_drops_the_short_trailing_window(self):
+        # A tail scores near 100% type-token ratio and was averaged with the
+        # same weight as a full window, so it pulled the mean up by 1/segments:
+        # hardest on the speakers with least text, which is the plain-TTR
+        # artefact MSTTR exists to remove.
+        lines = ["alpha beta gamma delta epsilon"] * 20   # 100 words, two full windows
+        clean = profile(lines)
+        self.assertEqual(clean["msttr_segments"], 2)
+        tailed = profile(lines + ["zeta"])                # 101 words, one-word tail
+        self.assertEqual(tailed["msttr_segments"], 2)
+        self.assertEqual(clean["msttr"], tailed["msttr"])
+
+    def test_msttr_is_withheld_below_one_full_window(self):
+        # Fewer than fifty words leaves no equal-size comparison to make, so a
+        # number computed from one short sample is withheld rather than printed
+        # as though it meant what the others mean.
+        thin = profile(["alpha beta gamma"] * 5)          # 15 words
+        self.assertIsNone(thin["msttr"])
+        self.assertEqual(thin["msttr_segments"], 0)
+        self.assertIsNotNone(thin["ttr"])
+
+    def test_plain_ttr_is_reported_and_is_not_msttr(self):
+        # MSTTR took plain TTR's key, so the column header still read TTR%
+        # while the values came from a different scale. Both are reported now,
+        # each under its own name, and they disagree by construction.
+        lines = ["alpha beta gamma delta epsilon"] * 20
+        row = profile(lines)
+        # Five types over 100 words is 5%; over each 50-word window it is 10%.
+        # That gap IS the sample-size dependence, and it is only visible
+        # because the two numbers now have separate names.
+        self.assertAlmostEqual(row["ttr"], 5.0)
+        self.assertAlmostEqual(row["msttr"], 10.0)
+
+    def test_the_table_names_both_columns(self):
+        data = {"a": ["alpha beta gamma delta epsilon"] * 20}
+        with redirect_stdout(io.StringIO()) as output:
+            show("voices", data, 8, "test")
+        printed = output.getvalue()
+        self.assertIn("TTR%", printed)
+        self.assertIn("MSTTR%", printed)
 
     def test_no_dialogue_is_reported_without_crashing(self):
         with redirect_stdout(io.StringIO()) as output:
