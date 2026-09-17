@@ -72,7 +72,8 @@ def _channel_findings(sentences: Sequence[str], words: int, suffix: str,
                     sample_size=0, min_sample=MIN_SAMPLE, warning=warning),
             finding(f"style.sentence_opening_entropy{suffix}",
                     f"Entropy of sentence-opening distribution{label}", None, "bits",
-                    family=FAMILY, sample_size=0, min_sample=MIN_SAMPLE, warning=warning),
+                    family=FAMILY, sample_size=0, min_sample=MIN_SAMPLE,
+                    sample_size_sensitive=True, warning=warning),
         ]
     evidence = [{"opening": opening, "count": count}
                 for opening, count in counter.most_common(25) if count > 1]
@@ -84,6 +85,10 @@ def _channel_findings(sentences: Sequence[str], words: int, suffix: str,
                 f"Entropy of sentence-opening distribution{label}",
                 _opening_entropy(counter, total), "bits", family=FAMILY, sample_size=total,
                 min_sample=MIN_SAMPLE,
+                # More text means more distinct openings, so this rises with
+                # sample size whatever the prose is doing. Graded against a
+                # corpus of whole novels it flagged all 53 chapters of a book.
+                sample_size_sensitive=True,
                 distribution={"distinct_openings": len(counter), "max_words": words}),
     ]
 

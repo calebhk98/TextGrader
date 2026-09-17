@@ -33,6 +33,16 @@ text (a few hundred thousand words):
     model these still run, on a lexical fallback that is a weaker measurement
     and says so in every finding.
 
+``unit_sensitive`` marks a raw count: it grows with the document, so it is
+reported and never compared.  ``sample_size_sensitive`` marks something subtler
+and is the reason the two are separate flags.  Entropy over a heavy-tailed
+category set is not a rate and not a count: it rises with how many items you
+saw, because more text means more distinct openings.  Measured on one fixed
+population, raw entropy rose 34% across a hundredfold sample and dividing by
+``log2(categories)`` fell 18%, so no cheap estimator removes it.  Such a metric
+is comparable only against observations of a similar size, and ``grade.py``
+withholds the comparison otherwise rather than reporting an artefact.
+
 ``MIN_SAMPLE`` is the manuscript-side sample-size rule.  A passive-voice rate
 from three sentences and one from three thousand do not deserve equal standing,
 so a finding whose ``sample_size`` is below the metric's minimum is reported
@@ -59,7 +69,8 @@ def finding(metric_id: str, name: str, value: Any = None, unit: str | None = Non
             details: Sequence[Mapping[str, Any]] | None = None,
             warning: str | None = None, channel: str = "full",
             min_sample: int | None = None,
-            unit_sensitive: bool | None = None) -> dict[str, Any]:
+            unit_sensitive: bool | None = None,
+            sample_size_sensitive: bool | None = None) -> dict[str, Any]:
     """One measurement, in the shape :mod:`grade` turns into a result."""
 
     return {
@@ -70,6 +81,7 @@ def finding(metric_id: str, name: str, value: Any = None, unit: str | None = Non
         "details": [dict(item) for item in (details or [])],
         "warning": warning, "channel": channel, "min_sample": min_sample,
         "unit_sensitive": unit_sensitive,
+        "sample_size_sensitive": sample_size_sensitive,
     }
 
 

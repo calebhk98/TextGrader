@@ -20,6 +20,7 @@ import importlib
 import json
 import os
 import subprocess
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -117,6 +118,29 @@ class Comparator:
         self.min_sentences = settings.get("min_sentences_for_corpus", 40)
         self.min_words = settings.get("min_words_for_corpus", 500)
         self.min_corpus = settings.get("min_corpus_sample", stats.MIN_CORPUS_SAMPLE)
+        counts = [book.get("word_count") for book in (profile or {}).get("books", [])
+                  if isinstance(book, dict) and book.get("word_count")]
+        self.typical_words = int(statistics.median(counts)) if counts else None
+
+    #: A sample-size-dependent metric compares only against observations of a
+    #: similar size.  Threefold is generous; entropy drifts measurably well
+    #: inside it, and anything tighter would refuse ordinary chapter variation.
+    SIZE_RATIO = 3.0
+
+    def size_mismatch(self, sample_size):
+        """Why a sample-size-dependent value cannot be held against this corpus."""
+
+        typical = self.typical_words
+        mine = self.document.word_count
+        if not typical or not mine:
+            return None
+        ratio = max(typical / mine, mine / typical)
+        if ratio <= self.SIZE_RATIO:
+            return None
+        return (f"this value depends on how much text produced it, and this document is "
+                f"{mine:,} words against a corpus whose texts are typically {typical:,}; "
+                f"comparison withheld. Build a profile from texts of a similar size, or "
+                f"read the value on its own")
 
     @property
     def document_is_large_enough(self):
@@ -390,9 +414,15 @@ def check_preprocessing(profile, analysis, report):
                     f"comparisons may not describe the same kind of text"))
 
 
+def analyze_text(text, config, source="<text>"):
+    """Analyze a string.  Used where a caller already holds the text, such as
+    one chapter sliced out of a manuscript, so nothing has to reach disk."""
+
+    return _analyze(config, Report(source=source), text=text)
+
+
 def analyze(path, config):
     path = Path(path)
-    settings = config.get("analysis", {}) or {}
     report = Report(source=str(path))
     if not path.is_file():
         report.results.append(MetricResult("input.manuscript", "Manuscript input",
@@ -400,6 +430,11 @@ def analyze(path, config):
                                            status_type=StatusType.UNAVAILABLE,
                                            error=f"file not found: {path}"))
         return report
+    return _analyze(config, report, path=path)
+
+
+def _analyze(config, report, path=None, text=None):
+    settings = config.get("analysis", {}) or {}
     try:
         processing = TextProcessing.from_config(config.get("text_processing"))
         nlp_settings = NlpSettings.from_config(config.get("nlp"))
@@ -408,9 +443,13 @@ def analyze(path, config):
                                            status="error",
                                            status_type=StatusType.INTERNAL_ERROR, error=str(exc)))
         return report
-    analysis = DocumentAnalysis.from_path(
-        path, processing=processing, nlp_settings=nlp_settings,
-        comparison_unit=settings.get("comparison_unit", "unknown"))
+    unit = settings.get("comparison_unit", "unknown")
+    analysis = (DocumentAnalysis.from_path(path, processing=processing,
+                                           nlp_settings=nlp_settings, comparison_unit=unit)
+                if path is not None else
+                DocumentAnalysis.from_text(text, processing=processing,
+                                           nlp_settings=nlp_settings, source=report.source,
+                                           comparison_unit=unit))
     report.document = analysis.describe()
 
     profile = load_profile(config, report)
@@ -422,8 +461,9 @@ def analyze(path, config):
         report.results.extend(core)
     report.results.extend(project_rules(analysis, config))
     report.results.extend(_optional_results(analysis, config, profile, comparator))
-    report.results.extend(_external_results(path, config))
-    report.results.extend(_bundled_results(path, config))
+    if path is not None:
+        report.results.extend(_external_results(path, config))
+        report.results.extend(_bundled_results(path, config))
     return report
 
 
@@ -511,6 +551,12 @@ def _finding_result(finding, spec, analysis, comparator, comparable, profile, el
         item.status_type = StatusType.UNAVAILABLE
         item.action = Action.UNAVAILABLE
         return item
+    if finding.get("sample_size_sensitive"):
+        note = comparator.size_mismatch(finding.get("sample_size"))
+        if note:
+            item.warning = _join(item.warning, note)
+            item.action = Action.INSUFFICIENT_DATA
+            return item
     if finding.get("unit_sensitive"):
         # A raw count grows with the document, so comparing it across books of
         # different lengths ranks by length. Measured over thirty published
