@@ -189,13 +189,18 @@ judged by a symmetric rule, so the whole upper tail read as outlying.
 `--parse-metrics` and `--model-metrics` also profile the spaCy and embedding
 metrics. They are opt-in because of what they cost per book.
 
-The bundled `data/prose_reference.json` is 43 public-domain novels from
+The bundled `data/prose_reference.json` is 50 public-domain novels from
 Gutenberg and Standard Ebooks, built with the `text_processing` settings in
 this repository's `config.json` and recorded in the profile so a mismatch with
 your manuscript is reported rather than assumed. `data/absolutes_reference.json`
-is the same 43 books. Rebuild both from a shelf that matches what you write:
+is the same 50 books. Rebuild both from a shelf that matches what you write:
 percentiles are only as relevant as the corpus they come from, and this one is
 general English-language fiction weighted to the 19th and early 20th century.
+
+Ten of the twelve children's classics the Lexile coefficients in
+`core_metrics.lexile` were fitted against are in it, so the docstring's
+calibration claim can be checked against the shipped corpus rather than taken
+on trust. The two missing are *The Railway Children* and *A Little Princess*.
 
 "Grading needs a profile, not the books" holds for every metric and for all but
 three of the project reports. `tics`, `number_report` and `quotable` count

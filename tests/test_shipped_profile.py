@@ -47,6 +47,21 @@ def test_the_shipped_profile_is_large_enough_to_take_a_percentile_from():
     assert len(PROFILE.get("books") or {}) >= 30
 
 
+def test_the_lexile_calibration_books_are_in_the_shipped_corpus():
+    """The coefficients in core_metrics.lexile were fitted against twelve
+    named children's classics. Ten of them are in the corpus, so the
+    docstring's calibration claim can be re-checked against what ships rather
+    than taken on trust. The Railway Children and A Little Princess are not.
+    """
+
+    names = " ".join(Path(row["source_filename"]).stem for row in PROFILE["books"])
+    for fragment in ("-11-alice", "-778-five-children", "-16-peter-pan",
+                     "-113-the-secret-garden", "-74-the-adventures-of-tom-sawyer",
+                     "-45-anne-of", "-271-black-beauty", "-120-treasure-island",
+                     "-289-the-wind", "-514-little-women"):
+        assert fragment in names, fragment
+
+
 def test_the_shipped_profile_declares_its_comparison_unit():
     assert PROFILE.get("comparison_unit") == "book"
 

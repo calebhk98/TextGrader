@@ -7,6 +7,14 @@
   "spoken_per1000": 9.211806681803438,
   "words": 53952
  },
+ "gutenberg-11-alice-s-adventures-in-wonderland": {
+  "narration_per1000": 12.66061268322092,
+  "pairs": 3,
+  "per1000": 12.66061268322092,
+  "share": 19.82300884955752,
+  "spoken_per1000": 0.0,
+  "words": 26539
+ },
  "gutenberg-110-tess-of-the-d-urbervilles-a-pure-woman": {
   "narration_per1000": 8.730132721612321,
   "pairs": 32,
@@ -14,6 +22,22 @@
   "share": 15.819477434679335,
   "spoken_per1000": 0.0,
   "words": 152575
+ },
+ "gutenberg-113-the-secret-garden": {
+  "narration_per1000": 12.738305817610064,
+  "pairs": 10,
+  "per1000": 12.738305817610064,
+  "share": 16.175323662455156,
+  "spoken_per1000": 0.0,
+  "words": 81408
+ },
+ "gutenberg-120-treasure-island": {
+  "narration_per1000": 9.728415079043373,
+  "pairs": 5,
+  "per1000": 9.728415079043373,
+  "share": 16.808404202101052,
+  "spoken_per1000": 0.0,
+  "words": 69076
  },
  "gutenberg-131-the-pilgrim-s-progress-from-this-world-to-that-which-is-to-come-delivere": {
   "narration_per1000": 7.404069018799897,
@@ -30,6 +54,14 @@
   "share": 16.76281702405573,
   "spoken_per1000": 0.0,
   "words": 137503
+ },
+ "gutenberg-16-peter-pan": {
+  "narration_per1000": 11.515062206597477,
+  "pairs": 22,
+  "per1000": 11.515062206597477,
+  "share": 16.026955757398184,
+  "spoken_per1000": 0.0,
+  "words": 47503
  },
  "gutenberg-161-sense-and-sensibility": {
   "narration_per1000": 14.097658171389508,
@@ -78,6 +110,14 @@
   "share": 17.125706214689266,
   "spoken_per1000": 0.0,
   "words": 43748
+ },
+ "gutenberg-271-black-beauty": {
+  "narration_per1000": 11.071825772288896,
+  "pairs": 9,
+  "per1000": 11.071825772288896,
+  "share": 24.878776575904514,
+  "spoken_per1000": 0.0,
+  "words": 60243
  },
  "gutenberg-289-the-wind-in-the-willows": {
   "narration_per1000": 12.21514745308311,
@@ -135,6 +175,14 @@
   "spoken_per1000": 6.960352422907489,
   "words": 35120
  },
+ "gutenberg-45-anne-of-green-gables": {
+  "narration_per1000": 13.869839859369868,
+  "pairs": 20,
+  "per1000": 13.869839859369868,
+  "share": 19.16967027099186,
+  "spoken_per1000": 0.0,
+  "words": 103534
+ },
  "gutenberg-472-the-house-behind-the-cedars": {
   "narration_per1000": 8.642097943776696,
   "pairs": 12,
@@ -158,6 +206,14 @@
   "share": 14.624505928853756,
   "spoken_per1000": 0.0,
   "words": 215531
+ },
+ "gutenberg-514-little-women": {
+  "narration_per1000": 12.1312984288711,
+  "pairs": 31,
+  "per1000": 12.1312984288711,
+  "share": 21.999029597282874,
+  "spoken_per1000": 0.0,
+  "words": 186872
  },
  "gutenberg-527-the-end-of-the-tether": {
   "narration_per1000": 10.98091098091098,
@@ -223,6 +279,14 @@
   "spoken_per1000": 14.732142857142858,
   "words": 40597
  },
+ "gutenberg-74-the-adventures-of-tom-sawyer": {
+  "narration_per1000": 12.410732857241905,
+  "pairs": 0,
+  "per1000": 12.410732857241905,
+  "share": 16.299399016572572,
+  "spoken_per1000": 0.0,
+  "words": 72115
+ },
  "gutenberg-765-the-moon-pool": {
   "narration_per1000": 7.063008130081301,
   "pairs": 6,
@@ -270,14 +334,6 @@
   "share": 15.300918055083304,
   "spoken_per1000": 0.0,
   "words": 91610
- },
- "gutenberg-91-tom-sawyer-abroad": {
-  "narration_per1000": 12.926893178443532,
-  "pairs": 3,
-  "per1000": 12.926893178443532,
-  "share": 23.654768247202984,
-  "spoken_per1000": 0.0,
-  "words": 34347
  },
  "gutenberg-92-tarzan-and-the-jewels-of-opar": {
   "narration_per1000": 5.358268543811725,
