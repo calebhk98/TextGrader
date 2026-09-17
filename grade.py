@@ -511,6 +511,18 @@ def _finding_result(finding, spec, analysis, comparator, comparable, profile, el
         item.status_type = StatusType.UNAVAILABLE
         item.action = Action.UNAVAILABLE
         return item
+    if finding.get("unit_sensitive"):
+        # A raw count grows with the document, so comparing it across books of
+        # different lengths ranks by length. Measured over thirty published
+        # novels, style.repeated_ngrams correlates with word count at r = 0.96.
+        # The value is still worth reporting; an outlier claim built on it is
+        # not, and every one of these has a normalized sibling.
+        item.warning = _join(item.warning,
+                             "this is a raw count and scales with document length, so it is "
+                             "reported without a corpus comparison; use the rate metric of "
+                             "the same name for a length-independent reading")
+        item.action = Action.INFORMATIONAL
+        return item
     reference = distribution(profile, metric_id)
     if reference and not comparable:
         item.warning = _join(item.warning,

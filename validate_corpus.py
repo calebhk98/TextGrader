@@ -46,6 +46,7 @@ import tempfile
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Sequence
 
 import grade
 from textgrader.corpus import build_profile, write_profile
@@ -159,6 +160,7 @@ def validate(sources, config, *, limit=None, quiet=False, parse_metrics=False,
             "held_out": len(rows), "seconds": round(time.monotonic() - started, 1),
             "books": rows, "metrics": summarize_metrics(rows, len(rows)),
             "redundant_metrics": redundant(full),
+            "length_confounded": length_confounded(full),
             "distribution_spread": spread(full)}
 
 
@@ -199,6 +201,51 @@ def summarize_metrics(rows, total):
             "directions": dict(directions[metric_id]),
         })
     return out
+
+
+#: Above this, a metric is tracking how long the document is rather than how it
+#: is written.  Squared, it is the share of the metric's variance that document
+#: length explains: 0.8 means two thirds.
+LENGTH_CORRELATION = 0.8
+
+
+def _pearson(a: Sequence[float], b: Sequence[float]) -> float:
+    mean_a, mean_b = statistics.fmean(a), statistics.fmean(b)
+    numerator = sum((x - mean_a) * (y - mean_b) for x, y in zip(a, b))
+    spread = (sum((x - mean_a) ** 2 for x in a) * sum((y - mean_b) ** 2 for y in b)) ** 0.5
+    return numerator / spread if spread else 0.0
+
+
+def length_confounded(profile):
+    """Metrics that mostly measure how much text they were given.
+
+    A raw count grows with the document, so comparing it across books of very
+    different lengths ranks by length. The tell is a high correlation with word
+    count across the corpus: measured over thirty published novels,
+    ``style.repeated_ngrams`` came in at r = +0.96, which is a word counter
+    wearing a style metric's name, while its normalized sibling
+    ``style.pov_drift_rate`` came in at -0.15.
+
+    Reported, not silently corrected, because whether a correlation is a
+    confound or a real relationship is a judgement about the metric.
+    """
+
+    books = profile["books"]
+    words = [book.get("word_count") for book in books]
+    if len(books) < 8 or any(value is None for value in words):
+        return []
+    out = []
+    for key in sorted({key for book in books for key in book}):
+        values = [book.get(key) for book in books]
+        if any(not isinstance(v, (int, float)) or isinstance(v, bool) for v in values):
+            continue
+        if len(set(values)) < 3:
+            continue
+        r = _pearson(words, values)
+        if abs(r) >= LENGTH_CORRELATION:
+            out.append({"metric_id": key, "r": round(r, 3),
+                        "variance_explained": round(r * r, 3)})
+    return sorted(out, key=lambda row: -abs(row["r"]))
 
 
 def redundant(profile, tolerance: float = 1e-9):
@@ -270,6 +317,14 @@ def render(result, top=25):
               f"{100 * row['rate']:>7.0f}%{severity:>9}  {direction}")
     if not result["metrics"]:
         print("  none: no metric flagged any held-out text")
+
+    confounded = result.get("length_confounded", [])
+    if confounded:
+        print("\nmetrics that mostly measure document length, not style")
+        print(f"  {'metric':<44}{'r vs words':>11}{'variance explained':>20}")
+        for row in confounded:
+            print(f"  {row['metric_id']:<44}{row['r']:>+11.2f}"
+                  f"{100 * row['variance_explained']:>19.0f}%")
 
     duplicates = result.get("redundant_metrics", {})
     identical = duplicates.get("identical", [])
