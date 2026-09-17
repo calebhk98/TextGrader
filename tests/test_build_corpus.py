@@ -10,14 +10,14 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import build_corpus
-from textgrader.corpus_builder import Candidate, Document, ProviderStatus, SearchQuery
-from textgrader.corpus_builder import builder
-from textgrader.corpus_builder.config import Settings, from_mapping
-from textgrader.corpus_builder.extractors import epub_text, html_text
-from textgrader.corpus_builder.metadata import enrich_first
-from textgrader.corpus_builder.net import NetworkError, fetch
-from textgrader.corpus_builder.providers import PROVIDER_TYPES
-from textgrader.corpus_builder.providers.gutenberg import GutenbergProvider
+from corpus_builder import Candidate, Document, ProviderStatus, SearchQuery
+from corpus_builder import builder
+from corpus_builder.config import Settings, from_mapping
+from corpus_builder.extractors import epub_text, html_text
+from corpus_builder.metadata import enrich_first
+from corpus_builder.net import NetworkError, fetch
+from corpus_builder.providers import PROVIDER_TYPES
+from corpus_builder.providers.gutenberg import GutenbergProvider
 from textgrader.corpus import build_profile
 
 
