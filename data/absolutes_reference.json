@@ -1,186 +1,354 @@
 {
- "Age_of_Innocence_Wharton": {
-  "narration_per1000": 9.799266954061189,
+ "gutenberg-102-the-tragedy-of-pudd-nhead-wilson": {
+  "narration_per1000": 10.466222645099904,
+  "pairs": 1,
+  "per1000": 9.786476868327401,
+  "share": 16.842105263157894,
+  "spoken_per1000": 9.211806681803438,
+  "words": 53952
+ },
+ "gutenberg-110-tess-of-the-d-urbervilles-a-pure-woman": {
+  "narration_per1000": 8.730132721612321,
+  "pairs": 32,
+  "per1000": 8.730132721612321,
+  "share": 15.819477434679335,
+  "spoken_per1000": 0.0,
+  "words": 152575
+ },
+ "gutenberg-131-the-pilgrim-s-progress-from-this-world-to-that-which-is-to-come-delivere": {
+  "narration_per1000": 7.404069018799897,
+  "pairs": 1,
+  "per1000": 7.403268612934768,
+  "share": 12.926829268292684,
+  "spoken_per1000": 7.426928605654049,
+  "words": 57272
+ },
+ "gutenberg-144-the-voyage-out": {
+  "narration_per1000": 11.19975564169509,
   "pairs": 21,
-  "per1000": 9.673082917705736,
-  "share": 19.42488262910798,
-  "spoken_per1000": 9.400188003760075,
-  "words": 102656
- },
- "Flappers_and_Philosophers_Fitzgerald": {
-  "narration_per1000": 8.536728467495893,
-  "pairs": 6,
-  "per1000": 9.493260756868844,
-  "share": 12.659321667746813,
-  "spoken_per1000": 10.455861070911721,
-  "words": 61728
- },
- "Great_Gatsby_Fitzgerald": {
-  "narration_per1000": 11.423761423761423,
-  "pairs": 11,
-  "per1000": 11.423761423761423,
-  "share": 16.299685444666856,
+  "per1000": 11.19975564169509,
+  "share": 16.76281702405573,
   "spoken_per1000": 0.0,
-  "words": 49896
+  "words": 137503
  },
- "Gullibles_Travels_Lardner": {
-  "narration_per1000": 9.651307596513076,
-  "pairs": 8,
-  "per1000": 11.935639360066105,
-  "share": 15.402843601895734,
-  "spoken_per1000": 14.492753623188406,
-  "words": 43567
- },
- "MenWithoutWomen_Hemingway": {
-  "narration_per1000": 9.511128019783147,
-  "pairs": 7,
-  "per1000": 13.155358519660755,
-  "share": 12.071633871324343,
-  "spoken_per1000": 18.398055062750508,
-  "words": 41504
- },
- "My_Man_Jeeves_Wodehouse": {
-  "narration_per1000": 11.61405035277205,
-  "pairs": 9,
-  "per1000": 11.61405035277205,
-  "share": 13.008474576271187,
-  "spoken_per1000": 0.0,
-  "words": 52867
- },
- "RightHo_Jeeves_Wodehouse": {
-  "narration_per1000": 11.02873517890475,
-  "pairs": 10,
-  "per1000": 11.02873517890475,
-  "share": 12.864152100582643,
-  "spoken_per1000": 0.0,
-  "words": 76074
- },
- "SunAlsoRises_Hemingway": {
-  "narration_per1000": 19.188852561108515,
-  "pairs": 13,
-  "per1000": 13.866433617362173,
-  "share": 11.782178217821782,
-  "spoken_per1000": 10.4974047436166,
-  "words": 68655
- },
- "Tales_of_the_Jazz_Age_Fitzgerald": {
-  "narration_per1000": 9.234081752699748,
+ "gutenberg-161-sense-and-sensibility": {
+  "narration_per1000": 14.097658171389508,
   "pairs": 23,
-  "per1000": 9.234081752699748,
-  "share": 12.427184466019417,
+  "per1000": 14.097658171389508,
+  "share": 28.901042556827893,
   "spoken_per1000": 0.0,
-  "words": 90101
+  "words": 119949
  },
- "This_Side_of_Paradise_Fitzgerald": {
-  "narration_per1000": 10.291129070371946,
-  "pairs": 23,
-  "per1000": 10.291129070371946,
-  "share": 14.873633879781421,
-  "spoken_per1000": 0.0,
-  "words": 84636
- },
- "Winesburg_Ohio_Anderson": {
-  "narration_per1000": 8.451341567291312,
-  "pairs": 7,
-  "per1000": 8.451341567291312,
-  "share": 14.412165229232864,
-  "spoken_per1000": 0.0,
-  "words": 75136
- },
- "alice_in_wonderland": {
-  "narration_per1000": 12.231404958677686,
-  "pairs": 3,
-  "per1000": 12.231404958677686,
-  "share": 19.86873508353222,
-  "spoken_per1000": 0.0,
-  "words": 27225
- },
- "anne_of_green_gables": {
-  "narration_per1000": 13.326987148976677,
-  "pairs": 21,
-  "per1000": 13.326987148976677,
-  "share": 20.704654197477165,
-  "spoken_per1000": 0.0,
-  "words": 107151
- },
- "black_beauty": {
-  "narration_per1000": 11.071458212299776,
-  "pairs": 9,
-  "per1000": 11.071458212299776,
-  "share": 25.303490136570563,
-  "spoken_per1000": 0.0,
-  "words": 60245
- },
- "five_children_and_it": {
-  "narration_per1000": 13.67416420159625,
-  "pairs": 11,
-  "per1000": 13.64315042926465,
-  "share": 19.751418535530938,
-  "spoken_per1000": 13.580525188774935,
-  "words": 53580
- },
- "little_princess": {
-  "narration_per1000": 10.513326752221126,
-  "pairs": 5,
-  "per1000": 11.449756562392984,
-  "share": 16.047579298831387,
-  "spoken_per1000": 12.61119243328454,
-  "words": 67163
- },
- "little_women": {
-  "narration_per1000": 11.807276796452587,
+ "gutenberg-169-the-well-at-the-world-s-end-a-tale": {
+  "narration_per1000": 6.052839654279248,
   "pairs": 31,
-  "per1000": 11.807276796452587,
-  "share": 23.372321705827552,
-  "spoken_per1000": 0.0,
-  "words": 191238
+  "per1000": 6.19192292123536,
+  "share": 18.956829633664714,
+  "spoken_per1000": 6.36010385265469,
+  "words": 224809
  },
- "peter_pan": {
-  "narration_per1000": 11.32790537867272,
-  "pairs": 22,
-  "per1000": 11.32790537867272,
-  "share": 16.575258988421695,
-  "spoken_per1000": 0.0,
-  "words": 48023
- },
- "railway_children": {
-  "narration_per1000": 13.989732001927326,
+ "gutenberg-170-the-haunted-hotel-a-mystery-of-modern-venice": {
+  "narration_per1000": 8.228622261759146,
   "pairs": 8,
-  "per1000": 13.989732001927326,
-  "share": 18.111421811142183,
+  "per1000": 8.228622261759146,
+  "share": 11.324879755137735,
   "spoken_per1000": 0.0,
-  "words": 60187
+  "words": 62951
  },
- "secret_garden": {
-  "narration_per1000": 10.2034467740932,
-  "pairs": 10,
-  "per1000": 12.692589875275129,
-  "share": 16.878048780487806,
-  "spoken_per1000": 15.702750216024553,
-  "words": 81780
+ "gutenberg-175-the-phantom-of-the-opera": {
+  "narration_per1000": 10.765574130664909,
+  "pairs": 16,
+  "per1000": 11.287131031414287,
+  "share": 14.08327246165084,
+  "spoken_per1000": 12.026032823995472,
+  "words": 85407
  },
- "tom_sawyer": {
-  "narration_per1000": 12.025341995883943,
-  "pairs": 0,
-  "per1000": 12.025341995883943,
-  "share": 16.537180910099888,
+ "gutenberg-178-confidence": {
+  "narration_per1000": 9.679056031847217,
+  "pairs": 7,
+  "per1000": 9.679056031847217,
+  "share": 14.035087719298245,
   "spoken_per1000": 0.0,
-  "words": 74343
+  "words": 76867
  },
- "treasure_island": {
-  "narration_per1000": 9.50529884943323,
-  "pairs": 5,
-  "per1000": 9.50529884943323,
-  "share": 17.420696827873115,
+ "gutenberg-244-a-study-in-scarlet": {
+  "narration_per1000": 11.08622108439243,
+  "pairs": 8,
+  "per1000": 11.08622108439243,
+  "share": 17.125706214689266,
   "spoken_per1000": 0.0,
-  "words": 70487
+  "words": 43748
  },
- "wind_in_willows": {
-  "narration_per1000": 11.964714788848294,
+ "gutenberg-289-the-wind-in-the-willows": {
+  "narration_per1000": 12.21514745308311,
   "pairs": 4,
-  "per1000": 11.964714788848294,
-  "share": 22.452130945027793,
+  "per1000": 12.21514745308311,
+  "share": 22.11771844660194,
   "spoken_per1000": 0.0,
-  "words": 60762
+  "words": 59680
+ },
+ "gutenberg-298-the-market-place": {
+  "narration_per1000": 12.377844808455729,
+  "pairs": 18,
+  "per1000": 12.377844808455729,
+  "share": 19.936457505957108,
+  "spoken_per1000": 0.0,
+  "words": 121669
+ },
+ "gutenberg-345-dracula": {
+  "narration_per1000": 11.835341885879659,
+  "pairs": 29,
+  "per1000": 11.835341885879659,
+  "share": 19.807910771455127,
+  "spoken_per1000": 0.0,
+  "words": 162057
+ },
+ "gutenberg-378-the-white-knight-tirant-lo-blanc": {
+  "narration_per1000": 13.657456232862266,
+  "pairs": 41,
+  "per1000": 13.536053772175132,
+  "share": 25.06026862587533,
+  "spoken_per1000": 13.3814111944929,
+  "words": 161273
+ },
+ "gutenberg-430-the-grain-of-dust-a-novel": {
+  "narration_per1000": 13.144211971215839,
+  "pairs": 17,
+  "per1000": 11.726318959891572,
+  "share": 13.95960320305964,
+  "spoken_per1000": 10.189624051394523,
+  "words": 99605
+ },
+ "gutenberg-434-the-circular-staircase": {
+  "narration_per1000": 10.341173977537613,
+  "pairs": 4,
+  "per1000": 10.341173977537613,
+  "share": 13.50802731131205,
+  "spoken_per1000": 0.0,
+  "words": 70785
+ },
+ "gutenberg-436-the-master-key-an-electrical-fairy-tale-founded-upon-the-mysteries-of-el": {
+  "narration_per1000": 12.318840579710145,
+  "pairs": 6,
+  "per1000": 8.9123006833713,
+  "share": 15.985699693564863,
+  "spoken_per1000": 6.960352422907489,
+  "words": 35120
+ },
+ "gutenberg-467-the-princess-of-cleves": {
+  "narration_per1000": 7.277119792587355,
+  "pairs": 10,
+  "per1000": 7.123341139734582,
+  "share": 40.36866359447004,
+  "spoken_per1000": 7.079067741232847,
+  "words": 61488
+ },
+ "gutenberg-472-the-house-behind-the-cedars": {
+  "narration_per1000": 8.642097943776696,
+  "pairs": 12,
+  "per1000": 7.962716758874069,
+  "share": 15.181248296538566,
+  "spoken_per1000": 7.39622641509434,
+  "words": 69951
+ },
+ "gutenberg-478-the-cost": {
+  "narration_per1000": 9.696969696969697,
+  "pairs": 12,
+  "per1000": 9.748151212701039,
+  "share": 13.806995055850576,
+  "spoken_per1000": 9.645159652774252,
+  "words": 77348
+ },
+ "gutenberg-506-the-shuttle": {
+  "narration_per1000": 9.27012819501603,
+  "pairs": 16,
+  "per1000": 9.27012819501603,
+  "share": 14.624505928853756,
+  "spoken_per1000": 0.0,
+  "words": 215531
+ },
+ "gutenberg-527-the-end-of-the-tether": {
+  "narration_per1000": 10.98091098091098,
+  "pairs": 8,
+  "per1000": 10.98091098091098,
+  "share": 17.69722814498934,
+  "spoken_per1000": 0.0,
+  "words": 52910
+ },
+ "gutenberg-532-at-the-foot-of-the-rainbow": {
+  "narration_per1000": 12.650701899256813,
+  "pairs": 4,
+  "per1000": 10.711665443873807,
+  "share": 14.827352742044685,
+  "spoken_per1000": 8.531873792659368,
+  "words": 61335
+ },
+ "gutenberg-543-main-street": {
+  "narration_per1000": 10.203239086072873,
+  "pairs": 29,
+  "per1000": 10.203239086072873,
+  "share": 13.479819230169861,
+  "spoken_per1000": 0.0,
+  "words": 169554
+ },
+ "gutenberg-557-puck-of-pook-s-hill": {
+  "narration_per1000": 10.54913897343952,
+  "pairs": 15,
+  "per1000": 10.567155035989586,
+  "share": 14.505956552207428,
+  "spoken_per1000": 10.493330266789329,
+  "words": 58767
+ },
+ "gutenberg-589-catriona": {
+  "narration_per1000": 8.849731945758435,
+  "pairs": 14,
+  "per1000": 8.849731945758435,
+  "share": 15.176609768463749,
+  "spoken_per1000": 0.0,
+  "words": 101472
+ },
+ "gutenberg-641-the-violet-fairy-book": {
+  "narration_per1000": 11.47615854784324,
+  "pairs": 8,
+  "per1000": 11.47615854784324,
+  "share": 22.09128320239431,
+  "spoken_per1000": 0.0,
+  "words": 102909
+ },
+ "gutenberg-671-phil-the-fiddler": {
+  "narration_per1000": 6.615704701124436,
+  "pairs": 6,
+  "per1000": 6.615704701124436,
+  "share": 7.474907554146857,
+  "spoken_per1000": 0.0,
+  "words": 42777
+ },
+ "gutenberg-714-the-bobbsey-twins-in-the-country": {
+  "narration_per1000": 12.419629609276255,
+  "pairs": 1,
+  "per1000": 13.868019804419045,
+  "share": 16.409210142815507,
+  "spoken_per1000": 14.732142857142858,
+  "words": 40597
+ },
+ "gutenberg-765-the-moon-pool": {
+  "narration_per1000": 7.063008130081301,
+  "pairs": 6,
+  "per1000": 7.428972994679249,
+  "share": 10.81713199824587,
+  "spoken_per1000": 7.6411141237367515,
+  "words": 99610
+ },
+ "gutenberg-768-wuthering-heights": {
+  "narration_per1000": 8.499073929826384,
+  "pairs": 21,
+  "per1000": 8.499073929826384,
+  "share": 13.507565337001376,
+  "spoken_per1000": 0.0,
+  "words": 115542
+ },
+ "gutenberg-778-five-children-and-it": {
+  "narration_per1000": 13.56405246999721,
+  "pairs": 12,
+  "per1000": 13.551096593560429,
+  "share": 21.252927400468383,
+  "spoken_per1000": 13.524936601859679,
+  "words": 53575
+ },
+ "gutenberg-786-hard-times": {
+  "narration_per1000": 11.17189749496113,
+  "pairs": 19,
+  "per1000": 11.17189749496113,
+  "share": 16.204928302937493,
+  "spoken_per1000": 0.0,
+  "words": 104190
+ },
+ "gutenberg-804-a-sentimental-journey-through-france-and-italy": {
+  "narration_per1000": 8.255908519604702,
+  "pairs": 4,
+  "per1000": 8.255908519604702,
+  "share": 29.77777777777778,
+  "spoken_per1000": 0.0,
+  "words": 40577
+ },
+ "gutenberg-83-from-the-earth-to-the-moon-and-round-the-moon": {
+  "narration_per1000": 9.824254993996288,
+  "pairs": 6,
+  "per1000": 9.824254993996288,
+  "share": 15.300918055083304,
+  "spoken_per1000": 0.0,
+  "words": 91610
+ },
+ "gutenberg-91-tom-sawyer-abroad": {
+  "narration_per1000": 12.926893178443532,
+  "pairs": 3,
+  "per1000": 12.926893178443532,
+  "share": 23.654768247202984,
+  "spoken_per1000": 0.0,
+  "words": 34347
+ },
+ "gutenberg-92-tarzan-and-the-jewels-of-opar": {
+  "narration_per1000": 5.358268543811725,
+  "pairs": 8,
+  "per1000": 5.358268543811725,
+  "share": 11.159737417943107,
+  "spoken_per1000": 0.0,
+  "words": 66626
+ },
+ "gutenberg-953-tom-swift-and-his-big-tunnel-or-the-hidden-city-of-the-andes": {
+  "narration_per1000": 10.27317300957273,
+  "pairs": 1,
+  "per1000": 9.740690020762468,
+  "share": 11.158906882591094,
+  "spoken_per1000": 9.011274571440547,
+  "words": 45274
+ },
+ "gutenberg-956-tik-tok-of-oz": {
+  "narration_per1000": 11.43353354077719,
+  "pairs": 13,
+  "per1000": 12.322099685786458,
+  "share": 18.744142455482663,
+  "spoken_per1000": 12.823557349798147,
+  "words": 48693
+ },
+ "gutenberg-96-the-monster-men": {
+  "narration_per1000": 7.000120691736065,
+  "pairs": 11,
+  "per1000": 7.000120691736065,
+  "share": 15.092936802973977,
+  "spoken_per1000": 0.0,
+  "words": 57999
+ },
+ "gutenberg-964-the-merry-adventures-of-robin-hood": {
+  "narration_per1000": 10.345259615900915,
+  "pairs": 9,
+  "per1000": 10.342412870558238,
+  "share": 22.84354550862582,
+  "spoken_per1000": 10.231468972349816,
+  "words": 111386
+ },
+ "gutenberg-97-flatland-a-romance-of-many-dimensions": {
+  "narration_per1000": 10.699588477366255,
+  "pairs": 21,
+  "per1000": 10.699588477366255,
+  "share": 25.981441827266238,
+  "spoken_per1000": 0.0,
+  "words": 34020
+ },
+ "gutenberg-974-the-secret-agent-a-simple-tale": {
+  "narration_per1000": 10.15406932020484,
+  "pairs": 10,
+  "per1000": 10.15406932020484,
+  "share": 14.648065948002536,
+  "spoken_per1000": 0.0,
+  "words": 90998
+ },
+ "standard_ebooks-the-wheels-of-chance-the-wheels-of-chance": {
+  "narration_per1000": 8.786882941145459,
+  "pairs": 11,
+  "per1000": 8.786882941145459,
+  "share": 9.946290033817386,
+  "spoken_per1000": 0.0,
+  "words": 56903
  }
 }

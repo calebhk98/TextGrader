@@ -189,6 +189,25 @@ judged by a symmetric rule, so the whole upper tail read as outlying.
 `--parse-metrics` and `--model-metrics` also profile the spaCy and embedding
 metrics. They are opt-in because of what they cost per book.
 
+The bundled `data/prose_reference.json` is 44 public-domain novels from
+Gutenberg and Standard Ebooks, built with the `text_processing` settings in
+this repository's `config.json` and recorded in the profile so a mismatch with
+your manuscript is reported rather than assumed. `data/absolutes_reference.json`
+is the same 44 books. Rebuild both from a shelf that matches what you write:
+percentiles are only as relevant as the corpus they come from, and this one is
+general English-language fiction weighted to the 19th and early 20th century.
+
+"Grading needs a profile, not the books" holds for every metric and for all but
+three of the project reports. `tics`, `number_report` and `quotable` count
+user-configured regex patterns, which a profile built before those patterns
+existed cannot anticipate, so they read `*.txt` from `corpus_dirs` and say so
+when it is empty rather than comparing against nothing.
+
+`data/word_frequency.json` is deliberately not rebuilt alongside the corpus.
+The Lexile coefficients in `core_metrics.lexile` were least-squares fitted
+against that exact table, so replacing it silently invalidates the calibration.
+Refit the coefficients first if you replace it.
+
 ## Cost
 
 Run `python3 benchmark.py` for figures from your machine and your text. The

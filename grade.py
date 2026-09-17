@@ -546,6 +546,38 @@ def _analyze(config, report, path=None, text=None):
     return report
 
 
+def _named_book(profile, name):
+    """One corpus text by name, from either profile layout.
+
+    The legacy profile is ``{book_name: {metric: value}}``. The current one
+    puts the rows in a ``books`` LIST and identifies each by ``source_id``
+    ("gutenberg:102"), ``source_filename`` or ``source_path``. Matching on any
+    of those, plus the filename's stem, is what lets a benchmark be named the
+    way a person would say it rather than the way the builder spelled it.
+    """
+
+    books = profile.get("books", profile)
+    if isinstance(books, dict):
+        found = books.get(name)
+        return (found if isinstance(found, dict) else None,
+                sorted(key for key in books if not str(key).startswith("_")))
+    if not isinstance(books, list):
+        return None, []
+    names = []
+    wanted = str(name).lower()
+    for row in books:
+        if not isinstance(row, dict):
+            continue
+        labels = [str(row[key]) for key in ("source_id", "source_filename", "source_path")
+                  if row.get(key)]
+        labels += [Path(label).stem for label in labels]
+        if labels:
+            names.append(labels[0])
+        if any(label.lower() == wanted for label in labels):
+            return row, sorted(names)
+    return None, sorted(names)
+
+
 def benchmark_comparison(profile, measured, name):
     """This document against ONE named corpus text, metric by metric.
 
@@ -562,10 +594,8 @@ def benchmark_comparison(profile, measured, name):
 
     if not profile or not name:
         return None
-    books = profile.get("books", profile)
-    row = books.get(name) if isinstance(books, dict) else None
-    if not isinstance(row, dict):
-        available = sorted(key for key in (books or {}) if not key.startswith("_"))
+    row, available = _named_book(profile, name)
+    if row is None:
         return {"name": name, "error": f"no text named {name!r} in the corpus profile",
                 "available": available[:20], "gaps": [], "lost": 0, "of": 0}
     gaps, compared = [], 0
