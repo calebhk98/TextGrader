@@ -9,11 +9,11 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from corpus_builder.builder import BuildError, build, provider_health
-from corpus_builder.classifiers import classify_pov, classify_tense, narration_without_quotes, word_count
-from corpus_builder.config import ConfigError, Settings, from_mapping, load, validate
-from corpus_builder.providers import GENRE_TERMS, PROVIDER_TYPES
-from corpus_builder.providers.gutenberg import strip_boilerplate as strip_gutenberg
+from textgrader.corpus_builder.builder import BuildError, build, provider_health
+from textgrader.corpus_builder.classifiers import classify_pov, classify_tense, narration_without_quotes, word_count
+from textgrader.corpus_builder.config import ConfigError, Settings, from_mapping, load, validate
+from textgrader.corpus_builder.providers import GENRE_TERMS, PROVIDER_TYPES
+from textgrader.corpus_builder.providers.gutenberg import strip_boilerplate as strip_gutenberg
 
 VERSION = "2.0.0"
 CorpusError = (ConfigError, BuildError)

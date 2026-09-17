@@ -73,6 +73,7 @@ textgrader/              the library; everything importable lives here
   optional.py            every third-party import, in one place
   metrics/               one module per registered metric, plus the registry
   reports/               the project reports, runnable as python -m
+  corpus_builder/        acquisition providers, used only by build_corpus.py
 ```
 
 There used to be a second top-level `measures/` directory beside `textgrader/`,
@@ -85,8 +86,14 @@ it could import the library sitting next to it.
 
 So the core calculator moved into the library as `textgrader/core_metrics.py`,
 and the reports became `textgrader/reports/`, a real package that imports
-normally and runs as `python -m textgrader.reports.register`. There is one
-package now, with a subpackage for each kind of thing in it.
+normally and runs as `python -m textgrader.reports.register`. The acquisition
+code moved the same way, from a second top-level `corpus_builder/` to
+`textgrader/corpus_builder/`. There is one package now, with a subpackage for
+each kind of thing in it.
+
+The rule for what stays in root is: things you invoke but never import, plus
+tool configuration. `textgrader.corpus` is `python -m` rather than a root script
+because it has a library API as well as a command line.
 
 The two kinds are still distinct, and the distinction is the reason `reports/`
 exists at all:
@@ -347,6 +354,7 @@ while every legacy report silently kept using the repository's own file.
 ```json
 {
   "corpus_profile": "my-corpus.json",
+  "corpus_dirs": [],
   "analysis": {
     "comparison_unit": "chapter",
     "min_sentences_for_corpus": 40,
@@ -375,6 +383,10 @@ while every legacy report silently kept using the repository's own file.
   }
 }
 ```
+
+`corpus_dirs` is separate from `corpus_profile` and is only read by the two
+project reports that scan raw corpus text rather than a profile. Grading itself
+never needs the books.
 
 `text_processing` is no longer decorative: it is applied by `grade.py`, recorded
 in every corpus profile, and compared between the two. Grading a manuscript
