@@ -158,6 +158,7 @@ def validate(sources, config, *, limit=None, quiet=False, parse_metrics=False,
     return {"corpus_name": full["corpus_name"], "book_count": len(full["books"]),
             "held_out": len(rows), "seconds": round(time.monotonic() - started, 1),
             "books": rows, "metrics": summarize_metrics(rows, len(rows)),
+            "redundant_metrics": redundant(full),
             "distribution_spread": spread(full)}
 
 
@@ -200,6 +201,37 @@ def summarize_metrics(rows, total):
     return out
 
 
+def redundant(profile, tolerance: float = 1e-9):
+    """Metric pairs that reported the same value for every text in the corpus.
+
+    Two measurements that never disagree across thirty varied novels are one
+    measurement with two names, and an agent reading ``top_findings`` sees the
+    same problem twice. Some pairs are deliberate aliases kept so older profiles
+    keep comparing; the rest are overlap that accumulated as metric families
+    were added beside older ones.
+
+    A pair whose values are constant across the whole corpus is reported
+    separately: those agree only because neither varies, which says the corpus
+    cannot distinguish them rather than that they are the same thing.
+    """
+
+    columns = {}
+    for key, entry in profile["distributions"].items():
+        values = entry.get("values") if isinstance(entry, dict) else None
+        if values and len(values) == profile["book_count"]:
+            columns[key] = values
+    identical, degenerate = [], []
+    names = sorted(columns)
+    for index, left in enumerate(names):
+        for right in names[index + 1:]:
+            a, b = columns[left], columns[right]
+            if any(abs(x - y) > tolerance for x, y in zip(a, b)):
+                continue
+            (degenerate if max(a) - min(a) <= tolerance else identical).append(
+                {"a": left, "b": right, "median": statistics.median(a)})
+    return {"identical": identical, "constant_in_this_corpus": degenerate}
+
+
 def spread(profile):
     """How much each measured quantity actually varies across the corpus.
 
@@ -238,6 +270,18 @@ def render(result, top=25):
               f"{100 * row['rate']:>7.0f}%{severity:>9}  {direction}")
     if not result["metrics"]:
         print("  none: no metric flagged any held-out text")
+
+    duplicates = result.get("redundant_metrics", {})
+    identical = duplicates.get("identical", [])
+    if identical:
+        print(f"\nmetric pairs that never disagreed across {result['book_count']} texts")
+        print("  (one measurement with two names: a finding on one is a finding on both)")
+        for pair in identical[:20]:
+            print(f"  {pair['a']:<44} == {pair['b']}")
+    constant = duplicates.get("constant_in_this_corpus", [])
+    if constant:
+        print(f"\n{len(constant)} further pair(s) agreed only because neither varied in this "
+              f"corpus; that is a fact about the corpus, not about the metrics")
 
     errors = [error for row in result["books"] for error in row["errors"]]
     if errors:

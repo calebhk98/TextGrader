@@ -165,3 +165,30 @@ def test_a_genuine_outlier_is_still_caught():
     corpus = [rng.gauss(50, 5) for _ in range(40)]
     assert stats.compare(120.0, corpus).outlier is True
     assert stats.compare(51.0, corpus).outlier is False
+
+
+def test_severity_saturates_instead_of_running_away():
+    """A zero-inflated rate must not put a broken ruler at the top of the list.
+
+    Ellipses per 1,000 words, measured across thirty published novels: half the
+    corpus uses none at all, one book uses 9.7. Flagging that book is right.
+    Claiming it is seventy-seven times more extreme than a finding that scored
+    4.0 is not something the data supports.
+    """
+
+    corpus = [0.0] * 15 + [0.008, 0.009, 0.01, 0.025, 0.034, 0.088, 0.169,
+                           0.23, 0.237, 0.254, 0.338, 0.432, 1.679, 5.102]
+    result = stats.compare(9.71, corpus)
+    assert result.outlier is True
+    assert result.severity == stats.SEVERITY_CAP
+    assert result.robust_distance > stats.SEVERITY_CAP
+    assert any("saturated" in note for note in result.notes)
+
+
+def test_an_ordinary_finding_is_not_saturated():
+    rng = random.Random(3)
+    corpus = [rng.gauss(50, 10) for _ in range(30)]
+    result = stats.compare(90.0, corpus)
+    assert result.outlier is True
+    assert 0 < result.severity < stats.SEVERITY_CAP
+    assert not any("saturated" in note for note in result.notes)

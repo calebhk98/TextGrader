@@ -68,3 +68,25 @@ def test_validation_refuses_a_corpus_too_small(tmp_path, prose, base_config):
     (tmp_path / "only.txt").write_text(prose(1, 20), encoding="utf-8")
     with pytest.raises(SystemExit, match="at least 3"):
         validate_corpus.validate([tmp_path], base_config, quiet=True)
+
+
+def test_redundancy_separates_duplicates_from_constants():
+    """Two metrics that never disagree are one metric with two names.
+
+    A pair that agrees only because neither varies is a different thing: that
+    says the corpus cannot tell them apart, not that they are the same.
+    """
+
+    profile = {"book_count": 4, "distributions": {
+        "a": {"values": [1.0, 2.0, 3.0, 4.0]},
+        "b": {"values": [1.0, 2.0, 3.0, 4.0]},
+        "c": {"values": [1.0, 2.0, 3.0, 5.0]},
+        "flat_one": {"values": [0.0, 0.0, 0.0, 0.0]},
+        "flat_two": {"values": [0.0, 0.0, 0.0, 0.0]},
+    }}
+    found = validate_corpus.redundant(profile)
+    pairs = {(row["a"], row["b"]) for row in found["identical"]}
+    assert ("a", "b") in pairs
+    assert ("a", "c") not in pairs
+    assert {(row["a"], row["b"]) for row in found["constant_in_this_corpus"]} == {
+        ("flat_one", "flat_two")}

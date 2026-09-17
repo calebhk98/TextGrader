@@ -36,6 +36,14 @@ CONFIDENT_CORPUS_SAMPLE = 20
 OUTLIER_DISTANCE = 3.5
 # A one-sided scale needs enough observations on that side to be a scale at all.
 MIN_SIDE_SAMPLE = 4
+#: Severity is reported for ranking, so it is saturated rather than left
+#: unbounded.  Zero-inflated rates (ellipses per 1,000 words: half the corpus at
+#: zero, one book at 9.7) leave a robust deviation near zero, and the tail then
+#: scores at tens or hundreds of "sigma".  That the book is extreme is true and
+#: worth flagging; that it is 77 times more extreme than a metric scoring 4.0 is
+#: not a claim any of this supports, and it puts one broken ruler at the top of
+#: every agent's to-do list.  ``robust_distance`` keeps the exact value.
+SEVERITY_CAP = 10.0
 # 1 / 0.6745: scales the median absolute deviation to a normal-consistent sigma.
 MAD_TO_SIGMA = 1.4826
 # IQR of a normal distribution is 1.349 sigma.
@@ -477,6 +485,14 @@ def compare(value: float | None, reference: Sequence[float], *,
             f"every corpus observation equals {numbers[0]:g}; no outlier claim is possible")
         return result
 
+    if result.severity is not None and result.severity > SEVERITY_CAP:
+        result.notes.append(
+            f"severity saturated at {SEVERITY_CAP:g}; the exact robust distance is "
+            f"{result.robust_distance:.1f} but the corpus spread is too small for the "
+            f"difference between that and {SEVERITY_CAP:g} to mean anything"
+            if result.robust_distance is not None else
+            f"severity saturated at {SEVERITY_CAP:g}")
+        result.severity = SEVERITY_CAP
     if len(numbers) < min_corpus:
         result.outlier = None
         result.confidence = "none"
