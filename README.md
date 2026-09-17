@@ -76,6 +76,30 @@ A comparison is withheld, with a reason, when the corpus is too small, the
 document is too small, or a count-based metric would be compared across
 different units (a chapter against a shelf of novels).
 
+`summary.maturity.percentile` is the aggregate: the median of the per-metric
+corpus percentiles, after orienting each by its `polarity` so higher always
+means more developed. 18 of the core metrics are graded; `front`, `and2`,
+`andrate`, `negative` and the size counts are `neutral` and excluded, because
+more or fewer fronted clauses is a style choice rather than a competence.
+`metric_count` says how many went in.
+
+`polarity` is not `direction`. `direction` is observational - is this document
+above or below the corpus centre. `polarity` is semantic - does above mean
+more. Averaging percentiles without orienting them first produces a number
+that means nothing.
+
+It exists because a findings list cannot show aggregate drift: every metric
+can stay comfortably inside its band while the whole moves, and a revision
+that does that produces no finding to see. It is also the scalar a
+draft-measure-revise loop needs in order to tell whether the last iteration
+helped. What it claims is that the document sits at this position among the
+corpus texts on the measures the corpus defines; it does not claim a higher
+number is a better book.
+
+Set `analysis.benchmark` to the name of one text in the corpus profile and
+each run also reports where it falls behind that text, ranked by gap in
+corpus standard deviations so that findings in different units compare.
+
 `summary.scorecard` is the census: how many measures were taken, how many sit
 inside their reference, and how many were `not_taken`. That last one is
 reported separately and folded into neither side, because it is the number

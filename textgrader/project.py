@@ -58,7 +58,8 @@ def _named(keys):
 #: validates itself in ``corpus_builder/config.py``.
 SECTION_KEYS = {
     "analysis": frozenset({"comparison_unit", "min_sentences_for_corpus",
-                           "min_words_for_corpus", "lexile_frequency_source"}),
+                           "min_words_for_corpus", "lexile_frequency_source",
+                           "benchmark"}),
     "text_processing": frozenset({"strip_gutenberg", "strip_markdown_headings",
                                   "strip_transcript", "drop_marker_paragraphs",
                                   "normalize_quotes", "segmenter", "language",

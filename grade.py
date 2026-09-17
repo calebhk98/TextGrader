@@ -32,7 +32,7 @@ from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings
 from textgrader.core_metrics import measure as core_measure
 from textgrader.metrics import REGISTRY
 from textgrader.reports import REPORTS
-from textgrader.results import Action, MetricResult, Report, StatusType
+from textgrader.results import Action, MetricResult, Polarity, Report, StatusType
 from textgrader.rules import compile_rules
 from textgrader import stats
 
@@ -46,33 +46,48 @@ ROOT = Path(__file__).resolve().parent
 #: PARENT DIRECTORY as if it were a corpus.
 BUNDLED_MEASURES = REPORTS
 
+#: Polarity per core metric: does a HIGH value mean more developed prose.
+#: This is not the ``direction`` field, which only says whether the document
+#: sits above or below the corpus centre. Four of these read inverted against
+#: a tool that orients them - top100, u10, shortruns and simple - and that is
+#: not a disagreement about the measurement, only about whether the number was
+#: turned the right way up before being averaged with the others.
+HIGHER, LOWER, NEUTRAL = Polarity.HIGHER, Polarity.LOWER, Polarity.NEUTRAL
+
+#: metric key -> (name, unit, family, polarity).
+#:
+#: NEUTRAL is a decision, not a default. More or fewer fronted subordinate
+#: clauses is a style choice rather than a competence, so front, and2, andrate
+#: and negative are measured and reported and kept OUT of the aggregate rather
+#: than assigned an arbitrary direction. The size counts are neutral for the
+#: same reason with less room for argument: a longer book is not a better one.
 METRIC_NAMES = {
-    "fk": ("Flesch-Kincaid grade", "grade", "readability"),
-    "ari": ("Automated Readability Index", "grade", "readability"),
-    "lexile": ("Approximate Lexile", "L", "readability"),
-    "wps": ("Words per sentence", "words/sentence", "sentence_rhythm"),
-    "slcv": ("Sentence-length variation", "%", "sentence_rhythm"),
-    "wpp": ("Words per paragraph", "words/paragraph", "paragraph_rhythm"),
-    "spp": ("Sentences per paragraph", "sentences/paragraph", "paragraph_rhythm"),
-    "wlen": ("Mean word length", "characters", "lexical"),
-    "long7": ("Words of 7+ characters", "%", "lexical"),
-    "sttr": ("Standardized type-token ratio", "%", "lexical"),
-    "top100": ("Commonest-100 word share", "%", "lexical"),
-    "commas": ("Commas per sentence", "commas/sentence", "punctuation"),
-    "subord": ("Subordinator-cue sentence share (lexical proxy)", "%", "syntax"),
-    "relcl": ("Relative-word sentence share (lexical proxy)", "%", "syntax"),
-    "simple": ("No-clause-cue sentence share (lexical proxy)", "%", "syntax"),
-    "u10": ("Sentences under 10 words", "%", "sentence_rhythm"),
-    "b2035": ("Sentences 20-35 words", "%", "sentence_rhythm"),
-    "shortruns": ("Sentences in short runs", "%", "sentence_rhythm"),
-    "front": ("Front-loaded cue proxy", "%", "syntax"),
-    "and2": ('Sentences with two or more "and" tokens', "%", "syntax"),
-    "andrate": ('"and" share', "%", "lexical"),
-    "negative": ("Negative-cue sentence share", "%", "discourse"),
-    "_words": ("Word count", "words", "size"),
-    "_sentences": ("Sentence count", "sentences", "size"),
-    "_paragraphs": ("Paragraph count", "paragraphs", "size"),
-    "_transcript": ("Transcript word share", "%", "size"),
+    "fk": ("Flesch-Kincaid grade", "grade", "readability", HIGHER),
+    "ari": ("Automated Readability Index", "grade", "readability", HIGHER),
+    "lexile": ("Approximate Lexile", "L", "readability", HIGHER),
+    "wps": ("Words per sentence", "words/sentence", "sentence_rhythm", HIGHER),
+    "slcv": ("Sentence-length variation", "%", "sentence_rhythm", HIGHER),
+    "wpp": ("Words per paragraph", "words/paragraph", "paragraph_rhythm", HIGHER),
+    "spp": ("Sentences per paragraph", "sentences/paragraph", "paragraph_rhythm", HIGHER),
+    "wlen": ("Mean word length", "characters", "lexical", HIGHER),
+    "long7": ("Words of 7+ characters", "%", "lexical", HIGHER),
+    "sttr": ("Standardized type-token ratio", "%", "lexical", HIGHER),
+    "top100": ("Commonest-100 word share", "%", "lexical", LOWER),
+    "commas": ("Commas per sentence", "commas/sentence", "punctuation", HIGHER),
+    "subord": ("Subordinator-cue sentence share (lexical proxy)", "%", "syntax", HIGHER),
+    "relcl": ("Relative-word sentence share (lexical proxy)", "%", "syntax", HIGHER),
+    "simple": ("No-clause-cue sentence share (lexical proxy)", "%", "syntax", LOWER),
+    "u10": ("Sentences under 10 words", "%", "sentence_rhythm", LOWER),
+    "b2035": ("Sentences 20-35 words", "%", "sentence_rhythm", HIGHER),
+    "shortruns": ("Sentences in short runs", "%", "sentence_rhythm", LOWER),
+    "front": ("Front-loaded cue proxy", "%", "syntax", NEUTRAL),
+    "and2": ('Sentences with two or more "and" tokens', "%", "syntax", NEUTRAL),
+    "andrate": ('"and" share', "%", "lexical", NEUTRAL),
+    "negative": ("Negative-cue sentence share", "%", "discourse", NEUTRAL),
+    "_words": ("Word count", "words", "size", NEUTRAL),
+    "_sentences": ("Sentence count", "sentences", "size", NEUTRAL),
+    "_paragraphs": ("Paragraph count", "paragraphs", "size", NEUTRAL),
+    "_transcript": ("Transcript word share", "%", "size", NEUTRAL),
 }
 
 
@@ -520,7 +535,7 @@ def _analyze(config, report, path=None, text=None):
     check_preprocessing(profile, analysis, report)
     comparator = Comparator(profile, analysis, settings)
 
-    core = _core_results(analysis, config, comparator, report)
+    core = _core_results(analysis, config, comparator, report, profile)
     if core is not None:
         report.results.extend(core)
     report.results.extend(project_rules(analysis, config))
@@ -531,7 +546,56 @@ def _analyze(config, report, path=None, text=None):
     return report
 
 
-def _core_results(analysis, config, comparator, report):
+def benchmark_comparison(profile, measured, name):
+    """This document against ONE named corpus text, metric by metric.
+
+    An aggregate says how far the whole has moved; it does not say what to
+    open first. Ranking the losses by gap in corpus standard deviations does,
+    and the standardization is what makes it possible: a 5-point gap in
+    sentence-length CV and a 0.5-point gap in mean word length are not
+    comparable in their own units, and are once both are in units of how much
+    the corpus itself varies.
+
+    Returns ``None`` when the named text is not in the profile, so a typo in
+    the config is reported rather than silently producing no comparison.
+    """
+
+    if not profile or not name:
+        return None
+    books = profile.get("books", profile)
+    row = books.get(name) if isinstance(books, dict) else None
+    if not isinstance(row, dict):
+        available = sorted(key for key in (books or {}) if not key.startswith("_"))
+        return {"name": name, "error": f"no text named {name!r} in the corpus profile",
+                "available": available[:20], "gaps": [], "lost": 0, "of": 0}
+    gaps, compared = [], 0
+    for key, value in sorted(measured.items()):
+        entry = METRIC_NAMES.get(key)
+        if entry is None or entry[3] is NEUTRAL or value is None:
+            continue
+        target = row.get(key)
+        if target is None:
+            continue
+        values = [item for item in distribution(profile, key) if item is not None]
+        if len(values) < 2:
+            continue
+        spread = statistics.pstdev(values)
+        compared += 1
+        # Signed so that positive always means "behind the benchmark",
+        # whichever way the metric points.
+        behind = (target - value) if entry[3] is HIGHER else (value - target)
+        if behind <= 0:
+            continue
+        gaps.append({"metric_id": f"prose.{key.lstrip('_')}", "name": entry[0],
+                     "unit": entry[1], "value": round(value, 2),
+                     "benchmark": round(target, 2),
+                     "corpus_sd": round(spread, 4) if spread else None,
+                     "gap_sd": round(behind / spread, 2) if spread else None})
+    gaps.sort(key=lambda item: -(item["gap_sd"] or 0.0))
+    return {"name": name, "error": None, "lost": len(gaps), "of": compared, "gaps": gaps}
+
+
+def _core_results(analysis, config, comparator, report, profile=None):
     settings = config.get("analysis", {}) or {}
     lexile_source = settings.get("lexile_frequency_source", "none")
     try:
@@ -555,11 +619,17 @@ def _core_results(analysis, config, comparator, report):
     for key, value in got.items():
         if key == "_words_all" or value is None:
             continue
-        name, unit, family = METRIC_NAMES.get(key, (key, None, "other"))
+        name, unit, family, polarity = METRIC_NAMES.get(key, (key, None, "other", NEUTRAL))
         item = MetricResult(f"prose.{key.lstrip('_')}", name, value, unit,
                             family=family, sample_size=got.get("_sentences"),
-                            comparison_unit=analysis.comparison_unit)
+                            comparison_unit=analysis.comparison_unit,
+                            polarity=polarity)
         out.append(comparator.apply(item, key, value))
+    benchmark = settings.get("benchmark")
+    if benchmark:
+        report.benchmark = benchmark_comparison(
+            profile, {key: value for key, value in got.items() if key != "_words_all"},
+            benchmark)
     lengths = analysis.sentence_lengths
     if lengths:
         shape = stats.summarize(lengths)
@@ -700,11 +770,40 @@ def render(report):
           f"{summary['by_action']['insufficient_data']} without enough data; "
           f"{summary['by_status_type']['internal_error']} internal errors.")
     print_scorecard(summary["scorecard"])
+    print_maturity(summary["maturity"])
     if summary["top_findings"]:
         print("\nFurthest from the corpus, most distant first:")
         for item in summary["top_findings"][:8]:
             severity = "-" if item["severity"] is None else f"{item['severity']:.1f}"
             print(f"  {item['metric_id']:<44} {item['direction']:<8} severity {severity}")
+
+
+def print_maturity(maturity):
+    """The aggregate, and where to start if a benchmark is configured."""
+
+    if maturity["percentile"] is None:
+        return
+    # The printed label and the JSON key are the same word on purpose. A
+    # measure that prints under one name and serializes under another is how
+    # this repository's TTR column came to hold MSTTR.
+    line = (f"\n  maturity percentile (median of {maturity['metric_count']} "
+            f"oriented measures): {maturity['percentile']:.0f}")
+    benchmark = maturity["benchmark"]
+    if benchmark and benchmark.get("error"):
+        print(line)
+        print(f"  benchmark unavailable: {benchmark['error']}")
+        return
+    if benchmark and benchmark["of"]:
+        line += f"      behind {benchmark['name']} on {benchmark['lost']} of {benchmark['of']}"
+    print(line)
+    if not (benchmark and benchmark["gaps"]):
+        return
+    print(f"\n  largest gaps to {benchmark['name']}, in corpus standard deviations:")
+    for gap in benchmark["gaps"][:8]:
+        unit = (gap["unit"] or "")[:14]
+        distance = "-" if gap["gap_sd"] is None else f"{gap['gap_sd']:.1f} sd"
+        print(f"    {gap['name'][:40]:<42}{gap['value']:>9} vs {gap['benchmark']:>9}"
+              f"  {unit:<15}{distance:>8}")
 
 
 def print_scorecard(scorecard):
