@@ -44,7 +44,7 @@ METRIC_DEFINITION_VERSION = "2"
 from .core_metrics import measure as core_measure
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing
 from .metrics import MODEL_METRICS, REGISTRY
-from .stats import summarize
+from .stats import quantile_curve, summarize
 
 CORE_METRIC_KEYS = (
     "fk", "ari", "wps", "slcv", "wpp", "spp", "wlen", "long7", "sttr",
@@ -52,6 +52,29 @@ CORE_METRIC_KEYS = (
     "shortruns", "front", "and2", "andrate", "negative", "_words",
     "_sentences", "_paragraphs",
 )
+
+#: Quantities measured once per sentence, paragraph, word or spoken turn rather
+#: than once per text.  These are pooled across the whole corpus and stored as
+#: one quantile curve each, so the yardstick is built from every sentence in
+#: every book rather than from thirty per-book averages.  That is what lets a
+#: chapter be compared with it: the unit of observation on both sides is the
+#: sentence, not the document, so how the corpus happens to be divided into
+#: files stops mattering.
+def _item_values(analysis) -> dict[str, list[float]]:
+    body = analysis.text
+    sentences = analysis.sentences
+    return {
+        "sentence_words": [float(n) for n in analysis.sentence_lengths],
+        "paragraph_words": [float(n) for n in analysis.paragraph_lengths],
+        "paragraph_sentences": [float(n) for n in analysis.paragraph_sentence_counts],
+        "word_characters": [float(len(word)) for word in analysis.words],
+        "sentence_commas": [float(sentence.count(",")) for sentence in sentences],
+        "turn_words": [float(len(part.split())) for part in analysis.turns],
+    }
+
+
+ITEM_SOURCES = ("sentence_words", "paragraph_words", "paragraph_sentences",
+                "word_characters", "sentence_commas", "turn_words")
 
 #: Metric ids that are counts rather than rates.  ``grade.py`` refuses to
 #: compare these across different ``comparison_unit`` values.
@@ -162,6 +185,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     feature_profiles: dict[str, list[dict[str, float]]] = {"function_words": []}
     metric_errors: dict[str, str] = {}
     skipped: list[str] = []
+    pooled: dict[str, list[float]] = {name: [] for name in ITEM_SOURCES}
 
     for _, path, relative_name in files:
         raw_bytes = path.read_bytes()
@@ -235,6 +259,8 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                     value = finding.get("value")
                     if isinstance(value, (int, float)) and not isinstance(value, bool):
                         book[finding["metric_id"]] = value
+            for name, values in _item_values(analysis).items():
+                pooled[name].extend(values)
             function_words = importlib.import_module("textgrader.metrics.function_words")
             feature_profiles["function_words"].append(function_words.vector(analysis.text))
             books.append(book)
@@ -285,6 +311,12 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "book_count": len(books), "books": books,
         "distributions": distributions,
         "word_frequency": {word: frequency[word] for word in sorted(frequency)},
+        # The population, not a summary of it: every sentence, paragraph, word
+        # and spoken turn in the corpus, as one quantile curve each.
+        "item_distributions": {
+            name: {"quantiles": quantile_curve(values), "count": len(values),
+                   "sources": len(books)}
+            for name, values in pooled.items() if values},
         "word_frequency_total": sum(frequency.values()),
         "feature_profiles": feature_profiles,
     }

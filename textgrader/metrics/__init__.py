@@ -100,6 +100,11 @@ REGISTRY: dict[str, MetricSpec] = dict([
     _spec("character_voice", "character_voice", "dialogue",
           summary="Pairwise distance between transcript speakers' function-word profiles."),
 
+    _spec("distribution_shape", "distribution_shape", "distribution_shape",
+          defaults={"bands": 5},
+          summary="Holds the text's sentence, paragraph, word and turn distributions against "
+                  "the corpus's pooled ones, so a chapter compares with a shelf of novels."),
+
     # -------------------------------------------------------------- rhythm
     _spec("sentence_length_autocorrelation", "rhythm_autocorrelation", "sentence_rhythm",
           defaults={"lags": [1, 2, 3]},

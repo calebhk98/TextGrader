@@ -121,6 +121,10 @@
     "character_voice": {
       "enabled": false
     },
+    "distribution_shape": {
+      "enabled": true,
+      "bands": 5
+    },
     "sentence_length_autocorrelation": {
       "enabled": false,
       "lags": [

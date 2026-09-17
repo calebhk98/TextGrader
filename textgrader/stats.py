@@ -365,6 +365,78 @@ def wasserstein(sample: Sequence[float], reference: Sequence[float]) -> tuple[fl
     return total, reason
 
 
+# ---------------------------------------------------------------- item shapes
+
+#: Quantile grid stored for a pooled corpus distribution.  101 points is the
+#: whole shape to a percentile, in a kilobyte, and is what makes it possible to
+#: keep the population rather than a per-document summary of it.
+QUANTILE_GRID = 101
+
+
+def quantile_curve(values: Iterable[Any], points: int = QUANTILE_GRID) -> list[float]:
+    """The quantile function of a sample, sampled on an even grid.
+
+    This is the sample's shape, not a summary of it: ``curve[0]`` is the
+    minimum, ``curve[-1]`` the maximum, ``curve[50]`` the median on the default
+    grid.  Storing this instead of a mean is what lets a 3,000-word chapter be
+    held against half a million sentences of published prose, because the unit
+    of observation on both sides is the sentence rather than the document.
+    """
+
+    ordered = sorted(_clean(values))
+    if not ordered:
+        return []
+    return [quantile(ordered, index / (points - 1)) for index in range(points)]
+
+
+def curve_distance(left: Sequence[float], right: Sequence[float]) -> float | None:
+    """First Wasserstein distance between two samples, from their quantile curves.
+
+    For one-dimensional samples the earth-mover distance is the mean absolute
+    gap between the two quantile functions, so two curves on the same grid give
+    it directly and neither original sample has to be kept.
+    """
+
+    if not left or not right or len(left) != len(right):
+        return None
+    return sum(abs(a - b) for a, b in zip(left, right)) / len(left)
+
+
+def curve_quantile(curve: Sequence[float], q: float) -> float | None:
+    """Read one quantile off a stored curve."""
+
+    if not curve:
+        return None
+    position = (len(curve) - 1) * min(max(q, 0.0), 1.0)
+    low = math.floor(position)
+    high = min(low + 1, len(curve) - 1)
+    return curve[low] + (curve[high] - curve[low]) * (position - low)
+
+
+def band_shares(values: Iterable[Any], edges: Sequence[float]) -> list[float]:
+    """Share of ``values`` falling in each band, as percentages.
+
+    With ``edges`` taken from a corpus's own quantiles, a text that matched the
+    corpus exactly would put an equal share in every band, so the deviation
+    from flat is readable without knowing anything about the metric's units.
+    """
+
+    numbers = _clean(values)
+    if not numbers:
+        return []
+    counts = [0] * (len(edges) + 1)
+    for value in numbers:
+        placed = False
+        for index, edge in enumerate(edges):
+            if value <= edge:
+                counts[index] += 1
+                placed = True
+                break
+        if not placed:
+            counts[-1] += 1
+    return [100.0 * count / len(numbers) for count in counts]
+
+
 @dataclass
 class Comparison:
     """The outcome of holding one measurement against a corpus distribution."""
