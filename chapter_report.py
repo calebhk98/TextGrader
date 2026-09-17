@@ -33,6 +33,8 @@ from collections import Counter
 from pathlib import Path
 
 import grade
+from textgrader.bands import compile_bands, judge
+from textgrader.chapters import chapter_number
 from textgrader.document import DocumentAnalysis, NlpSettings, TextProcessing
 from textgrader.project import load_config
 from textgrader.results import Action, StatusType
@@ -69,14 +71,77 @@ def grade_chapter(name: str, source: Path | str, config: dict) -> dict:
                             "corpus_median": (item.corpus or {}).get("corpus_median")})
     flagged.sort(key=lambda row: -(row["severity"] or 0))
     document = report.document or {}
-    return {"chapter": name, "words": document.get("analyzed_words"),
+    # Every core value, keyed the way METRIC_NAMES and the corpus profile key
+    # them, so a band can ask for "fk" rather than "prose.fk".
+    values = {item.metric_id.split(".", 1)[-1]: item.value
+              for item in report.results
+              if item.metric_id.startswith("prose.") and item.value is not None}
+    return {"chapter": name, "number": chapter_number(name),
+            "words": document.get("analyzed_words"),
             "sentences": document.get("sentences"),
             "dialogue_share": document.get("dialogue_word_share"),
+            "values": values,
             "compared": compared, "flagged": len(flagged),
             "severity_total": round(sum(row["severity"] or 0 for row in flagged), 1),
             "outliers": flagged,
             "errors": [(item.metric_id, item.error) for item in report.results
                        if item.status_type is StatusType.INTERNAL_ERROR]}
+
+
+def band_report(rows: list[dict], settings: dict) -> dict:
+    """Judge the configured chapter bands against this run's chapters."""
+
+    metric, bands, problems = compile_bands(settings)
+    if problems and not bands:
+        return {"metric": metric, "problems": problems, "bands": []}
+    numbered = {row["number"]: row for row in rows if row["number"] is not None}
+    if not numbered:
+        problems.append("no chapter file name starts with a number, so chapters "
+                        "cannot be placed in bands")
+        return {"metric": metric, "problems": problems, "bands": []}
+    values = {number: row["values"][metric] for number, row in numbered.items()
+              if metric in row["values"]}
+    if not values:
+        problems.append(f"no chapter produced a value for {metric!r}")
+        return {"metric": metric, "problems": problems, "bands": []}
+    exempt = {int(key): reason for key, reason in (settings.get("exempt") or {}).items()}
+    return {"metric": metric, "problems": problems,
+            "bands": judge(bands, values, exempt)}
+
+
+def render_bands(report: dict, rows: list[dict]) -> None:
+    names = {row["number"]: row["chapter"] for row in rows}
+    metric = report["metric"]
+    label = grade.METRIC_NAMES.get(metric, (metric,))[0]
+    print(f"\nCHAPTER BANDS - {label}")
+    for problem in report["problems"]:
+        print(f"  configuration: {problem}")
+    if not report["bands"]:
+        return
+    # The heading says what is judged, because judging the average and listing
+    # the chapters under the floor look identical in a table otherwise, and
+    # readers have concluded from that table that the listed chapters failed.
+    print("  the BAND AVERAGE is judged; chapters listed under 'pulling it' are "
+          "where to look, not failures in themselves")
+    # "counted", not "chapters": an exempt chapter is a member of the band and
+    # is not in its average, and a column headed "chapters" showing the second
+    # number invites the reader to think a chapter went missing.
+    print(f"\n  {'band':<10}{'counted':>9}{'floor':>8}{'ceiling':>9}"
+          f"{'average':>9}   verdict")
+    for band in report["bands"]:
+        floor = "-" if band["floor"] is None else f"{band['floor']:.2f}"
+        ceiling = "-" if band["ceiling"] is None else f"{band['ceiling']:.2f}"
+        average = "-" if band["average"] is None else f"{band['average']:.2f}"
+        verdict = {"under": "<- under floor", "over": "<- over ceiling",
+                   "within": "", "insufficient_data": f"<- {band['reason']}"}[band["status"]]
+        print(f"  {str(band['band']):<10}{len(band['chapters']):>9}{floor:>8}{ceiling:>9}"
+              f"{average:>9}   {verdict}")
+        if band["status"] in ("under", "over") and band["outside"]:
+            pulling = ", ".join(names.get(number, str(number)) for number in band["outside"])
+            print(f"      pulling it: {pulling}")
+        if band["excused"]:
+            excused = ", ".join(names.get(number, str(number)) for number in band["excused"])
+            print(f"      exempt, and left out of the average: {excused}")
 
 
 def render(rows: list[dict], top: int = 12) -> None:
@@ -139,10 +204,14 @@ def main(argv=None):
 
     rows = [grade_chapter(name, source, config)
             for name, source in chapter_sources(Path(args.target), args.min_words)]
+    bands = band_report(rows, config["chapter_bands"]) if config.get("chapter_bands") else None
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(rows, indent=1, default=str) + "\n",
+        payload = {"chapters": rows, "chapter_bands": bands} if bands else rows
+        Path(args.json_out).write_text(json.dumps(payload, indent=1, default=str) + "\n",
                                        encoding="utf-8")
     render(rows, args.top)
+    if bands:
+        render_bands(bands, rows)
     return 0
 
 

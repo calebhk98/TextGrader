@@ -158,13 +158,76 @@ def test_cli_rejects_an_unknown_metric(manuscript):
         grade.main([str(manuscript), "--enable", "no_such_metric"])
 
 
-def test_bundled_measures_get_the_manuscript_not_its_directory():
+def test_every_bundled_measure_names_exactly_one_target():
     # dialogue_study was handed the manuscript's PARENT DIRECTORY as a corpus,
     # and prose_check/verify_citations were handed the manuscript as if it were
-    # a character sheet. Every template now names what it passes.
+    # a character sheet. The requirement that came out of that is that every
+    # template NAMES WHAT IT PASSES, which is what this checks.
+    #
+    # It used to be checked by banning {manuscript_dir} and requiring
+    # {manuscript} everywhere, which over-corrected: it also stopped register,
+    # absolutes, tics and check_edits receiving the chapters directory they
+    # compare chapters from, so they saw one unit of text and collapsed to a
+    # single row. A closed vocabulary keeps the original guard - a template
+    # cannot name something nobody resolves, and cannot silently name two
+    # things - without forcing every report to take the same one.
+    from textgrader.reports import TARGETS
     for name, template in grade.BUNDLED_MEASURES.items():
-        assert "{manuscript_dir}" not in template, name
-        assert "{manuscript}" in template, name
+        named = [target for target in TARGETS if target in template]
+        assert len(named) == 1, f"{name} names {named or 'no target'}"
+    # dialogue_study is the one that was actually broken by a directory.
+    assert "{manuscript}" in grade.BUNDLED_MEASURES["dialogue_study"]
+    for name in ("prose_check", "verify_citations"):
+        assert "--manuscript" in grade.BUNDLED_MEASURES[name], name
+
+
+def test_per_chapter_reports_get_the_chapters_directory():
+    # register judges each chapter against the book's own median. Handed the
+    # concatenated manuscript it has one row, the median IS that row, nothing
+    # can exceed it, and it prints a pass in the same words as a real one.
+    for name in ("register", "absolutes", "quote_length", "check_edits"):
+        assert grade.BUNDLED_MEASURES[name] == ("{chapters_dir}",), name
+
+
+def test_a_report_asking_for_chapters_gets_them(tmp_path, monkeypatch):
+    recorded = {}
+
+    def fake_run(command, **kwargs):
+        recorded["command"] = command
+
+        class Result:
+            returncode, stdout, stderr = 0, "", ""
+        return Result()
+
+    monkeypatch.setattr(grade.subprocess, "run", fake_run)
+    chapters = tmp_path / "chapters"
+    chapters.mkdir()
+    (chapters / "01.md").write_text("One.", encoding="utf-8")
+    config = {"_config_dir": str(tmp_path), "_config_path": str(tmp_path / "mine.json"),
+              "chapters_dir": "chapters"}
+    grade.run_bundled_measure("register", tmp_path / "draft.md", config)
+    assert str(chapters) in recorded["command"]
+
+
+def test_a_missing_chapters_directory_falls_back_to_the_manuscript(tmp_path, monkeypatch):
+    # A project that keeps no chapters directory still has to run. It gets the
+    # single-unit output those reports collapse to, which is what every report
+    # got before this vocabulary existed.
+    recorded = {}
+
+    def fake_run(command, **kwargs):
+        recorded["command"] = command
+
+        class Result:
+            returncode, stdout, stderr = 0, "", ""
+        return Result()
+
+    monkeypatch.setattr(grade.subprocess, "run", fake_run)
+    manuscript = tmp_path / "draft.md"
+    manuscript.write_text("One.", encoding="utf-8")
+    config = {"_config_dir": str(tmp_path), "_config_path": str(tmp_path / "mine.json")}
+    grade.run_bundled_measure("register", manuscript, config)
+    assert str(manuscript) in recorded["command"]
 
 
 def test_a_custom_config_reaches_the_bundled_reports(tmp_path, monkeypatch):

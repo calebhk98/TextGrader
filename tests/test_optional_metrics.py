@@ -139,9 +139,9 @@ def test_speaker_metrics_ignore_a_stripped_transcript():
     """
 
     chat = "\n".join(f"{name}: cant find it anywhere and im out of ideas"
-                     for name in ["ruth"] * 12 + ["nadia"] * 12)
-    prose = " ".join('"I cannot find it anywhere," Ruth said. '
-                     '"Then where did you look?" Nadia said.' for _ in range(12))
+                     for name in ["alice"] * 12 + ["bob"] * 12)
+    prose = " ".join('"I cannot find it anywhere," Alice said. '
+                     '"Then where did you look?" Bob said.' for _ in range(12))
     text = f"{prose}\n\n{chat}\n"
     stripped = _speaker_findings(text)
     kept = _speaker_findings(text, strip_transcript=False)
@@ -157,7 +157,7 @@ def test_speaker_metrics_refuse_thin_attribution():
     explicitly they attribute speech rather than by how characters sound.
     """
 
-    tagged = "\n\n".join('"I cannot find it," Ruth said.\n\n"Where did you look?" Nadia said.'
+    tagged = "\n\n".join('"I cannot find it," Alice said.\n\n"Where did you look?" Bob said.'
                         for _ in range(10))
     # Separate paragraphs, because an untagged quotation immediately following
     # another with no sentence between them is one continued turn, not two.
@@ -170,8 +170,8 @@ def test_speaker_metrics_refuse_thin_attribution():
 
 
 def test_speaker_metrics_work_when_attribution_is_dense():
-    dense = "\n\n".join('"I cannot find it anywhere," Ruth said.\n\n'
-                        '"Then where did you look for it?" Nadia said.' for _ in range(12))
+    dense = "\n\n".join('"I cannot find it anywhere," Alice said.\n\n'
+                        '"Then where did you look for it?" Bob said.' for _ in range(12))
     found = _speaker_findings(dense)
     assert found["dialogue.identified_speaker_count"]["value"] == 2
     assert found["dialogue.speaker_question_rate"]["value"] is not None

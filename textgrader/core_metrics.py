@@ -16,6 +16,7 @@ is the parse-based replacement.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import statistics
@@ -133,9 +134,20 @@ def word_frequency(source="none"):
         return _FREQ_CACHE[source]
     table = {}
     if source == "bundled" and WORDFREQ.is_file():
+        # The file is ``{"tokens": ..., "freq_per_million": {word: rate}}``, so
+        # the rates are one level in.  Reading the outer object instead leaves
+        # every lookup missing and every word counted as rare, which does not
+        # fail loudly: it returns a Lexile four hundred points high.
         try:
-            table = json.loads(WORDFREQ.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            table = json.loads(WORDFREQ.read_text(encoding="utf-8"))["freq_per_million"]
+        except Exception:
+            # Deliberately broad.  This loader feeds one optional metric, and
+            # its caller is inside the core analysis, so anything raised here
+            # costs all eighteen core measurements rather than just Lexile.
+            # An empty table makes ``lexile`` return None, which is the
+            # honest outcome: the number is unavailable, the rest still run.
+            table = {}
+        if not isinstance(table, dict):
             table = {}
     _FREQ_CACHE[source] = table
     return table

@@ -40,6 +40,7 @@ import statistics as st
 import sys
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 from ..text import TranscriptConfig, transcript_lines
 
@@ -167,15 +168,50 @@ def profile(lines, hedge_pattern=None):
         return None
     # Mean segmental TTR compares equal-size samples rather than rewarding a
     # speaker merely for having fewer total words. Fifty words is deliberately
-    # small enough for dialogue samples; incomplete trailing windows are kept.
+    # small enough for dialogue samples.
+    #
+    # The trailing window is dropped, because keeping it puts back the bias
+    # MSTTR exists to remove. A four-word tail scores at or near 100% and is
+    # then averaged with the SAME WEIGHT as a full fifty-word window, so its
+    # pull on the mean is 1/segments: largest for the speakers with least
+    # text, which is the direction of the plain-TTR artefact. A speaker with
+    # two windows and a short tail can read several points high - enough to
+    # move them from mid-pack to the narrowest vocabulary in a cast, which is
+    # the difference between a finding and no finding on a report whose whole
+    # purpose is separating voices.
+    #
+    # ``metrics/dialogue_channels._window_ttr`` drops only tails under half a
+    # window, which is right there: it reports a median over the windows, so a
+    # short one distorts little. The mean here weighs every segment equally,
+    # so this needs the stricter rule.
     window = 50
     segments = [flat[index:index + window] for index in range(0, len(flat), window)]
-    msttr = st.fmean(len(set(segment)) / len(segment) for segment in segments)
+    if len(segments) > 1 and len(segments[-1]) < window:
+        segments.pop()
+    # Under one full window there is no equal-size comparison to make, so the
+    # number is withheld rather than computed from a single short sample and
+    # printed as though it meant the same as the others.
+    complete = len(flat) >= window
+    msttr = st.fmean(len(set(segment)) / len(segment) for segment in segments) if complete else None
     return {
         "n": len(lines),
         "words": len(flat),
         "wpl": len(flat) / len(lines),
-        "ttr": 100 * msttr,
+        # Plain type-token ratio, reported beside MSTTR rather than replaced by
+        # it. It is a poor vocabulary measure: it falls mechanically as a
+        # sample grows, so on tagged dialogue it tends to rank speakers almost
+        # perfectly inversely by how much they talk - a strong negative rank
+        # correlation with word count is the normal result, not an anomaly.
+        # It is kept because it is the diagnostic for its own replacement
+        # (that correlation is what demonstrates the confound, in whatever
+        # text you are measuring), because existing work may be calibrated
+        # against it, and because a speaker whose two ranks diverge sharply is
+        # a speaker whose apparent vocabulary was an artefact of line volume.
+        # What it must not do is wear MSTTR's name, or the column silently
+        # changes scale under readers holding the old numbers.
+        "ttr": 100 * len(set(flat)) / len(flat),
+        "msttr": 100 * msttr if msttr is not None else None,
+        "msttr_segments": len(segments) if complete else 0,
         "q": 100 * sum(1 for line in lines if "?" in line) / len(lines),
         "short": 100 * sum(1 for tokens in tokens if len(tokens) <= 3) / len(lines),
         "long": 100 * sum(1 for tokens in tokens if len(tokens) > 15) / len(lines),
@@ -193,9 +229,16 @@ def show(title, data, floor, note, hedges=None):
         return
     print(f"\n{title}   ({note})")
     print(f"  {'speaker':10}{'lines':>7}{'words':>7}{'w/line':>8}{'TTR%':>7}"
-          f"{'quest%':>8}{'1-3w%':>7}{'>15w%':>7}{'hedge%':>8}")
+          f"{'MSTTR%':>8}{'seg':>5}{'quest%':>8}{'1-3w%':>7}{'>15w%':>7}{'hedge%':>8}")
     for speaker, speaker_profile in sorted(rows.items(), key=lambda kv: -kv[1]["wpl"]):
+        # The segment count travels with MSTTR because the value alone cannot
+        # say whether it averaged two windows or twenty, and those are not the
+        # same evidence. A dash means the speaker has under one full window.
+        msttr = speaker_profile["msttr"]
+        msttr_column = f"{msttr:>8.1f}" if msttr is not None else f"{'-':>8}"
+        segments = speaker_profile["msttr_segments"]
         print(f"  {speaker:10}{speaker_profile['n']:>7}{speaker_profile['words']:>7}{speaker_profile['wpl']:>8.1f}{speaker_profile['ttr']:>7.1f}"
+              f"{msttr_column}{(segments or '-'):>5}"
               f"{speaker_profile['q']:>8.0f}{speaker_profile['short']:>7.0f}{speaker_profile['long']:>7.0f}{speaker_profile['hedge']:>8.0f}")
     for key, label in (("wpl", "words per line"), ("short", "1-3 word share")):
         vals = [speaker_profile[key] for speaker_profile in rows.values()]
@@ -226,6 +269,15 @@ def main(argv=None):
     paths = resolve_paths(args.paths, chapters_dir)
 
     speakers = [name for name in settings.get("speakers", []) if isinstance(name, str)]
+    # The two channels have different casts, and merging them misattributes.
+    # A book's chat participants are usually a handful of the prose cast, so a
+    # prose-only name in the chat regex turns any line shaped "Name: text" -
+    # which ordinary prose produces - into a chat message from someone who
+    # never posts, and those phantom lines carry the prose's sentence lengths
+    # rather than the chat's. chat_speakers falls back to speakers, so a
+    # project with one cast configures one list and nothing changes for it.
+    chat_speakers = [name for name in settings.get("chat_speakers", speakers)
+                     if isinstance(name, str)]
     titles = settings.get("titles", DEFAULT_TITLES)
     speech_verbs = settings.get("speech_verbs", DEFAULT_SPEECH_VERBS)
     hedges = settings.get("hedges", DEFAULT_HEDGES)
@@ -237,10 +289,19 @@ def main(argv=None):
 
     note_suffix = "" if speakers else ("  (no project_measures.voice_separation.speakers "
                                        "configured; speakers were auto-discovered and may be noisy)")
+    # An EMPTY chat_speakers is not "nothing to attribute": collect_chat falls
+    # back to discovery whenever its list is empty, however it got that way,
+    # so the note has to say discovery rather than silence.
+    discovery_note = ("  (speakers were auto-discovered from generic 'name: message' "
+                      "lines and may be noisy)")
+    if settings.get("chat_speakers") is None:
+        chat_note_suffix = note_suffix
+    else:
+        chat_note_suffix = "" if chat_speakers else discovery_note
     both = not (args.chat or args.prose)
     if args.chat or both:
-        show("GROUP CHAT", collect_chat(paths, speakers), min_lines,
-             "exact attribution, every message counted" + note_suffix, hedges)
+        show("GROUP CHAT", collect_chat(paths, chat_speakers), min_lines,
+             "exact attribution, every message counted" + chat_note_suffix, hedges)
     if args.prose or both:
         show("PROSE DIALOGUE", collect_prose(paths, speakers, titles, speech_verbs), min_lines,
              "tagged lines only, biased short AND against questions - never read a 0 as real" + note_suffix,
@@ -248,6 +309,11 @@ def main(argv=None):
     if not speakers:
         print("\n  project_measures.voice_separation.speakers would turn discovery into exact "
               "attribution for both channels above.")
+    elif settings.get("chat_speakers") is None and (args.chat or both):
+        print("\n  the group chat above was attributed with the full prose cast. If only some "
+              "of them post, set project_measures.voice_separation.chat_speakers: a prose-only "
+              "name matches any line shaped 'Name: text' and credits messages to someone who "
+              "never posts.")
     return 0
 
 
@@ -256,13 +322,7 @@ def main(argv=None):
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     sys.exit(main() or 0)

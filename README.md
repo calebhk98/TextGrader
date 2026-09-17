@@ -76,6 +76,40 @@ A comparison is withheld, with a reason, when the corpus is too small, the
 document is too small, or a count-based metric would be compared across
 different units (a chapter against a shelf of novels).
 
+`summary.maturity.percentile` is the aggregate: the median of the per-metric
+corpus percentiles, after orienting each by its `polarity` so higher always
+means more developed. 18 of the core metrics are graded; `front`, `and2`,
+`andrate`, `negative` and the size counts are `neutral` and excluded, because
+more or fewer fronted clauses is a style choice rather than a competence.
+`metric_count` says how many went in.
+
+`polarity` is not `direction`. `direction` is observational - is this document
+above or below the corpus centre. `polarity` is semantic - does above mean
+more. Averaging percentiles without orienting them first produces a number
+that means nothing.
+
+It exists because a findings list cannot show aggregate drift: every metric
+can stay comfortably inside its band while the whole moves, and a revision
+that does that produces no finding to see. It is also the scalar a
+draft-measure-revise loop needs in order to tell whether the last iteration
+helped. What it claims is that the document sits at this position among the
+corpus texts on the measures the corpus defines; it does not claim a higher
+number is a better book.
+
+Set `analysis.benchmark` to the name of one text in the corpus profile and
+each run also reports where it falls behind that text, ranked by gap in
+corpus standard deviations so that findings in different units compare.
+
+`summary.scorecard` is the census: how many measures were taken, how many sit
+inside their reference, and how many were `not_taken`. That last one is
+reported separately and folded into neither side, because it is the number
+that moves when instrumentation breaks: a metric that errored is not a pass
+and an unavailable one is not a failure, so a tool that counts only failures
+can read 100% while three of its measures are silently dead. `failing` is
+grouped by family, since eleven findings in one family is a habit and eleven
+across eleven families is noise. It is a count, not a quality score, and a run
+still always exits zero.
+
 ## Configure
 
 `config.json`, resolved relative to itself. `--config other.json` reaches the
@@ -101,6 +135,40 @@ Project rules are the only thing reported as a violation, and are off until
 configured; patterns are compiled and bounded at load, so a bad one is a
 visible result rather than an exception or a hang.
 
+Keys are checked at load. An unrecognised one is reported as a
+`config.<key>` result with `action: "unavailable"`, naming the key and
+suggesting the intended spelling when it is close, because a key nothing reads
+is otherwise indistinguishable from a measure that ran and found nothing. A run
+still exits zero. Keys beginning with `_` are treated as comments, since JSON
+has none. `project_rules.hard_line_breaks` and `project_rules.chapter_length`
+are recognised but unimplemented, and say so if you set them.
+
+### Chapter bands
+
+A single whole-book reading-level target cannot express a book whose level is
+supposed to move, and it hides the movement: a manuscript reading
+Flesch-Kincaid 6.8 against a target of 7.0 looks fine while its last fourteen
+chapters average 8.85 against a floor of 7.2. Set `chapter_bands` and
+`chapter_report.py` judges each band:
+
+```json
+"chapter_bands": {
+  "metric": "fk",
+  "bands": [
+    {"chapters": "1-10",  "floor": 5.5},
+    {"chapters": "11-22", "floor": 6.5},
+    {"chapters": "23-36", "floor": 7.2, "ceiling": 9.5, "exempt": {"28": "why"}}
+  ]
+}
+```
+
+The **band average** is judged, not each chapter. Chapters outside the band's
+range are listed as a pointer to where to look and do not themselves fail the
+band - judging both made bands that no revision could satisfy. A band may set
+a ceiling as well as a floor, so a chapter running four grades hot is caught
+too. An exempt chapter leaves the average and is reported, so an exemption is
+a decision on the record.
+
 ## Corpus
 
 Grading needs a profile, not the books. Acquire, profile, then check the
@@ -120,6 +188,36 @@ judged by a symmetric rule, so the whole upper tail read as outlying.
 
 `--parse-metrics` and `--model-metrics` also profile the spaCy and embedding
 metrics. They are opt-in because of what they cost per book.
+
+The bundled `data/prose_reference.json` is 50 public-domain novels from
+Gutenberg and Standard Ebooks, built with the `text_processing` settings in
+this repository's `config.json` and recorded in the profile so a mismatch with
+your manuscript is reported rather than assumed. `data/absolutes_reference.json`
+is the same 50 books. Rebuild both from a shelf that matches what you write:
+percentiles are only as relevant as the corpus they come from, and this one is
+general English-language fiction weighted to the 19th and early 20th century.
+
+Ten of the twelve children's classics the Lexile coefficients in
+`core_metrics.lexile` were fitted against are in it, so the docstring's
+calibration claim can be checked against the shipped corpus rather than taken
+on trust. The two missing are *The Railway Children* and *A Little Princess*.
+
+"Grading needs a profile, not the books" holds for every metric and for all but
+three of the project reports. `tics`, `number_report` and `quotable` count
+user-configured regex patterns, which a profile built before those patterns
+existed cannot anticipate, so they read `*.txt` from `corpus_dirs` and say so
+when it is empty rather than comparing against nothing.
+
+A corpus records the `analysis.lexile_frequency_source` it was built with, and
+carries a Lexile distribution only when one was set. `none`, `bundled` and
+`wordfreq` are three different scales rather than three readings of one, so a
+run whose source differs from its corpus keeps the Lexile value and has the
+percentile withheld, with a result saying why.
+
+`data/word_frequency.json` is deliberately not rebuilt alongside the corpus.
+The Lexile coefficients in `core_metrics.lexile` were least-squares fitted
+against that exact table, so replacing it silently invalidates the calibration.
+Refit the coefficients first if you replace it.
 
 ## Cost
 

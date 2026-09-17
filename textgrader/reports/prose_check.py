@@ -20,7 +20,7 @@ ARGUMENT CONTRACT (read this before wiring up a caller):
 
     python3 prose_check.py                       every *.md in the configured
                                                    characters directory
-    python3 prose_check.py characters/RUTH.md     explicit character sheet(s)
+    python3 prose_check.py characters/NAME.md     explicit character sheet(s)
     python3 prose_check.py --manuscript FILE.md   scan one manuscript/chapter
                                                    file's prose instead of any
                                                    character sheet
@@ -40,11 +40,12 @@ import re
 import sys
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 
 # Quoted text is the manuscript's, or a character's, so the sheet's own prose
-# rules do not reach it. Sam saying "This is the worst mistake of my life" is
-# dialogue, not the sheet handing the reader a verdict. This guard, and the
+# rules do not reach it. A character saying "this is the worst mistake of my
+# life" is dialogue, not the sheet handing the reader a verdict. This guard, and the
 # two below, are generic to the "verdict" rule shape rather than facts about
 # any manuscript, so they stay fixed rather than moving into config.
 QUOTED = re.compile(r'"[^"]*"|“[^”]*”')
@@ -179,13 +180,7 @@ def main(argv=None):
 # Run from grade.py, not on its own. Each script in measures/ reports one
 # diagnostic; grade.py assembles enabled checks and is the interface that says
 # whether a pass helped.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     sys.exit(main())

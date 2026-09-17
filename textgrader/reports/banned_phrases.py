@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Phrases the author has ruled out, checked against the chapters.
+"""Phrases a project has ruled out, checked against the chapters.
 
-This file exists because of a failure, and the failure is worth stating. The
-author flagged *"and I want to be clear about that before anything else"* every
-single time he came across it, was told a check had been added, and found it
-still in chapter 1 several passes later. No check had been added. `prose_check.py`
-scans the character sheets and has never looked at a chapter.
+A ruling that lives only in a conversation gets lost. Someone decides a phrase
+is out, says so, believes a check now exists, and finds the phrase still in
+chapter 1 several passes later - because the check was never written, or
+because the check that exists scans something else. This is the row in a
+script that a ruling needs in order to survive.
 
-A ruling that lives only in a conversation gets lost. A ruling with a row in a
-script does not. Anything the author rules out by name goes in here, with the
-reason, and `grade.py` runs it.
+Nothing is banned by default and there is nothing project-specific in this
+file. Every pattern comes from ``project_rules.banned_phrases`` in the user's
+own configuration, with the reason recorded beside it, and ``grade.py`` runs
+it as a structured rule.
 
     python3 banned_phrases.py            report
     python3 banned_phrases.py --show N   print the full line for entry N
@@ -17,6 +18,7 @@ reason, and `grade.py` runs it.
 import argparse, re, sys
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 
 
@@ -98,13 +100,7 @@ def main():
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     sys.exit(main() or 0)

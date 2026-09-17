@@ -23,7 +23,7 @@ def _prose(seed: int, paragraphs: int = 60, dialogue: bool = True) -> str:
     vocab = ("the quiet room held a long silence while she considered what had happened "
              "and whether anyone would notice however perhaps not because nobody asked "
              "her directly about any of it").split()
-    names = ["Ruth", "Sam", "Nadia"]
+    names = ["Alice", "Bob", "Carol"]
     blocks = []
     for _ in range(paragraphs):
         if dialogue and rng.random() < 0.3:

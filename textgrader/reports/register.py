@@ -25,6 +25,7 @@ import statistics
 import sys
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 from ..chapters import chapter_number
 
@@ -141,14 +142,8 @@ def main(argv=None):
 # Run from grade.py, not on its own. Each script in measures/ reports one
 # diagnostic; grade.py assembles enabled checks and is the interface that says
 # whether a pass helped.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     sys.exit(main() or 0)

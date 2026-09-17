@@ -2,10 +2,10 @@
 """Which reference books hold a high reading level while still talking a lot?
 
 The claim this settles: that turning summary into dialogue must lower the
-reading level. Plenty of real novels are heavily spoken and still read well
-above this manuscript, so the constraint is not dialogue itself — it is how the
-dialogue is built. This finds the books that do both, and the ones that do
-neither, so somebody can read them side by side and see the difference.
+reading level. Plenty of real novels are heavily spoken and still read high, so
+the constraint is not dialogue itself - it is how the dialogue is built. This
+finds the books that do both, and the ones that do neither, so somebody can
+read them side by side and see the difference.
 
     python3 dialogue_study.py CORPUS_DIR [CORPUS_DIR ...]
 
@@ -19,6 +19,7 @@ import statistics as statistics
 import sys
 from pathlib import Path
 
+from . import solo_notice
 from ..core_metrics import measure
 from ..text import paragraphs, sentences as sents, strip_gutenberg, strip_transcript, words
 
@@ -30,20 +31,23 @@ QUOTE = re.compile(
 # Books that mark speech with single quotes (the British convention) are
 # skipped rather than guessed at: an apostrophe and a closing quote are the
 # same character, so any pattern that catches the speech also catches every
-# possessive between two of them. Two of the twenty-three go this way.
+# possessive between two of them. Expect a few skips in any real corpus.
 
 
 def spoken_and_narrated(text):
     """Split into what is inside quotation marks and what is outside.
 
     Quoted spans are joined into utterances, not into one string. A split
-    quote ("A," she says, "B.") is one utterance and must be rejoined; two
-    utterances ("A," Ruth says. "B," Sam says.) must not be. The difference is
-    whether the narration between them closes a sentence. Joining every span
-    in the chapter, as this did until now, glued separate speakers together
-    and inflated every spoken mean the dialogue pass was steered by: chapter
-    14 measured 16.7 and was really 12.9, chapter 18 measured 16.3 and was
-    really 13.5. Utterances are separated by a blank line here so that the
+    quote ("A," she says, "B.") is ONE utterance and must be rejoined; two
+    consecutive speeches ("A," he says. "B," she says.) are TWO and must not
+    be. The difference is whether the narration between them closes a
+    sentence.
+
+    Joining every span in a chapter, as this did until it was fixed, glues
+    separate speakers into one utterance and inflates every spoken mean that
+    comes out of it - by three or four words a sentence on ordinary dialogue,
+    which is enough to make a talky chapter look as though it were written in
+    long speeches. Utterances are separated by a blank line here so that the
     caller's paragraph-based sentence splitter cannot run them together
     either.
     """
@@ -151,13 +155,7 @@ def main():
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     main()

@@ -1,44 +1,28 @@
 #!/usr/bin/env python3
 """How often a speech ends on a maxim, against the corpus.
 
-A reader at chapter 9 put it this way: the book has one gear for climactic
-dialogue and everybody in it speaks in that gear. Every character, at the
-moment a scene turns, resolves the beat into a tight symmetrical line that
-would look at home on a poster.
+The complaint this makes countable is that a book has one gear for climactic
+dialogue: every character, at the moment a scene turns, resolves the beat into
+a tight symmetrical line that would look at home on a poster. Readers describe
+it as everyone sounding like the same aphorist.
 
-    "You can hand somebody a month. You cannot hand somebody a street."
+The symmetry itself is hard to count and turns out to be rare in most prose.
+What is countable is the move underneath it: the last sentence of a speech
+stops being about the people in the room and becomes a general statement about
+how the world works - present tense, no proper nouns, an indefinite subject, a
+copula. A particular becomes a maxim and the scene signs off on it.
 
-The countable part of that is not the symmetry, which turns out to be rare.
-It is that the last sentence of a speech stops being about the people in the
-room and becomes a general statement about how the world works: present
-tense, no proper nouns, an indefinite subject, a copula. A particular becomes
-a maxim, and the scene signs off on it.
+The rate is reported against the corpus, and the flagged lines are listed
+because the list is what earns its keep. The shape is a heuristic, not a
+judgement: a maxim can be exactly the right ending, and only a reader can say
+which ones are. A handful of lines is small enough to judge one at a time,
+which is the intended use. The usual fix for a line that should not have been
+a maxim is to end it on a particular rather than a general claim - name the
+specific thing or person, rather than asserting what people in general do.
 
-That shape is measurable. Ten speeches in the book ended on a maxim, 1.42% of
-the multi-sentence speeches, against a corpus running 0.0% to 1.41%, median
-0.64%. Level with the most maxim-heavy book in the reference set and past none
-of it, which is why this is not wired into grade.py: a target set there would
-be a target set on noise, and it is the same verdict agency.py got before that
-script was deleted.
-
-The list is what earned its keep. Ten lines is small enough to judge one at a
-time, and the author did, keeping three and cutting seven:
-
-    kept    14  "You cannot track it, and shooting one down in the air is
-                 beyond everybody on this field."
-    kept    15  "Whoever calls the count is the one whose bad afternoon
-                 everybody else has to have."
-    kept    30  "Who paid for the steel is somebody else's question."
-
-The fix for a flagged line is to end it on a particular instead of a general
-claim: name the cousin who still thinks a pony is a baby horse, rather than
-asserting what children believe. A rate under the corpus median is the target.
-
-What the detector cannot see is the symmetry itself - "you can hand somebody a
-month, you cannot hand somebody a street" - because it is rare in most prose. A
-clause-alignment scan over the whole manuscript found three instances, inside
-the corpus range too. If the complaint outlives these cuts, it is that scan
-that needs building, not this one.
+Corpus rates for this are low and the spread between books is narrow, so a
+document sitting near the top of the range is not far from ordinary. Read it
+as "go and look at these ten lines", not as a target to drive to zero.
 
     python3 quotable.py            report
     python3 quotable.py --corpus   the per-book corpus table
@@ -46,6 +30,7 @@ that needs building, not this one.
 import argparse, glob, re, statistics, sys
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 from ..text import strip_gutenberg
 
@@ -226,14 +211,8 @@ def main():
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --corpus is for, and it is never
 # how a pass gets judged.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     sys.exit(main() or 0)

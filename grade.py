@@ -25,13 +25,14 @@ import sys
 import time
 from pathlib import Path
 
-from textgrader.project import CONFIG_ENV_VAR, config_path, load_config
+from textgrader.project import (CONFIG_ENV_VAR, near_miss, config_path,
+                                load_config, project_path)
 from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings,
                                  TextProcessing, resolve_unit, units_comparable)
 from textgrader.core_metrics import measure as core_measure
 from textgrader.metrics import REGISTRY
-from textgrader.reports import REPORTS
-from textgrader.results import Action, MetricResult, Report, StatusType
+from textgrader.reports import REPORTS, VIA_GRADE_ENV_VAR
+from textgrader.results import Action, MetricResult, Polarity, Report, StatusType
 from textgrader.rules import compile_rules
 from textgrader import stats
 
@@ -45,33 +46,48 @@ ROOT = Path(__file__).resolve().parent
 #: PARENT DIRECTORY as if it were a corpus.
 BUNDLED_MEASURES = REPORTS
 
+#: Polarity per core metric: does a HIGH value mean more developed prose.
+#: This is not the ``direction`` field, which only says whether the document
+#: sits above or below the corpus centre. Four of these read inverted against
+#: a tool that orients them - top100, u10, shortruns and simple - and that is
+#: not a disagreement about the measurement, only about whether the number was
+#: turned the right way up before being averaged with the others.
+HIGHER, LOWER, NEUTRAL = Polarity.HIGHER, Polarity.LOWER, Polarity.NEUTRAL
+
+#: metric key -> (name, unit, family, polarity).
+#:
+#: NEUTRAL is a decision, not a default. More or fewer fronted subordinate
+#: clauses is a style choice rather than a competence, so front, and2, andrate
+#: and negative are measured and reported and kept OUT of the aggregate rather
+#: than assigned an arbitrary direction. The size counts are neutral for the
+#: same reason with less room for argument: a longer book is not a better one.
 METRIC_NAMES = {
-    "fk": ("Flesch-Kincaid grade", "grade", "readability"),
-    "ari": ("Automated Readability Index", "grade", "readability"),
-    "lexile": ("Approximate Lexile", "L", "readability"),
-    "wps": ("Words per sentence", "words/sentence", "sentence_rhythm"),
-    "slcv": ("Sentence-length variation", "%", "sentence_rhythm"),
-    "wpp": ("Words per paragraph", "words/paragraph", "paragraph_rhythm"),
-    "spp": ("Sentences per paragraph", "sentences/paragraph", "paragraph_rhythm"),
-    "wlen": ("Mean word length", "characters", "lexical"),
-    "long7": ("Words of 7+ characters", "%", "lexical"),
-    "sttr": ("Standardized type-token ratio", "%", "lexical"),
-    "top100": ("Commonest-100 word share", "%", "lexical"),
-    "commas": ("Commas per sentence", "commas/sentence", "punctuation"),
-    "subord": ("Subordinator-cue sentence share (lexical proxy)", "%", "syntax"),
-    "relcl": ("Relative-word sentence share (lexical proxy)", "%", "syntax"),
-    "simple": ("No-clause-cue sentence share (lexical proxy)", "%", "syntax"),
-    "u10": ("Sentences under 10 words", "%", "sentence_rhythm"),
-    "b2035": ("Sentences 20-35 words", "%", "sentence_rhythm"),
-    "shortruns": ("Sentences in short runs", "%", "sentence_rhythm"),
-    "front": ("Front-loaded cue proxy", "%", "syntax"),
-    "and2": ('Sentences with two or more "and" tokens', "%", "syntax"),
-    "andrate": ('"and" share', "%", "lexical"),
-    "negative": ("Negative-cue sentence share", "%", "discourse"),
-    "_words": ("Word count", "words", "size"),
-    "_sentences": ("Sentence count", "sentences", "size"),
-    "_paragraphs": ("Paragraph count", "paragraphs", "size"),
-    "_transcript": ("Transcript word share", "%", "size"),
+    "fk": ("Flesch-Kincaid grade", "grade", "readability", HIGHER),
+    "ari": ("Automated Readability Index", "grade", "readability", HIGHER),
+    "lexile": ("Approximate Lexile", "L", "readability", HIGHER),
+    "wps": ("Words per sentence", "words/sentence", "sentence_rhythm", HIGHER),
+    "slcv": ("Sentence-length variation", "%", "sentence_rhythm", HIGHER),
+    "wpp": ("Words per paragraph", "words/paragraph", "paragraph_rhythm", HIGHER),
+    "spp": ("Sentences per paragraph", "sentences/paragraph", "paragraph_rhythm", HIGHER),
+    "wlen": ("Mean word length", "characters", "lexical", HIGHER),
+    "long7": ("Words of 7+ characters", "%", "lexical", HIGHER),
+    "sttr": ("Standardized type-token ratio", "%", "lexical", HIGHER),
+    "top100": ("Commonest-100 word share", "%", "lexical", LOWER),
+    "commas": ("Commas per sentence", "commas/sentence", "punctuation", HIGHER),
+    "subord": ("Subordinator-cue sentence share (lexical proxy)", "%", "syntax", HIGHER),
+    "relcl": ("Relative-word sentence share (lexical proxy)", "%", "syntax", HIGHER),
+    "simple": ("No-clause-cue sentence share (lexical proxy)", "%", "syntax", LOWER),
+    "u10": ("Sentences under 10 words", "%", "sentence_rhythm", LOWER),
+    "b2035": ("Sentences 20-35 words", "%", "sentence_rhythm", HIGHER),
+    "shortruns": ("Sentences in short runs", "%", "sentence_rhythm", LOWER),
+    "front": ("Front-loaded cue proxy", "%", "syntax", NEUTRAL),
+    "and2": ('Sentences with two or more "and" tokens', "%", "syntax", NEUTRAL),
+    "andrate": ('"and" share', "%", "lexical", NEUTRAL),
+    "negative": ("Negative-cue sentence share", "%", "discourse", NEUTRAL),
+    "_words": ("Word count", "words", "size", NEUTRAL),
+    "_sentences": ("Sentence count", "sentences", "size", NEUTRAL),
+    "_paragraphs": ("Paragraph count", "paragraphs", "size", NEUTRAL),
+    "_transcript": ("Transcript word share", "%", "size", NEUTRAL),
 }
 
 
@@ -278,6 +294,32 @@ def run_metric_process(metric_id, command):
                              error=f"invalid metric JSON: {exc}")]
 
 
+def measure_arguments(name, manuscript, config):
+    """Resolve one report's argument template against this run.
+
+    Kept here, and used by the tests too, because the templates are a closed
+    vocabulary: a second copy of this formatting is a second place that has to
+    learn each new target word.
+    """
+
+    manuscript = Path(manuscript)
+    # A report asking for the chapters directory gets it only if it is really
+    # there. Falling back to the manuscript keeps a project that keeps no
+    # chapters directory working, at the single-unit output those reports
+    # degenerate to - which is what every report got before, so this is no
+    # worse for that project and correct for the ones that do have chapters.
+    try:
+        chapters_dir = project_path("chapters_dir", "chapters", config)
+    except (KeyError, TypeError, OSError):
+        chapters_dir = None
+    if not (chapters_dir and chapters_dir.is_dir() and any(chapters_dir.glob("*.md"))):
+        chapters_dir = manuscript
+    return [part.format(manuscript=str(manuscript),
+                        chapters_dir=str(chapters_dir),
+                        manuscript_dir=str(manuscript.parent))
+            for part in BUNDLED_MEASURES[name]]
+
+
 def run_bundled_measure(name, manuscript, config, timeout=120):
     """Run a bundled report as a structured metric, never via a shell.
 
@@ -287,11 +329,9 @@ def run_bundled_measure(name, manuscript, config, timeout=120):
     repository's own ``config.json``.
     """
 
-    arguments = [part.format(manuscript=str(manuscript),
-                             manuscript_dir=str(manuscript.parent))
-                 for part in BUNDLED_MEASURES[name]]
-    command = [sys.executable, "-m", f"textgrader.reports.{name}", *arguments]
-    environment = {**os.environ, "HALSTEAD_VIA_GRADE": "1",
+    command = [sys.executable, "-m", f"textgrader.reports.{name}",
+               *measure_arguments(name, manuscript, config)]
+    environment = {**os.environ, VIA_GRADE_ENV_VAR: "1",
                    CONFIG_ENV_VAR: str(config.get("_config_path", config_path())),
                    # ``-m`` resolves the package from the working directory, and
                    # the working directory is the project's, not ours.
@@ -414,6 +454,40 @@ def check_preprocessing(profile, analysis, report):
                     f"comparisons may not describe the same kind of text"))
 
 
+def check_lexile_source(profile, config, report):
+    """Withhold the Lexile comparison across two different frequency scales.
+
+    "none", "bundled" and "wordfreq" are three rulers, not three readings of
+    one. The coefficients were fitted against the bundled table, so a
+    manuscript measured with wordfreq and a corpus built with bundled produce
+    numbers that differ by the tables and not by the prose. Comparing them
+    would print a confident percentile off two different scales, which is
+    worse than printing none.
+    """
+
+    wanted = (config.get("analysis", {}) or {}).get("lexile_frequency_source", "none")
+    if not profile or wanted == "none":
+        return True
+    recorded = profile.get("lexile_frequency_source")
+    if recorded is None:
+        report.results.append(MetricResult(
+            "corpus.lexile_frequency_source", "Corpus Lexile source", status="unavailable",
+            status_type=StatusType.UNAVAILABLE, family="corpus",
+            warning="this profile predates a recorded Lexile frequency source, so the "
+                    "Lexile percentile is withheld; rebuild it with the same "
+                    "analysis.lexile_frequency_source to compare"))
+        return False
+    if recorded != wanted:
+        report.results.append(MetricResult(
+            "corpus.lexile_frequency_source", "Corpus Lexile source", status="unavailable",
+            status_type=StatusType.UNAVAILABLE, family="corpus",
+            warning=f"the corpus was built with lexile_frequency_source={recorded!r} and this "
+                    f"run uses {wanted!r}; those are different scales, so the Lexile "
+                    f"percentile is withheld"))
+        return False
+    return True
+
+
 def analyze_text(text, config, source="<text>"):
     """Analyze a string.  Used where a caller already holds the text, such as
     one chapter sliced out of a manuscript, so nothing has to reach disk."""
@@ -433,7 +507,46 @@ def analyze(path, config):
     return _analyze(config, report, path=path)
 
 
+def configuration_results(config):
+    """Report the configuration's own shape as results, not as an exception.
+
+    An unrecognised key used to be read, stored and never looked at again. It
+    produced no warning, no note in the JSON, and no non-zero exit, so a
+    misspelt key was indistinguishable from a report that ran and found
+    nothing - and configuration is this tool's whole extension mechanism.
+
+    These surface the way every other limitation here surfaces: a visible
+    result with a warning naming the key. A run still never fails on one.
+    """
+
+    results = []
+    for issue in config.get("_config_issues", []):
+        results.append(MetricResult(f"config.{issue['key']}", "Configuration",
+                                    status="unavailable",
+                                    status_type=StatusType.UNAVAILABLE,
+                                    family="configuration", warning=issue["message"]))
+    # ``metrics`` and ``project_measures`` are keyed by metric and report name,
+    # which only this module knows, so project.py cannot check them.
+    known = set(REGISTRY) | set(BUNDLED_MEASURES)
+    for section in ("metrics", "project_measures"):
+        values = config.get(section)
+        if not isinstance(values, dict):
+            continue
+        for key in sorted(values):
+            if str(key).startswith("_") or key in known:
+                continue
+            suggestion = near_miss(key, known)
+            results.append(MetricResult(
+                f"config.{section}.{key}", "Configuration", status="unavailable",
+                status_type=StatusType.UNAVAILABLE, family="configuration",
+                warning=f"unrecognised name {key!r} under {section!r}; no such metric "
+                        "or report, so this entry does nothing"
+                        + (f". Did you mean {suggestion!r}?" if suggestion else "")))
+    return results
+
+
 def _analyze(config, report, path=None, text=None):
+    report.results.extend(configuration_results(config))
     settings = config.get("analysis", {}) or {}
     try:
         processing = TextProcessing.from_config(config.get("text_processing"))
@@ -454,9 +567,11 @@ def _analyze(config, report, path=None, text=None):
 
     profile = load_profile(config, report)
     check_preprocessing(profile, analysis, report)
+    lexile_comparable = check_lexile_source(profile, config, report)
     comparator = Comparator(profile, analysis, settings)
 
-    core = _core_results(analysis, config, comparator, report)
+    core = _core_results(analysis, config, comparator, report, profile,
+                         lexile_comparable=lexile_comparable)
     if core is not None:
         report.results.extend(core)
     report.results.extend(project_rules(analysis, config))
@@ -467,7 +582,87 @@ def _analyze(config, report, path=None, text=None):
     return report
 
 
-def _core_results(analysis, config, comparator, report):
+def _named_book(profile, name):
+    """One corpus text by name, from either profile layout.
+
+    The legacy profile is ``{book_name: {metric: value}}``. The current one
+    puts the rows in a ``books`` LIST and identifies each by ``source_id``
+    ("gutenberg:102"), ``source_filename`` or ``source_path``. Matching on any
+    of those, plus the filename's stem, is what lets a benchmark be named the
+    way a person would say it rather than the way the builder spelled it.
+    """
+
+    books = profile.get("books", profile)
+    if isinstance(books, dict):
+        found = books.get(name)
+        return (found if isinstance(found, dict) else None,
+                sorted(key for key in books if not str(key).startswith("_")))
+    if not isinstance(books, list):
+        return None, []
+    names = []
+    wanted = str(name).lower()
+    for row in books:
+        if not isinstance(row, dict):
+            continue
+        labels = [str(row[key]) for key in ("source_id", "source_filename", "source_path")
+                  if row.get(key)]
+        labels += [Path(label).stem for label in labels]
+        if labels:
+            names.append(labels[0])
+        if any(label.lower() == wanted for label in labels):
+            return row, sorted(names)
+    return None, sorted(names)
+
+
+def benchmark_comparison(profile, measured, name):
+    """This document against ONE named corpus text, metric by metric.
+
+    An aggregate says how far the whole has moved; it does not say what to
+    open first. Ranking the losses by gap in corpus standard deviations does,
+    and the standardization is what makes it possible: a 5-point gap in
+    sentence-length CV and a 0.5-point gap in mean word length are not
+    comparable in their own units, and are once both are in units of how much
+    the corpus itself varies.
+
+    Returns ``None`` when the named text is not in the profile, so a typo in
+    the config is reported rather than silently producing no comparison.
+    """
+
+    if not profile or not name:
+        return None
+    row, available = _named_book(profile, name)
+    if row is None:
+        return {"name": name, "error": f"no text named {name!r} in the corpus profile",
+                "available": available[:20], "gaps": [], "lost": 0, "of": 0}
+    gaps, compared = [], 0
+    for key, value in sorted(measured.items()):
+        entry = METRIC_NAMES.get(key)
+        if entry is None or entry[3] is NEUTRAL or value is None:
+            continue
+        target = row.get(key)
+        if target is None:
+            continue
+        values = [item for item in distribution(profile, key) if item is not None]
+        if len(values) < 2:
+            continue
+        spread = statistics.pstdev(values)
+        compared += 1
+        # Signed so that positive always means "behind the benchmark",
+        # whichever way the metric points.
+        behind = (target - value) if entry[3] is HIGHER else (value - target)
+        if behind <= 0:
+            continue
+        gaps.append({"metric_id": f"prose.{key.lstrip('_')}", "name": entry[0],
+                     "unit": entry[1], "value": round(value, 2),
+                     "benchmark": round(target, 2),
+                     "corpus_sd": round(spread, 4) if spread else None,
+                     "gap_sd": round(behind / spread, 2) if spread else None})
+    gaps.sort(key=lambda item: -(item["gap_sd"] or 0.0))
+    return {"name": name, "error": None, "lost": len(gaps), "of": compared, "gaps": gaps}
+
+
+def _core_results(analysis, config, comparator, report, profile=None,
+                  lexile_comparable=True):
     settings = config.get("analysis", {}) or {}
     lexile_source = settings.get("lexile_frequency_source", "none")
     try:
@@ -491,11 +686,22 @@ def _core_results(analysis, config, comparator, report):
     for key, value in got.items():
         if key == "_words_all" or value is None:
             continue
-        name, unit, family = METRIC_NAMES.get(key, (key, None, "other"))
+        name, unit, family, polarity = METRIC_NAMES.get(key, (key, None, "other", NEUTRAL))
         item = MetricResult(f"prose.{key.lstrip('_')}", name, value, unit,
                             family=family, sample_size=got.get("_sentences"),
-                            comparison_unit=analysis.comparison_unit)
+                            comparison_unit=analysis.comparison_unit,
+                            polarity=polarity)
+        # A mismatched Lexile scale is reported and the number kept; only the
+        # comparison against a corpus measured on another ruler is dropped.
+        if key == "lexile" and not lexile_comparable:
+            out.append(item)
+            continue
         out.append(comparator.apply(item, key, value))
+    benchmark = settings.get("benchmark")
+    if benchmark:
+        report.benchmark = benchmark_comparison(
+            profile, {key: value for key, value in got.items() if key != "_words_all"},
+            benchmark)
     lengths = analysis.sentence_lengths
     if lengths:
         shape = stats.summarize(lengths)
@@ -635,11 +841,83 @@ def render(report):
           f"{summary['by_action']['rule_violation']} project-rule violations; "
           f"{summary['by_action']['insufficient_data']} without enough data; "
           f"{summary['by_status_type']['internal_error']} internal errors.")
+    print_scorecard(summary["scorecard"])
+    print_maturity(summary["maturity"])
     if summary["top_findings"]:
         print("\nFurthest from the corpus, most distant first:")
         for item in summary["top_findings"][:8]:
             severity = "-" if item["severity"] is None else f"{item['severity']:.1f}"
             print(f"  {item['metric_id']:<44} {item['direction']:<8} severity {severity}")
+
+
+def print_maturity(maturity):
+    """The aggregate, and where to start if a benchmark is configured."""
+
+    benchmark = maturity["benchmark"]
+    # A misnamed benchmark is reported even when there is no aggregate to
+    # print. Without a corpus profile the percentile is None, and returning
+    # early here would swallow a configured-but-wrong benchmark completely,
+    # which is the failure mode the rest of this work exists to remove.
+    if benchmark and benchmark.get("error"):
+        print(f"\n  benchmark unavailable: {benchmark['error']}")
+        if maturity["percentile"] is None:
+            return
+    if maturity["percentile"] is None:
+        return
+    # The printed label and the JSON key are the same word on purpose. A
+    # measure that prints under one name and serializes under another is how
+    # this repository's TTR column came to hold MSTTR.
+    line = (f"\n  maturity percentile (median of {maturity['metric_count']} "
+            f"oriented measures): {maturity['percentile']:.0f}")
+    if benchmark and benchmark.get("error"):
+        print(line)
+        return
+    if benchmark and benchmark["of"]:
+        line += f"      behind {benchmark['name']} on {benchmark['lost']} of {benchmark['of']}"
+    print(line)
+    if not (benchmark and benchmark["gaps"]):
+        return
+    print(f"\n  largest gaps to {benchmark['name']}, in corpus standard deviations:")
+    for gap in benchmark["gaps"][:8]:
+        unit = (gap["unit"] or "")[:14]
+        distance = "-" if gap["gap_sd"] is None else f"{gap['gap_sd']:.1f} sd"
+        print(f"    {gap['name'][:40]:<42}{gap['value']:>9} vs {gap['benchmark']:>9}"
+              f"  {unit:<15}{distance:>8}")
+
+
+def print_scorecard(scorecard):
+    """The census, with its denominator.
+
+    ``not_taken`` is printed whether or not it is zero. It is the number that
+    moves silently when instrumentation breaks, and a count that only appears
+    when it is interesting is a count nobody learns to look for.
+    """
+
+    share = scorecard["passing_share"]
+    print("\nSCORECARD")
+    if scorecard["measured"]:
+        print(f"  {scorecard['passing']} of {scorecard['measured']} measures "
+              f"inside their reference ({share:.0f}%)")
+    else:
+        print("  no measure produced a comparable result")
+    print(f"  {scorecard['not_taken']} not taken "
+          "(no data, unavailable, or errored - neither a pass nor a failure)")
+    if scorecard["configuration_issues"]:
+        print(f"  {scorecard['configuration_issues']} configuration issue(s); "
+              "see the config.* results above")
+    families = {name: counts for name, counts in scorecard["by_family"].items()
+                if counts["failing"]}
+    if families:
+        print("  outside their reference, by family:")
+        for name, counts in sorted(families.items(), key=lambda kv: -kv[1]["failing"]):
+            total = counts["passing"] + counts["failing"]
+            print(f"    {name:<28}{counts['failing']:>3} of {total}")
+    if scorecard["not_taken_detail"]:
+        errors = [item for item in scorecard["not_taken_detail"] if item["action"] == "error"]
+        if errors:
+            print("  errored, so they left the count entirely:")
+            for item in errors:
+                print(f"    {item['metric_id']:<32}{(item['warning'] or '')[:60]}")
 
 
 def list_metrics():

@@ -31,6 +31,7 @@ import statistics as statistics
 import sys
 from pathlib import Path
 
+from . import solo_notice
 from .. import project as project_config
 from ..core_metrics import measure
 from ..paths import ABSOLUTES_REFERENCE
@@ -244,13 +245,7 @@ def main():
 # whether a pass helped. Running one of these alone is for reading the
 # individual hits during a fix, which is what --show and the per-file
 # arguments are for, and it is never how a pass gets judged.
-def _solo_notice():
-    import sys, os
-    if os.environ.get("HALSTEAD_VIA_GRADE"):
-        return
-    print("  [bundled diagnostic; use grade.py for the structured report]",
-          file=sys.stderr)
 
 if __name__ == "__main__":
-    _solo_notice()
+    solo_notice()
     main()
