@@ -454,6 +454,40 @@ def check_preprocessing(profile, analysis, report):
                     f"comparisons may not describe the same kind of text"))
 
 
+def check_lexile_source(profile, config, report):
+    """Withhold the Lexile comparison across two different frequency scales.
+
+    "none", "bundled" and "wordfreq" are three rulers, not three readings of
+    one. The coefficients were fitted against the bundled table, so a
+    manuscript measured with wordfreq and a corpus built with bundled produce
+    numbers that differ by the tables and not by the prose. Comparing them
+    would print a confident percentile off two different scales, which is
+    worse than printing none.
+    """
+
+    wanted = (config.get("analysis", {}) or {}).get("lexile_frequency_source", "none")
+    if not profile or wanted == "none":
+        return True
+    recorded = profile.get("lexile_frequency_source")
+    if recorded is None:
+        report.results.append(MetricResult(
+            "corpus.lexile_frequency_source", "Corpus Lexile source", status="unavailable",
+            status_type=StatusType.UNAVAILABLE, family="corpus",
+            warning="this profile predates a recorded Lexile frequency source, so the "
+                    "Lexile percentile is withheld; rebuild it with the same "
+                    "analysis.lexile_frequency_source to compare"))
+        return False
+    if recorded != wanted:
+        report.results.append(MetricResult(
+            "corpus.lexile_frequency_source", "Corpus Lexile source", status="unavailable",
+            status_type=StatusType.UNAVAILABLE, family="corpus",
+            warning=f"the corpus was built with lexile_frequency_source={recorded!r} and this "
+                    f"run uses {wanted!r}; those are different scales, so the Lexile "
+                    f"percentile is withheld"))
+        return False
+    return True
+
+
 def analyze_text(text, config, source="<text>"):
     """Analyze a string.  Used where a caller already holds the text, such as
     one chapter sliced out of a manuscript, so nothing has to reach disk."""
@@ -533,9 +567,11 @@ def _analyze(config, report, path=None, text=None):
 
     profile = load_profile(config, report)
     check_preprocessing(profile, analysis, report)
+    lexile_comparable = check_lexile_source(profile, config, report)
     comparator = Comparator(profile, analysis, settings)
 
-    core = _core_results(analysis, config, comparator, report, profile)
+    core = _core_results(analysis, config, comparator, report, profile,
+                         lexile_comparable=lexile_comparable)
     if core is not None:
         report.results.extend(core)
     report.results.extend(project_rules(analysis, config))
@@ -625,7 +661,8 @@ def benchmark_comparison(profile, measured, name):
     return {"name": name, "error": None, "lost": len(gaps), "of": compared, "gaps": gaps}
 
 
-def _core_results(analysis, config, comparator, report, profile=None):
+def _core_results(analysis, config, comparator, report, profile=None,
+                  lexile_comparable=True):
     settings = config.get("analysis", {}) or {}
     lexile_source = settings.get("lexile_frequency_source", "none")
     try:
@@ -654,6 +691,11 @@ def _core_results(analysis, config, comparator, report, profile=None):
                             family=family, sample_size=got.get("_sentences"),
                             comparison_unit=analysis.comparison_unit,
                             polarity=polarity)
+        # A mismatched Lexile scale is reported and the number kept; only the
+        # comparison against a corpus measured on another ruler is dropped.
+        if key == "lexile" and not lexile_comparable:
+            out.append(item)
+            continue
         out.append(comparator.apply(item, key, value))
     benchmark = settings.get("benchmark")
     if benchmark:

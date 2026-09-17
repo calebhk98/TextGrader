@@ -159,6 +159,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                   split_sections: bool = False,
                   min_section_words: int = 500,
                   include_core_metrics: bool = True,
+                  lexile_frequency_source: str = "none",
                   include_parse_metrics: bool = False,
                   include_model_metrics: bool = False,
                   progress=None) -> dict[str, Any]:
@@ -239,10 +240,17 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                              if key not in {"id", "filename", "path"}},
             }
             if include_core_metrics:
-                core = core_measure(analysis, floor=1)
+                core = core_measure(analysis, floor=1,
+                                    lexile_source=lexile_frequency_source)
                 if core:
                     book.update({key: core[key] for key in CORE_METRIC_KEYS
                                  if core.get(key) is not None})
+                    # Lexile is off unless a frequency source is configured, so
+                    # it is written only when one was. Without this the metric
+                    # could be enabled on a manuscript and never had a corpus
+                    # to compare against: measurable, never comparable.
+                    if core.get("lexile") is not None:
+                        book["lexile"] = core["lexile"]
             for name in wanted:
                 spec = REGISTRY[name]
                 setting = metric_settings.get(name, {})
@@ -303,6 +311,12 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         # Retained under the pre-2.0 name so older readers still find it.
         "preprocessing": processing.fingerprint(),
         "core_metrics": include_core_metrics,
+        # Which frequency table the corpus Lexiles came from. The three
+        # sources are three different scales, so a corpus built with one and a
+        # manuscript measured with another are not comparable, and grade.py
+        # withholds the comparison rather than printing a percentile off two
+        # different rulers.
+        "lexile_frequency_source": lexile_frequency_source,
         "parse_metrics": include_parse_metrics,
         "model_metrics": include_model_metrics,
         "metric_settings": effective,
@@ -414,6 +428,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     profile = build_profile(
         args.inputs, corpus_name=args.name, manifest=manifest,
         text_processing=config.get("text_processing"), nlp=config.get("nlp"),
+        lexile_frequency_source=(config.get("analysis", {}) or {}).get(
+            "lexile_frequency_source", "none"),
         metrics=config.get("metrics", {}), comparison_unit=args.comparison_unit,
         split_sections=args.split_sections, min_section_words=args.min_section_words,
         include_core_metrics=not args.no_core_metrics,

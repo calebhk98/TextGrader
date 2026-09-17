@@ -191,3 +191,35 @@ def test_a_misnamed_benchmark_is_reported_beside_the_aggregate(capsys):
     printed = capsys.readouterr().out
     assert "nope" in printed
     assert "78" in printed
+
+
+def test_a_lexile_scale_mismatch_withholds_the_comparison():
+    """Three frequency sources are three rulers, not three readings of one.
+
+    A manuscript measured with wordfreq against a corpus built with bundled
+    differs by the tables, not by the prose. A confident percentile off two
+    scales is worse than none.
+    """
+
+    from textgrader.results import Report
+    cases = [
+        ({"lexile_frequency_source": "bundled"}, "bundled", True, 0),
+        ({"lexile_frequency_source": "wordfreq"}, "bundled", False, 1),
+        ({"book_count": 23}, "bundled", False, 1),           # a profile predating the field
+        ({"lexile_frequency_source": "bundled"}, "none", True, 0),
+        (None, "bundled", True, 0),
+    ]
+    for profile, wanted, comparable, warnings in cases:
+        report = Report(source="test")
+        config = {"analysis": {"lexile_frequency_source": wanted}}
+        assert grade.check_lexile_source(profile, config, report) is comparable, profile
+        assert len(report.results) == warnings, profile
+
+
+def test_a_matching_lexile_source_does_not_withhold():
+    # The branch that fell through and returned None, which is falsy: a
+    # correctly configured run would have had its comparison withheld.
+    from textgrader.results import Report
+    assert grade.check_lexile_source({"lexile_frequency_source": "bundled"},
+                                     {"analysis": {"lexile_frequency_source": "bundled"}},
+                                     Report(source="t")) is True

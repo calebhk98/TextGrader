@@ -92,3 +92,20 @@ def test_a_benchmark_naming_nothing_lists_what_is_there():
     got = grade.benchmark_comparison(PROFILE, {"fk": 5.0}, "not_a_book_in_here")
     assert "not_a_book_in_here" in got["error"]
     assert got["available"]
+
+
+def test_the_shipped_profile_records_its_lexile_frequency_source():
+    # "none", "bundled" and "wordfreq" are three different scales. A corpus
+    # that does not say which one it used cannot be compared against safely,
+    # and a Lexile the corpus never measured cannot be compared at all.
+    assert "lexile_frequency_source" in PROFILE
+
+
+def test_the_shipped_profile_carries_lexile_so_the_metric_is_comparable():
+    # Enabling Lexile used to give a number with no percentile, because
+    # textgrader/corpus.py never passed a frequency source and so the corpus
+    # never measured it: the metric was measurable and never comparable.
+    source = PROFILE["lexile_frequency_source"]
+    assert source != "none"
+    assert "lexile" in PROFILE["distributions"]
+    assert any("lexile" in row for row in PROFILE["books"])
