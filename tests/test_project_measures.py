@@ -1,7 +1,6 @@
 """The bundled reports carry no manuscript of their own any more."""
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -14,66 +13,39 @@ ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ROOT / "textgrader" / "reports"
 EXAMPLE = ROOT / "examples" / "project_measures.example.json"
 
-# Names and fragments from the one manuscript this repository was extracted
-# from. None of them may appear in the code, the tests or the example config.
+# There is no denylist of names here any more, and there should not be one.
 #
-# Matched on word boundaries, because several are substrings of ordinary words
-# and a plain "in" test made this guard useless for exactly the short names
-# that are hardest to spot: "sam" is in "same", "theo" in "theory", "deb" in
-# "debug" and "debt", "fen" in "often".
-FORBIDDEN_WORDS = [
-    "chloe", "ruth", "sam", "nadia", "kavi", "theo", "odile", "priya", "fen",
-    "kayleigh", "bryce", "marisol", "aldana", "vance", "prahl", "baptiste",
-    "kowalczyk", "pruitt", "sinclair", "amberg", "sandoval", "prentice",
-    "ammons", "whitaker", "ruiz",
-]
-
-# Substrings that are distinctive enough not to need a boundary.
-FORBIDDEN_FRAGMENTS = [
-    # "halstead" is a fragment, not a word: the name it has to catch is
-    # HALSTEAD_VIA_GRADE, where the underscore is a word character and \b
-    # therefore never matches after it.
-    "halstead",
-    "28_nineteen", "manuscript_full", "prose_rules.md", "agency.py",
-    "_differentiation", "_allocations", "chapters_\\d", "ruth.md",
-    "puts it back down", "hand somebody a", "calls the count",
-    "and i want to be clear about",
-]
-
-# The pattern is built once so the two lists cannot drift apart.
-FORBIDDEN_PATTERN = re.compile(
-    "|".join([rf"\b{re.escape(word)}\b" for word in FORBIDDEN_WORDS]
-             + [re.escape(fragment) for fragment in FORBIDDEN_FRAGMENTS]),
-    re.IGNORECASE)
-
-#: Everything that ships. Narrowing this to reports/ is what let the
-#: environment variable named after the old project survive in sixteen files,
-#: and let the reports keep docstrings quoting the manuscript they came from.
-SHIPPED = (sorted((ROOT / "textgrader").rglob("*.py"))
-           + sorted(ROOT.glob("*.py"))
-           + sorted(ROOT.glob("tests/*.py"))
-           + [EXAMPLE, ROOT / "README.md", ROOT / "config.json"])
+# A guard that works by listing the cast, the internal filenames and the
+# phrases to search for has to write all of them down, so the test file
+# becomes the archive of exactly what was supposed to be removed - the leak it
+# was added to prevent, in the one file nobody thinks to check. Deleting the
+# material and keeping an index of it is not deleting it.
+#
+# What replaces it is the property that actually matters, which can be stated
+# without naming anything: this repository describes no particular document.
+# Its own configuration carries no policy, and every bundled report is inert
+# until a user supplies one. A regression that hard-codes somebody's content
+# shows up as a report that does something with an empty config, which
+# ``test_every_bundled_report_runs_clean_with_no_policy`` below already runs
+# for every report there is.
 
 
-@pytest.mark.parametrize("path", [path for path in SHIPPED if path.name != Path(__file__).name])
-def test_nothing_shipped_names_one_manuscript(path):
-    if not path.is_file():
-        return
-    found = sorted({match.group(0).lower()
-                    for match in FORBIDDEN_PATTERN.finditer(
-                        path.read_text(encoding="utf-8", errors="replace"))})
-    assert not found, f"{path.name} still names {found}"
+def test_the_shipped_config_carries_no_project_policy():
+    """The repository's own config.json describes no particular book.
 
+    Everything project-specific is a user's to supply: cast lists, chapter
+    exemptions, banned phrases, target bands. Shipping any of them as a
+    default would make this tool quietly opinionated about someone else's
+    prose, and is how the previous extraction left content behind.
+    """
 
-def test_the_guard_would_catch_a_regression():
-    # A guard nothing can fail is a guard nobody maintains.
-    assert FORBIDDEN_PATTERN.search("Ruth said")
-    assert FORBIDDEN_PATTERN.search("HALSTEAD_VIA_GRADE")
-    assert FORBIDDEN_PATTERN.search("characters/RUTH.md")
-    # ... and would not fire on ordinary English containing the short names.
-    for innocent in ("the same thing", "a theory of prose", "debug output",
-                     "often enough", "samples", "truth"):
-        assert not FORBIDDEN_PATTERN.search(innocent), innocent
+    config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    assert config.get("project_measures") == {}
+    rules = config.get("project_rules", {})
+    assert rules.get("banned_phrases") == []
+    for name, value in rules.items():
+        if name != "banned_phrases":
+            assert value is None, f"project_rules.{name} ships a policy: {value!r}"
 
 
 def test_the_example_config_is_valid_json_and_marked_as_an_example():
