@@ -43,6 +43,7 @@ TOP_LEVEL_KEYS = frozenset({
     "analysis", "text_processing", "nlp", "regex",
     "metrics", "project_rules", "project_measures",
     "metric_commands", "allow_external_metric_commands",
+    "chapter_bands",
 })
 
 

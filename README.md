@@ -143,6 +143,32 @@ still exits zero. Keys beginning with `_` are treated as comments, since JSON
 has none. `project_rules.hard_line_breaks` and `project_rules.chapter_length`
 are recognised but unimplemented, and say so if you set them.
 
+### Chapter bands
+
+A single whole-book reading-level target cannot express a book whose level is
+supposed to move, and it hides the movement: a manuscript reading
+Flesch-Kincaid 6.8 against a target of 7.0 looks fine while its last fourteen
+chapters average 8.85 against a floor of 7.2. Set `chapter_bands` and
+`chapter_report.py` judges each band:
+
+```json
+"chapter_bands": {
+  "metric": "fk",
+  "bands": [
+    {"chapters": "1-10",  "floor": 5.5},
+    {"chapters": "11-22", "floor": 6.5},
+    {"chapters": "23-36", "floor": 7.2, "ceiling": 9.5, "exempt": {"28": "why"}}
+  ]
+}
+```
+
+The **band average** is judged, not each chapter. Chapters outside the band's
+range are listed as a pointer to where to look and do not themselves fail the
+band - judging both made bands that no revision could satisfy. A band may set
+a ceiling as well as a floor, so a chapter running four grades hot is caught
+too. An exempt chapter leaves the average and is reported, so an exemption is
+a decision on the record.
+
 ## Corpus
 
 Grading needs a profile, not the books. Acquire, profile, then check the
