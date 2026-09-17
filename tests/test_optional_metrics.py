@@ -118,3 +118,60 @@ def test_a_missing_optional_package_degrades_one_metric(monkeypatch, manuscript,
                    for item in report.results)
     finally:
         optional.reset_cache()
+
+
+def _speaker_findings(text, **processing):
+    from textgrader.document import DocumentAnalysis, TextProcessing
+    from textgrader.metrics import dialogue_speaker_style
+    analysis = DocumentAnalysis.from_text(
+        text, processing=TextProcessing(**processing), comparison_unit="book")
+    return {item["metric_id"]: item for item in dialogue_speaker_style.measure(analysis)}
+
+
+def test_speaker_metrics_ignore_a_stripped_transcript():
+    """A metric must not measure text the canonical cleanup removed.
+
+    Speaker attribution read the raw file, so on a manuscript with chat
+    chapters it silently replaced prose dialogue with unpunctuated chat lines.
+    Contractions there are written without apostrophes and questions without
+    question marks, so both rates collapsed to zero and were then compared
+    against a corpus of prose dialogue.
+    """
+
+    chat = "\n".join(f"{name}: cant find it anywhere and im out of ideas"
+                     for name in ["ruth"] * 12 + ["nadia"] * 12)
+    prose = " ".join('"I cannot find it anywhere," Ruth said. '
+                     '"Then where did you look?" Nadia said.' for _ in range(12))
+    text = f"{prose}\n\n{chat}\n"
+    stripped = _speaker_findings(text)
+    kept = _speaker_findings(text, strip_transcript=False)
+    assert "transcript" not in (stripped["dialogue.speaker_question_rate"]["warning"] or "")
+    assert kept["dialogue.identified_speaker_count"]["value"] == 2
+
+
+def test_speaker_metrics_refuse_thin_attribution():
+    """Rates from a tenth of the turns are not comparable with rates from all.
+
+    Victorian prose tags almost every spoken turn; modern prose drops the tag
+    once a two-hander is established. Ungated, these metrics rank books by how
+    explicitly they attribute speech rather than by how characters sound.
+    """
+
+    tagged = "\n\n".join('"I cannot find it," Ruth said.\n\n"Where did you look?" Nadia said.'
+                        for _ in range(10))
+    # Separate paragraphs, because an untagged quotation immediately following
+    # another with no sentence between them is one continued turn, not two.
+    untagged = "\n\n".join('"Somewhere else entirely." He shrugged at that.'
+                          for _ in range(200))
+    found = _speaker_findings(f"{tagged}\n\n{untagged}")
+    item = found["dialogue.speaker_question_rate"]
+    assert item["value"] is None
+    assert "could be attributed" in item["warning"]
+
+
+def test_speaker_metrics_work_when_attribution_is_dense():
+    dense = "\n\n".join('"I cannot find it anywhere," Ruth said.\n\n'
+                        '"Then where did you look for it?" Nadia said.' for _ in range(12))
+    found = _speaker_findings(dense)
+    assert found["dialogue.identified_speaker_count"]["value"] == 2
+    assert found["dialogue.speaker_question_rate"]["value"] is not None

@@ -69,9 +69,19 @@ def identify_speakers(analysis: DocumentAnalysis) -> tuple[dict[str, list[str]],
     name, or ``"tag"`` when only speech-tagged turns with a nearby
     capitalized token could be attributed (see the module docstring for why
     that source is a biased sample).
+
+    Transcript lines are only used when the configuration KEEPS them.  With the
+    default ``text_processing.strip_transcript`` they are not part of the
+    document any more, and reading them from :attr:`DocumentAnalysis.raw`
+    measured text that every other metric had excluded.  On a manuscript with
+    chat chapters that silently replaced its prose dialogue with unpunctuated
+    chat lines, where contractions are written without apostrophes and
+    questions without question marks, so both rates collapsed to zero and were
+    then compared against a corpus of prose dialogue.
     """
 
-    matches = textlib.transcript_lines(analysis.raw)
+    matches = ([] if analysis.processing.strip_transcript
+               else textlib.transcript_lines(analysis.raw))
     if len(matches) >= TRANSCRIPT_MIN_LINES:
         groups: dict[str, list[str]] = {}
         for match in matches:
@@ -97,10 +107,11 @@ def _contraction_rate(turns: list[str]) -> tuple[float | None, int]:
 
 
 def _unavailable(qualifying_count: int, total_count: int, method: str,
-                 min_turns: int) -> list[dict[str, Any]]:
-    warning = (f"found {total_count} named speaker(s) ({method} attribution), "
-               f"{qualifying_count} with at least {min_turns} turns; need at least two to "
-               f"say whether characters sound different from each other")
+                 min_turns: int, warning: str | None = None) -> list[dict[str, Any]]:
+    warning = warning or (
+        f"found {total_count} named speaker(s) ({method} attribution), "
+        f"{qualifying_count} with at least {min_turns} turns; need at least two to "
+        f"say whether characters sound different from each other")
     return [
         finding("dialogue.speaker_question_rate", "Spread of per-speaker question rate", None,
                 "per 100 turns", family=FAMILY, sample_size=qualifying_count,
@@ -120,11 +131,28 @@ def _unavailable(qualifying_count: int, total_count: int, method: str,
 def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
             profile: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     min_turns = int(option(config, "min_turns", 8))
+    min_coverage = float(option(config, "min_attributed_share", 25.0))
     groups, method = identify_speakers(analysis)
     qualifying = {name: turns for name, turns in groups.items() if len(turns) >= min_turns}
 
     if len(qualifying) < 2:
         return _unavailable(len(qualifying), len(groups), method, min_turns)
+
+    # How much of the dialogue this attribution actually accounts for. A
+    # per-speaker rate read off a tenth of the turns is not comparable with one
+    # read off nearly all of them, and Victorian prose tags almost every turn
+    # while modern prose drops the tag once a two-hander is established. Left
+    # ungated, these metrics rank by how explicitly a book attributes speech.
+    attributed = sum(len(turns) for turns in groups.values())
+    total_turns = len(analysis.turns) if method == "tag" else attributed
+    coverage = 100.0 * attributed / total_turns if total_turns else 0.0
+    if method == "tag" and coverage < min_coverage:
+        reason = (f"only {coverage:.0f}% of {total_turns} spoken turns could be attributed to a "
+                  f"speaker (speech tag with a nearby capitalized name), below the "
+                  f"{min_coverage:.0f}% these rates need to be comparable; a book that drops "
+                  f"the tag once a two-hander is established cannot be held against one that "
+                  f"tags every turn")
+        return _unavailable(len(qualifying), len(groups), method, min_turns, reason)
 
     rows = []
     for name, turns in qualifying.items():
@@ -138,7 +166,7 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
             "contraction_rate": contraction_rate,
         })
     rows.sort(key=lambda row: -row["turns"])
-    evidence = rows[:EVIDENCE_LIMIT]
+    evidence = [{"attributed_turn_share": round(coverage, 1), "method": method}] + rows[:EVIDENCE_LIMIT]
 
     def spread(key: str) -> dict[str, Any]:
         return summarize([row[key] for row in rows if row[key] is not None])
