@@ -72,7 +72,12 @@ def test_every_bundled_report_runs_clean_with_no_policy(name, tmp_path, sample_t
     manuscript.write_text(sample_text, encoding="utf-8")
     (tmp_path / "chapters" / "01_one.md").write_text(sample_text, encoding="utf-8")
 
-    arguments = [part.format(manuscript=str(manuscript)) for part in grade.BUNDLED_MEASURES[name]]
+    # Through grade.py's own resolver, not a second copy of it: the templates
+    # name a closed set of targets and the test should not have to learn them.
+    arguments = grade.measure_arguments(
+        name, manuscript,
+        {"_config_dir": str(tmp_path), "_config_path": str(config),
+         "chapters_dir": "chapters"})
     completed = subprocess.run(
         [sys.executable, "-m", f"textgrader.reports.{name}", *arguments],
         cwd=tmp_path, capture_output=True, text=True, timeout=180,

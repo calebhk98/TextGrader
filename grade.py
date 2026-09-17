@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from textgrader.project import CONFIG_ENV_VAR, config_path, load_config
+from textgrader.project import CONFIG_ENV_VAR, config_path, load_config, project_path
 from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings,
                                  TextProcessing, resolve_unit, units_comparable)
 from textgrader.core_metrics import measure as core_measure
@@ -278,6 +278,32 @@ def run_metric_process(metric_id, command):
                              error=f"invalid metric JSON: {exc}")]
 
 
+def measure_arguments(name, manuscript, config):
+    """Resolve one report's argument template against this run.
+
+    Kept here, and used by the tests too, because the templates are a closed
+    vocabulary: a second copy of this formatting is a second place that has to
+    learn each new target word.
+    """
+
+    manuscript = Path(manuscript)
+    # A report asking for the chapters directory gets it only if it is really
+    # there. Falling back to the manuscript keeps a project that keeps no
+    # chapters directory working, at the single-unit output those reports
+    # degenerate to - which is what every report got before, so this is no
+    # worse for that project and correct for the ones that do have chapters.
+    try:
+        chapters_dir = project_path("chapters_dir", "chapters", config)
+    except (KeyError, TypeError, OSError):
+        chapters_dir = None
+    if not (chapters_dir and chapters_dir.is_dir() and any(chapters_dir.glob("*.md"))):
+        chapters_dir = manuscript
+    return [part.format(manuscript=str(manuscript),
+                        chapters_dir=str(chapters_dir),
+                        manuscript_dir=str(manuscript.parent))
+            for part in BUNDLED_MEASURES[name]]
+
+
 def run_bundled_measure(name, manuscript, config, timeout=120):
     """Run a bundled report as a structured metric, never via a shell.
 
@@ -287,10 +313,8 @@ def run_bundled_measure(name, manuscript, config, timeout=120):
     repository's own ``config.json``.
     """
 
-    arguments = [part.format(manuscript=str(manuscript),
-                             manuscript_dir=str(manuscript.parent))
-                 for part in BUNDLED_MEASURES[name]]
-    command = [sys.executable, "-m", f"textgrader.reports.{name}", *arguments]
+    command = [sys.executable, "-m", f"textgrader.reports.{name}",
+               *measure_arguments(name, manuscript, config)]
     environment = {**os.environ, "HALSTEAD_VIA_GRADE": "1",
                    CONFIG_ENV_VAR: str(config.get("_config_path", config_path())),
                    # ``-m`` resolves the package from the working directory, and
