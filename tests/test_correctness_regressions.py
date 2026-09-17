@@ -53,5 +53,61 @@ class CorrectnessRegressions(unittest.TestCase):
         self.assertIn("nothing with at least 8 lines", output.getvalue())
 
 
+class BundledFrequencyTable(unittest.TestCase):
+    """The bundled Lexile source, which no default run exercises.
+
+    ``word_frequency`` used to reference ``json`` in a module that never
+    imported it.  The resulting NameError was not caught by the loader's
+    ``except (OSError, ValueError)``, so it escaped ``measure`` and was
+    swallowed one level up by the whole-analysis handler in ``grade.py``:
+    turning Lexile on cost every core metric, not just Lexile, and the run
+    still exited zero.  Anything non-default needs a test that runs it.
+    """
+
+    def setUp(self):
+        prose_grade._FREQ_CACHE.clear()
+
+    tearDown = setUp
+
+    def test_every_frequency_source_loads_without_raising(self):
+        for source in prose_grade.FREQUENCY_SOURCES:
+            with self.subTest(source=source):
+                self.assertIsInstance(prose_grade.word_frequency(source), dict)
+
+    def test_bundled_table_is_the_rates_not_the_file_around_them(self):
+        # The file is {"tokens": ..., "freq_per_million": {word: rate}}.
+        # Reading the outer object gave a two-key dict, every lookup missed,
+        # every word counted as rare and Lexile came back ~400 points high.
+        table = prose_grade.word_frequency("bundled")
+        self.assertGreater(len(table), 1000)
+        self.assertGreater(table.get("the", 0), 0)
+
+    def test_bundled_lexile_is_plausible_and_costs_no_other_metric(self):
+        text = " ".join(["the quiet room held a long silence while she waited."] * 60)
+        without = prose_grade.measure(text, floor=1, lexile_source="none")
+        with_lexile = prose_grade.measure(text, floor=1, lexile_source="bundled")
+        self.assertIsNone(without["lexile"])
+        self.assertEqual(set(without), set(with_lexile))
+        for key in without:
+            if key != "lexile":
+                self.assertEqual(without[key], with_lexile[key], key)
+        self.assertTrue(200 < with_lexile["lexile"] < 1800, with_lexile["lexile"])
+
+    def test_an_unreadable_table_costs_only_lexile(self):
+        # A loader failure must degrade to a missing Lexile, never to a
+        # missing core analysis.
+        text = " ".join(["the quiet room held a long silence while she waited."] * 60)
+        original = prose_grade.WORDFREQ
+        broken = Path(tempfile.mkdtemp()) / "word_frequency.json"
+        broken.write_text("{not json at all", encoding="utf-8")
+        prose_grade.WORDFREQ = broken
+        try:
+            result = prose_grade.measure(text, floor=1, lexile_source="bundled")
+        finally:
+            prose_grade.WORDFREQ = original
+        self.assertIsNone(result["lexile"])
+        self.assertIsNotNone(result["fk"])
+
+
 if __name__ == "__main__":
     unittest.main()
