@@ -25,7 +25,8 @@ import sys
 import time
 from pathlib import Path
 
-from textgrader.project import CONFIG_ENV_VAR, config_path, load_config, project_path
+from textgrader.project import (CONFIG_ENV_VAR, near_miss, config_path,
+                                load_config, project_path)
 from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings,
                                  TextProcessing, resolve_unit, units_comparable)
 from textgrader.core_metrics import measure as core_measure
@@ -457,7 +458,46 @@ def analyze(path, config):
     return _analyze(config, report, path=path)
 
 
+def configuration_results(config):
+    """Report the configuration's own shape as results, not as an exception.
+
+    An unrecognised key used to be read, stored and never looked at again. It
+    produced no warning, no note in the JSON, and no non-zero exit, so a
+    misspelt key was indistinguishable from a report that ran and found
+    nothing - and configuration is this tool's whole extension mechanism.
+
+    These surface the way every other limitation here surfaces: a visible
+    result with a warning naming the key. A run still never fails on one.
+    """
+
+    results = []
+    for issue in config.get("_config_issues", []):
+        results.append(MetricResult(f"config.{issue['key']}", "Configuration",
+                                    status="unavailable",
+                                    status_type=StatusType.UNAVAILABLE,
+                                    family="configuration", warning=issue["message"]))
+    # ``metrics`` and ``project_measures`` are keyed by metric and report name,
+    # which only this module knows, so project.py cannot check them.
+    known = set(REGISTRY) | set(BUNDLED_MEASURES)
+    for section in ("metrics", "project_measures"):
+        values = config.get(section)
+        if not isinstance(values, dict):
+            continue
+        for key in sorted(values):
+            if str(key).startswith("_") or key in known:
+                continue
+            suggestion = near_miss(key, known)
+            results.append(MetricResult(
+                f"config.{section}.{key}", "Configuration", status="unavailable",
+                status_type=StatusType.UNAVAILABLE, family="configuration",
+                warning=f"unrecognised name {key!r} under {section!r}; no such metric "
+                        "or report, so this entry does nothing"
+                        + (f". Did you mean {suggestion!r}?" if suggestion else "")))
+    return results
+
+
 def _analyze(config, report, path=None, text=None):
+    report.results.extend(configuration_results(config))
     settings = config.get("analysis", {}) or {}
     try:
         processing = TextProcessing.from_config(config.get("text_processing"))

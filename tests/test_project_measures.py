@@ -121,3 +121,88 @@ def test_build_manuscript_checks_what_its_docstring_promises(tmp_path):
     # The docstring promised gap and heading checks that check() never made.
     assert "gap" in source.lower()
     assert "heading" in source.lower()
+
+
+def test_an_unknown_config_key_is_reported_not_swallowed(tmp_path):
+    """A misspelt key used to be read, stored and never looked at again.
+
+    Adding "totally_made_up_key": "banana" to a working config produced
+    byte-identical output to leaving it out: no warning, no note in the JSON
+    report, no non-zero exit. Configuration is this tool's whole extension
+    mechanism, so a key that does nothing has to say so.
+    """
+
+    from textgrader.project import config_issues
+    issues = config_issues({
+        "manuscript": "draft.md",
+        "reading_grade_bands": {"1-10": 5.5},
+        "scorecard": {"enabled": True},
+        "maturity_percentile": {"benchmark": "peter_pan"},
+        "totally_made_up_key": "banana",
+    })
+    reported = {issue["key"] for issue in issues}
+    assert reported == {"reading_grade_bands", "scorecard",
+                        "maturity_percentile", "totally_made_up_key"}
+    assert all(issue["kind"] == "unknown" for issue in issues)
+
+
+def test_a_near_miss_key_suggests_the_real_one(tmp_path):
+    from textgrader.project import config_issues
+    issues = config_issues({"chapters_dr": "chapters",
+                            "analysis": {"comparison_unt": "book"}})
+    messages = " ".join(issue["message"] for issue in issues)
+    assert "'chapters_dir'" in messages
+    assert "'comparison_unit'" in messages
+
+
+def test_a_comment_key_is_not_a_typo():
+    # JSON has no comments, so "_comment" is how every example config in this
+    # repository documents itself. Flagging those would train people to ignore
+    # the warning, which costs more than the check is worth.
+    from textgrader.project import config_issues
+    assert config_issues({"_comment": "explanatory", "manuscript": "draft.md"}) == []
+
+
+def test_the_shipped_configs_are_clean():
+    # If the tool's own configuration cannot pass its own check, nobody will
+    # believe the check.
+    from textgrader.project import config_issues
+    for name in ("config.json", "examples/project_measures.example.json"):
+        assert config_issues(json.loads((ROOT / name).read_text(encoding="utf-8"))) == [], name
+
+
+def test_an_advertised_but_unimplemented_rule_says_so():
+    # config.json advertises project_rules.hard_line_breaks and chapter_length
+    # and nothing reads either. Shipping them as null is fine; a user who sets
+    # one is waiting for an effect that never arrives.
+    from textgrader.project import config_issues
+    issues = config_issues({"project_rules": {"chapter_length": {"min": 900},
+                                              "hard_line_breaks": "forbid",
+                                              "em_dash": "forbid"}})
+    assert {issue["key"] for issue in issues} == {"project_rules.chapter_length",
+                                                  "project_rules.hard_line_breaks"}
+    assert all(issue["kind"] == "unimplemented" for issue in issues)
+
+
+def test_an_unknown_metric_name_is_reported_against_the_live_registry(tmp_path, base_config):
+    results = grade.configuration_results({**base_config,
+                                           "metrics": {"registre": True, "register": True}})
+    warnings = [item.warning for item in results]
+    assert any("registre" in text and "'register'" in text for text in warnings)
+    assert not any("'registre'" == text for text in warnings if text)
+
+
+def test_a_run_still_exits_zero_with_a_bad_key(tmp_path, capsys, sample_text):
+    # A run never fails. An unrecognised key is a visible result, not an exit
+    # code and not an exception.
+    manuscript = tmp_path / "draft.md"
+    manuscript.write_text(sample_text, encoding="utf-8")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"manuscript": "draft.md", "corpus_profile": "",
+                                  "metrics": {}, "totally_made_up_key": "banana"}),
+                      encoding="utf-8")
+    assert grade.main([str(manuscript), "--config", str(config), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    configuration = [item for item in payload["results"] if item["family"] == "configuration"]
+    assert [item["metric_id"] for item in configuration] == ["config.totally_made_up_key"]
+    assert configuration[0]["action"] == "unavailable"

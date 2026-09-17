@@ -101,6 +101,14 @@ Project rules are the only thing reported as a violation, and are off until
 configured; patterns are compiled and bounded at load, so a bad one is a
 visible result rather than an exception or a hang.
 
+Keys are checked at load. An unrecognised one is reported as a
+`config.<key>` result with `action: "unavailable"`, naming the key and
+suggesting the intended spelling when it is close, because a key nothing reads
+is otherwise indistinguishable from a measure that ran and found nothing. A run
+still exits zero. Keys beginning with `_` are treated as comments, since JSON
+has none. `project_rules.hard_line_breaks` and `project_rules.chapter_length`
+are recognised but unimplemented, and say so if you set them.
+
 ## Corpus
 
 Grading needs a profile, not the books. Acquire, profile, then check the
