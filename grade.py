@@ -811,6 +811,15 @@ def render(report):
 def print_maturity(maturity):
     """The aggregate, and where to start if a benchmark is configured."""
 
+    benchmark = maturity["benchmark"]
+    # A misnamed benchmark is reported even when there is no aggregate to
+    # print. Without a corpus profile the percentile is None, and returning
+    # early here would swallow a configured-but-wrong benchmark completely,
+    # which is the failure mode the rest of this work exists to remove.
+    if benchmark and benchmark.get("error"):
+        print(f"\n  benchmark unavailable: {benchmark['error']}")
+        if maturity["percentile"] is None:
+            return
     if maturity["percentile"] is None:
         return
     # The printed label and the JSON key are the same word on purpose. A
@@ -818,10 +827,8 @@ def print_maturity(maturity):
     # this repository's TTR column came to hold MSTTR.
     line = (f"\n  maturity percentile (median of {maturity['metric_count']} "
             f"oriented measures): {maturity['percentile']:.0f}")
-    benchmark = maturity["benchmark"]
     if benchmark and benchmark.get("error"):
         print(line)
-        print(f"  benchmark unavailable: {benchmark['error']}")
         return
     if benchmark and benchmark["of"]:
         line += f"      behind {benchmark['name']} on {benchmark['lost']} of {benchmark['of']}"

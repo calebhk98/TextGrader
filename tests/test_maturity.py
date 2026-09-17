@@ -171,3 +171,23 @@ def test_benchmark_is_a_recognised_config_key():
     # bug the configuration check exists for.
     from textgrader.project import config_issues
     assert config_issues({"analysis": {"benchmark": "peter_pan"}}) == []
+
+
+def test_a_misnamed_benchmark_is_reported_even_with_no_aggregate(capsys):
+    # Without a corpus profile the percentile is None. Returning early on that
+    # would swallow a configured-but-wrong benchmark completely.
+    grade.print_maturity({"percentile": None, "metric_count": 0,
+                          "benchmark": {"name": "peter_panne", "error": "no text named "
+                                        "'peter_panne' in the corpus profile",
+                                        "available": [], "gaps": [], "lost": 0, "of": 0}})
+    assert "peter_panne" in capsys.readouterr().out
+
+
+def test_a_misnamed_benchmark_is_reported_beside_the_aggregate(capsys):
+    grade.print_maturity({"percentile": 78.0, "metric_count": 18,
+                          "benchmark": {"name": "nope", "error": "no text named 'nope' "
+                                        "in the corpus profile",
+                                        "available": [], "gaps": [], "lost": 0, "of": 0}})
+    printed = capsys.readouterr().out
+    assert "nope" in printed
+    assert "78" in printed

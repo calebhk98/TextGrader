@@ -285,8 +285,15 @@ def main(argv=None):
 
     note_suffix = "" if speakers else ("  (no project_measures.voice_separation.speakers "
                                        "configured; speakers were auto-discovered and may be noisy)")
-    chat_note_suffix = note_suffix if settings.get("chat_speakers") is None else (
-        "" if chat_speakers else "  (chat_speakers is configured but empty; nothing to attribute)")
+    # An EMPTY chat_speakers is not "nothing to attribute": collect_chat falls
+    # back to discovery whenever its list is empty, however it got that way,
+    # so the note has to say discovery rather than silence.
+    discovery_note = ("  (speakers were auto-discovered from generic 'name: message' "
+                      "lines and may be noisy)")
+    if settings.get("chat_speakers") is None:
+        chat_note_suffix = note_suffix
+    else:
+        chat_note_suffix = "" if chat_speakers else discovery_note
     both = not (args.chat or args.prose)
     if args.chat or both:
         show("GROUP CHAT", collect_chat(paths, chat_speakers), min_lines,
