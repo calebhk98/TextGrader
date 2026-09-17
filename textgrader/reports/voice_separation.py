@@ -265,6 +265,15 @@ def main(argv=None):
     paths = resolve_paths(args.paths, chapters_dir)
 
     speakers = [name for name in settings.get("speakers", []) if isinstance(name, str)]
+    # The two channels have different casts, and merging them misattributes.
+    # A book's chat participants are usually a handful of the prose cast, so a
+    # prose-only name in the chat regex turns any line shaped "Name: text" -
+    # which ordinary prose produces - into a chat message from someone who
+    # never posts. Measured on a real manuscript, that credited 46 chat lines
+    # to a character with zero. chat_speakers falls back to speakers, so a
+    # project with one cast configures one list and nothing changes for it.
+    chat_speakers = [name for name in settings.get("chat_speakers", speakers)
+                     if isinstance(name, str)]
     titles = settings.get("titles", DEFAULT_TITLES)
     speech_verbs = settings.get("speech_verbs", DEFAULT_SPEECH_VERBS)
     hedges = settings.get("hedges", DEFAULT_HEDGES)
@@ -276,10 +285,12 @@ def main(argv=None):
 
     note_suffix = "" if speakers else ("  (no project_measures.voice_separation.speakers "
                                        "configured; speakers were auto-discovered and may be noisy)")
+    chat_note_suffix = note_suffix if settings.get("chat_speakers") is None else (
+        "" if chat_speakers else "  (chat_speakers is configured but empty; nothing to attribute)")
     both = not (args.chat or args.prose)
     if args.chat or both:
-        show("GROUP CHAT", collect_chat(paths, speakers), min_lines,
-             "exact attribution, every message counted" + note_suffix, hedges)
+        show("GROUP CHAT", collect_chat(paths, chat_speakers), min_lines,
+             "exact attribution, every message counted" + chat_note_suffix, hedges)
     if args.prose or both:
         show("PROSE DIALOGUE", collect_prose(paths, speakers, titles, speech_verbs), min_lines,
              "tagged lines only, biased short AND against questions - never read a 0 as real" + note_suffix,
@@ -287,6 +298,11 @@ def main(argv=None):
     if not speakers:
         print("\n  project_measures.voice_separation.speakers would turn discovery into exact "
               "attribution for both channels above.")
+    elif settings.get("chat_speakers") is None and (args.chat or both):
+        print("\n  the group chat above was attributed with the full prose cast. If only some "
+              "of them post, set project_measures.voice_separation.chat_speakers: a prose-only "
+              "name matches any line shaped 'Name: text' and credits messages to someone who "
+              "never posts.")
     return 0
 
 

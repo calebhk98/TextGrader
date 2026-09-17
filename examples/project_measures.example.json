@@ -2,7 +2,7 @@
   "_comment": "EXAMPLE configuration extracted from one specific manuscript's legacy measures/ scripts during the pass that removed that manuscript's content from the shared codebase. This is a ready-to-paste EXAMPLE for one project, not a shipped default: the repository's own config.json ships project_measures: {}. Copy only the sections your own project wants into your own config.json; values here (cast lists, per-chapter exemptions, target bands, formatting policy) describe somebody else's book.",
   "project_measures": {
     "voice_separation": {
-      "_comment": "Originally two separate lists: CAST, the seven names who ever post in a group chat embedded in the later chapters, and SPEAKERS, the full 30-name prose cast used to tag quoted dialogue. The rewritten script uses one 'speakers' list for both channels; chat lines from a name not in this list are simply not attributed.",
+      "_comment": "Two channels, two casts. 'speakers' is the full prose cast used to tag quoted dialogue; 'chat_speakers' is the smaller list of names who ever post in the group chat embedded in the later chapters. They are separate because the chat matcher keys on lines shaped 'Name: text', which ordinary prose also produces: a prose-only name in the chat list credits messages to a character who never posts. Omit 'chat_speakers' and it falls back to 'speakers', which is right for a book with one cast.",
       "speakers": [
         "Chloe",
         "Ruth",
@@ -36,14 +36,14 @@
         "Deb",
         "Ruiz"
       ],
-      "chat_participants_reference_only": [
-        "chloe",
-        "ruth",
-        "sam",
-        "kavi",
-        "nadia",
-        "eli",
-        "theo"
+      "chat_speakers": [
+        "Chloe",
+        "Ruth",
+        "Sam",
+        "Kavi",
+        "Nadia",
+        "Eli",
+        "Theo"
       ],
       "min_lines": 8
     },
@@ -280,7 +280,7 @@
     },
     "check_edits": {
       "require_heading_prefix": "## ",
-      "dateline_pattern": "^\\*[A-Z][a-z]+ \\d{4}(?:\\s*[–-]\\s*[A-Z][a-z]+ \\d{4})?\\*$",
+      "dateline_pattern": "^\\*[A-Z][a-z]+ \\d{4}(?:\\s*[\u2013-]\\s*[A-Z][a-z]+ \\d{4})?\\*$",
       "dateline_line": 3,
       "forbid_em_dash": true,
       "quote_style": "straight",

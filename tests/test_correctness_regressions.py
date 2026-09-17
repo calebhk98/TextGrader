@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from textgrader import core_metrics as prose_grade
 from textgrader.chapters import chapter_number
-from textgrader.reports.voice_separation import profile, show
+from textgrader.reports.voice_separation import collect_chat, profile, show
 
 
 class CorrectnessRegressions(unittest.TestCase):
@@ -92,6 +92,44 @@ class CorrectnessRegressions(unittest.TestCase):
         with redirect_stdout(io.StringIO()) as output:
             show("voices", {}, 8, "test")
         self.assertIn("nothing with at least 8 lines", output.getvalue())
+
+
+class PerChannelCast(unittest.TestCase):
+    """The chat and prose channels have different casts.
+
+    The rewrite merged a book's seven chat participants and its thirty-name
+    prose cast into one ``speakers`` list used for both. The chat regex is
+    ``^(name1|name2|...): (.+)$``, so a prose-only name matches any line
+    shaped "Name: text" - which ordinary prose produces - and credits chat
+    messages to someone who never posts.
+    """
+
+    def _chapters(self):
+        directory = Path(tempfile.mkdtemp())
+        (directory / "01_chat.md").write_text(
+            "\n".join(f"{who}: {msg}" for who, msg in
+                      [("Chloe", "are you coming to the thing or not"),
+                       ("Ruth", "i think so maybe later on tonight"),
+                       ("Sam", "cant sorry busy with the whole thing")] * 6),
+            encoding="utf-8")
+        (directory / "02_prose.md").write_text(
+            "\n".join(["Deb: the word came out flat and nobody said anything at all."] * 6),
+            encoding="utf-8")
+        return sorted(directory.glob("*.md"))
+
+    def test_a_prose_only_name_is_not_a_chat_speaker(self):
+        paths = self._chapters()
+        merged = collect_chat(paths, ["Chloe", "Ruth", "Sam", "Deb"])
+        self.assertEqual(len(merged["deb"]), 6)   # the regression, reproduced
+        split = collect_chat(paths, ["Chloe", "Ruth", "Sam"])
+        self.assertNotIn("deb", split)
+        self.assertEqual(sorted(split), ["chloe", "ruth", "sam"])
+
+    def test_chat_speakers_defaults_to_speakers(self):
+        # A project with one cast configures one list and nothing changes.
+        settings = {"speakers": ["Chloe", "Ruth"]}
+        chat_speakers = settings.get("chat_speakers", settings["speakers"])
+        self.assertEqual(chat_speakers, ["Chloe", "Ruth"])
 
 
 class BundledFrequencyTable(unittest.TestCase):
