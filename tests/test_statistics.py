@@ -1,5 +1,7 @@
 """The statistics layer decides what counts as a finding, so it is tested hard."""
 
+import random
+
 import pytest
 
 from textgrader import stats
@@ -100,3 +102,66 @@ def test_empty_and_degenerate_samples_are_safe():
     assert stats.two_group_split([1, 1, 1]) is None
     assert stats.compare(None, [1, 2, 3]).severity is None
     assert stats.compare(1, []).corpus_median is None
+
+
+def test_double_mad_reduces_to_mad_on_a_symmetric_sample():
+    """Scaling each side separately must not change a well-behaved metric."""
+
+    import statistics as stdlib
+    rng = random.Random(11)
+    sample = [rng.gauss(0, 1) for _ in range(2000)]
+    median = stdlib.median(sample)
+    pooled = stdlib.median([abs(value - median) for value in sample])
+    low, high = stats.double_mad(sample, median)
+    assert low == pytest.approx(pooled, rel=0.05)
+    assert high == pytest.approx(pooled, rel=0.05)
+
+
+def test_a_floored_skewed_metric_does_not_flag_its_own_population():
+    """The defect leave-one-out validation over thirty published novels found.
+
+    Second-person pronouns in narration are floored at zero and right-skewed.
+    Half the corpus sits near zero, so the pooled MAD is tiny and every book in
+    the long upper tail scores past 3.5. These are the real measured values.
+    """
+
+    corpus = [0.0, 0.0, 0.0, 0.03, 0.04, 0.05, 0.05, 0.2, 0.3, 0.4, 0.4, 0.5,
+              0.77, 0.92, 0.98, 1.28, 2.0, 2.07, 2.23, 2.34, 3.46, 4.95, 5.52,
+              10.34, 10.62, 11.1, 15.3, 15.53, 15.97, 21.48]
+    flagged = 0
+    for value in corpus:
+        rest = list(corpus)
+        rest.remove(value)
+        result = stats.compare(value, rest)
+        assert result.method == "median/double-MAD"
+        flagged += bool(result.outlier)
+    # Every one of these books belongs to the population. Under the pooled MAD
+    # seven of thirty were called outliers.
+    assert flagged <= 1, f"{flagged} of {len(corpus)} members flagged as outliers"
+
+
+def test_an_asymmetric_scale_is_reported_not_hidden():
+    """A different scale on each side is a fact the reader gets told."""
+
+    corpus = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+              1.1, 1.2, 1.3, 1.4, 1.5, 3.0, 5.0, 9.0, 14.0, 22.0]
+    result = stats.compare(14.0, corpus)
+    assert result.method == "median/double-MAD"
+    assert result.scale is not None and result.scale > 0
+    assert any("asymmetric" in note for note in result.notes)
+
+
+def test_a_median_tied_distribution_falls_through_to_the_range():
+    """More than half the corpus at one value leaves no spread to scale by."""
+
+    corpus = [0.0] * 15 + [1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0]
+    result = stats.compare(21.0, corpus)
+    assert result.method == "median/IQR"
+    assert any("zero on both sides" in note for note in result.notes)
+
+
+def test_a_genuine_outlier_is_still_caught():
+    rng = random.Random(4)
+    corpus = [rng.gauss(50, 5) for _ in range(40)]
+    assert stats.compare(120.0, corpus).outlier is True
+    assert stats.compare(51.0, corpus).outlier is False

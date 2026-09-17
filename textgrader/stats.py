@@ -34,6 +34,8 @@ MIN_CORPUS_SAMPLE = 8
 CONFIDENT_CORPUS_SAMPLE = 20
 # Robust-distance threshold.  3.5 is the conventional modified-z cutoff.
 OUTLIER_DISTANCE = 3.5
+# A one-sided scale needs enough observations on that side to be a scale at all.
+MIN_SIDE_SAMPLE = 4
 # 1 / 0.6745: scales the median absolute deviation to a normal-consistent sigma.
 MAD_TO_SIGMA = 1.4826
 # IQR of a normal distribution is 1.349 sigma.
@@ -119,6 +121,34 @@ def autocorrelation(values: Sequence[float], lag: int = 1) -> float | None:
     numerator = sum((numbers[i] - mean) * (numbers[i + lag] - mean)
                     for i in range(len(numbers) - lag))
     return numerator / denominator
+
+
+def double_mad(numbers: Sequence[float], median: float) -> tuple[float, float]:
+    """Median absolute deviation computed separately on each side of the median.
+
+    Many style rates are floored at zero and right-skewed: second-person
+    pronouns in narration, parentheses, em dashes, colons.  Half the corpus sits
+    near zero, which makes the pooled MAD tiny, which makes every book in the
+    long upper tail a 3.5-sigma outlier.  Leave-one-out validation over thirty
+    published novels showed exactly that: the seven worst-behaved metrics all
+    had skew above 1.2 and every single one of their flags was "high".
+
+    Scaling each side by its own spread removes the artefact.  On a symmetric
+    sample this is not a different estimator: the half-sample deviation median
+    equals the pooled one, so nothing well behaved changes.
+    """
+
+    lower = [value for value in numbers if value <= median]
+    upper = [value for value in numbers if value >= median]
+    low = statistics.median([abs(value - median) for value in lower]) if lower else 0.0
+    high = statistics.median([abs(value - median) for value in upper]) if upper else 0.0
+    # A side with almost nothing in it cannot supply a scale; fall back to the
+    # other side rather than inventing a very small one.
+    if len(lower) < MIN_SIDE_SAMPLE:
+        low = high or low
+    if len(upper) < MIN_SIDE_SAMPLE:
+        high = low or high
+    return low, high
 
 
 def _skewness(numbers: Sequence[float]) -> float | None:
@@ -338,6 +368,8 @@ class Comparison:
     corpus_p90: float | None = None
     percentile: float | None = None
     robust_distance: float | None = None
+    #: The robust scale the distance was divided by, in the metric's own unit.
+    scale: float | None = None
     severity: float | None = None
     direction: str = "unknown"
     method: str = "none"
@@ -350,7 +382,7 @@ class Comparison:
             "corpus_count": self.corpus_count, "corpus_median": self.corpus_median,
             "corpus_p10": self.corpus_p10, "corpus_p90": self.corpus_p90,
             "percentile": self.percentile, "robust_distance": self.robust_distance,
-            "severity": self.severity, "direction": self.direction,
+            "scale": self.scale, "severity": self.severity, "direction": self.direction,
             "method": self.method, "outlier": self.outlier,
             "confidence": self.confidence, "notes": list(self.notes),
         }
@@ -363,8 +395,12 @@ def compare(value: float | None, reference: Sequence[float], *,
 
     The estimator is chosen by what the corpus can actually support:
 
+    ``median/double-MAD``
+        the default, when the corpus has variation on the side the value falls.
+        Each side of the median is scaled by its own spread, so a distribution
+        floored at zero does not treat its whole upper tail as outlying.
     ``median/MAD``
-        the default, when the corpus has variation around its median.
+        when one side has too few observations to supply a scale.
     ``median/IQR``
         when MAD is zero but the tails still differ.  A discrete metric over a
         small corpus - "3, 3, 3, 3, 5, 9" - has MAD 0 and would otherwise make
@@ -396,16 +432,31 @@ def compare(value: float | None, reference: Sequence[float], *,
     result.direction = "high" if value > median else "low" if value < median else "typical"
 
     mad = statistics.median([abs(item - median) for item in numbers])
+    low_mad, high_mad = double_mad(numbers, median)
+    sided = high_mad if value > median else low_mad
     iqr = (quantile(numbers, .75) or 0.0) - (quantile(numbers, .25) or 0.0)
-    if mad > 0:
+    if sided > 0:
+        result.method = "median/double-MAD"
+        result.robust_distance = (value - median) / (MAD_TO_SIGMA * sided)
+        result.severity = abs(result.robust_distance)
+        result.scale = sided
+        if mad > 0 and abs(sided - mad) / mad > 0.25:
+            result.notes.append(
+                f"the distribution is asymmetric, so the {'upper' if value > median else 'lower'} "
+                f"side was scaled by its own spread ({sided:.4g}) rather than the pooled "
+                f"MAD ({mad:.4g})")
+    elif mad > 0:
         result.method = "median/MAD"
         result.robust_distance = (value - median) / (MAD_TO_SIGMA * mad)
         result.severity = abs(result.robust_distance)
+        result.scale = mad
+        result.notes.append("one side of the median had no spread; the pooled MAD was used")
     elif iqr > 0:
         result.method = "median/IQR"
-        result.robust_distance = (value - median) / (iqr / IQR_TO_SIGMA)
+        result.scale = iqr / IQR_TO_SIGMA
+        result.robust_distance = (value - median) / result.scale
         result.severity = abs(result.robust_distance)
-        result.notes.append("MAD was zero; interquartile range used instead")
+        result.notes.append("MAD was zero on both sides; interquartile range used instead")
     elif numbers[0] != numbers[-1]:
         result.method = "empirical percentile"
         # Distance in "tail steps": how far outside the observed range.

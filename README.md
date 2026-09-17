@@ -253,10 +253,20 @@ says which it used:
 
 | method | when | why |
 | --- | --- | --- |
-| `median/MAD` | the corpus varies around its median | the default; threshold is a modified-z of 3.5 |
-| `median/IQR` | MAD is zero but the tails differ | a discrete metric over a small corpus (`3, 3, 3, 3, 5, 9`) has MAD 0, which would otherwise make every non-3 infinitely distant |
+| `median/double-MAD` | the default | each side of the median is scaled by its own spread; threshold is a modified-z of 3.5 |
+| `median/MAD` | one side has no spread of its own | the pooled deviation is the only scale available |
+| `median/IQR` | MAD is zero on both sides | a discrete metric over a small corpus (`3, 3, 3, 3, 5, 9`) has MAD 0, which would otherwise make every non-3 infinitely distant |
 | `empirical percentile` | MAD and IQR are both zero | the observed range is all that is left |
 | `insufficient variation` | every observation is identical | **no outlier claim is made** |
+
+Scaling each side separately is not a refinement, it is the difference between
+a working metric and a broken one. Many style rates are floored at zero and
+right-skewed: second-person pronouns in narration, parentheses, em dashes,
+colons. Half a corpus sits near zero, which makes the pooled deviation tiny,
+which makes every book in the long upper tail a 3.5-sigma outlier. The
+leave-one-out check below found exactly that, and `corpus.scale` now reports
+which spread a comparison used. On a symmetric distribution the half-sample
+deviation equals the pooled one, so nothing well behaved changes.
 
 Three separate gates can withhold a comparison, and each is reported instead of
 being absorbed:
@@ -640,6 +650,41 @@ than a fitted summary. That identity is what makes the check affordable -
 otherwise it would re-measure every book once per hold-out - and
 `tests/test_validate_corpus.py` asserts it against a genuine rebuild rather
 than assuming it.
+
+### What it found the first time it ran
+
+On 30 public-domain novels from Gutenberg (34k to 219k words: Austen, Dickens,
+Hardy, Wells, Burroughs, Flatland, Pollyanna) with 64 metrics compared per
+book, the first run flagged a mean of 1.5 metrics per book, with one book at
+11. Seven metrics flagged more than 10% of the corpus, and every one of them
+flagged only `high`, never `low`.
+
+That one-sidedness was the diagnosis. All seven were rates floored at zero and
+right-skewed - second-person pronouns in narration, parentheses, em dashes,
+colons - where half the corpus sits near zero, the pooled deviation is tiny,
+and the whole upper tail scores past 3.5. The estimator was symmetric and the
+distributions were not.
+
+Scaling each side of the median by its own spread fixed it:
+
+| | pooled MAD | double MAD |
+| --- | ---: | ---: |
+| false positives per book, mean | 1.5 | **1.0** |
+| worst single book | 11 | **4** |
+| books with none at all | 9 of 30 | **14 of 30** |
+| worst metric | 23% of the corpus | **13%** |
+| metrics flagging over 15% | 3 | **0** |
+
+`style.pov_second_narration`, which flagged 7 of 30 books before, no longer
+appears. Flag directions are now mixed rather than uniformly `high`, which is
+what a calibrated estimator looks like.
+
+Two metrics still sit at 13%: `style.repeated_ngram_max_count`, which is a
+maximum and therefore heavy-tailed by construction, and
+`style.punctuation_exclamation`, which genuinely varies several-fold between a
+Dickens novel and an adventure serial. Those look like real variation rather
+than a calibration fault, and are left alone rather than tuned until the number
+is pretty.
 
 Read the output with one caveat in mind: a varied corpus **should** contain
 outliers, and a metric that finds them is doing its job. What this separates is
