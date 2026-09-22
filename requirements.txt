@@ -57,3 +57,13 @@ textdescriptives>=2.8
 # Test runner.  The suite is pytest-based; `unittest discover` silently skipped
 # the pytest-style tests in tests/test_build_corpus.py.
 pytest>=7.0
+
+# Extra compression channels for the randomness/compression/entropy suite
+# (textgrader.metrics.randomness_suite).  zlib, gzip, bz2 and lzma need none of
+# these; each package below backs exactly one additional compressor and
+# degrades to a visible "unavailable" finding, never a crash, if it is absent.
+zstandard>=0.21
+brotli>=1.1
+lz4>=4.3
+python-snappy>=0.6
+pyppmd>=1.1
