@@ -627,6 +627,8 @@ def test_catch24_through_the_suite_uses_its_own_lower_minimum_length():
     # catch24's two extras are ordinary summary statistics, not nonlinear/
     # scaling estimates, so they should not need catch22's own 30-point floor.
     assert ts.DEFAULT_MIN_LENGTHS["catch24_raw_mean"] < ts.DEFAULT_MIN_LENGTHS["catch22_acf_first_minimum"]
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
     analysis = _analysis(_long_text(paragraphs=3))
     findings = ts.measure(analysis, config={
         "sequences": ["sentence_words"], "feature_groups": ["catch24_raw_mean"]})
