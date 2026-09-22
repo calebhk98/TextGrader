@@ -336,7 +336,15 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                         metric_errors[f"{name}.profile_vector"] = f"{type(exc).__name__}: {exc}"
                         vector = None
                     if vector:
-                        feature_profiles.setdefault(name, []).append(vector)
+                        rows = feature_profiles.setdefault(name, [])
+                        # Row i must describe books[i].  A book whose vector was
+                        # skipped or failed gets an empty placeholder, because
+                        # appending only on success silently shifts every later
+                        # row and turns "nearest reference book" into a wrong
+                        # answer rather than a missing one.
+                        while len(rows) < len(books):
+                            rows.append({})
+                        rows.append(vector)
             for name, values in _item_values(analysis).items():
                 pooled[name].extend(values)
             function_words = importlib.import_module("textgrader.metrics.function_words")
@@ -344,6 +352,10 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
             books.append(book)
         if progress:
             progress(relative_name, book)
+
+    for name, rows in feature_profiles.items():
+        while len(rows) < len(books):
+            rows.append({})
 
     base_keys = ("word_count", "sentence_count", "paragraph_count", "mean_sentence_words",
                  "mean_paragraph_words", "mean_word_characters")

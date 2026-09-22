@@ -68,3 +68,70 @@ class CorpusProfileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProfileVectorAlignment(unittest.TestCase):
+    """``feature_profiles[name][i]`` must describe ``books[i]``.
+
+    A metric caches a per-book vector by exposing ``profile_vector``.  Appending
+    only when one comes back shifts every later row when a single book fails,
+    so a consumer indexing rows against books gets a confident wrong answer --
+    the nearest reference book would be the wrong book -- instead of a missing
+    one.
+    """
+
+    MODULE = Path(__file__).resolve().parents[1] / "textgrader" / "metrics" / "_align_probe.py"
+    SOURCE = '''from .common import finding
+FAMILY = "lexical"
+COST = "fast"
+REQUIRES = ()
+
+
+def measure(analysis, config=None, profile=None):
+    return [finding("style.align_probe", "Probe", float(analysis.word_count), "words",
+                    family=FAMILY)]
+
+
+def profile_vector(analysis, config=None):
+    if "FAILING" in analysis.text:
+        raise RuntimeError("this book's vector cannot be built")
+    return {"d0": float(analysis.word_count)}
+'''
+
+    def setUp(self):
+        from textgrader.metrics import REGISTRY, MetricSpec
+        self.MODULE.write_text(self.SOURCE, encoding="utf-8")
+        REGISTRY["_align_probe"] = MetricSpec("_align_probe", "_align_probe", "lexical", "fast")
+
+    def tearDown(self):
+        from textgrader.metrics import REGISTRY
+        REGISTRY.pop("_align_probe", None)
+        self.MODULE.unlink(missing_ok=True)
+
+    def _profile(self, tags):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for index, tag in enumerate(tags):
+                (directory / f"{index}_book.txt").write_text(
+                    f"{tag} words here. More text follows now.\n\nA second paragraph.\n" * 25,
+                    encoding="utf-8")
+            return build_profile([directory], built_at="2026-01-01T00:00:00Z",
+                                 metrics={"_align_probe": {"enabled": True}})
+
+    def test_a_failing_book_leaves_a_placeholder_rather_than_shifting_rows(self):
+        profile = self._profile(["FIRST", "FAILING", "LAST"])
+        rows = profile["feature_profiles"]["_align_probe"]
+        self.assertEqual(len(rows), len(profile["books"]))
+        self.assertEqual(rows[1], {})
+        self.assertTrue(rows[0] and rows[2])
+
+    def test_a_failing_last_book_is_padded_too(self):
+        profile = self._profile(["FIRST", "SECOND", "FAILING"])
+        rows = profile["feature_profiles"]["_align_probe"]
+        self.assertEqual(len(rows), len(profile["books"]))
+        self.assertEqual(rows[-1], {})
+
+    def test_the_failure_is_recorded_rather_than_swallowed(self):
+        profile = self._profile(["FIRST", "FAILING"])
+        errors = json.dumps(profile.get("metric_errors") or profile.get("errors") or {})
+        self.assertIn("_align_probe", errors)
