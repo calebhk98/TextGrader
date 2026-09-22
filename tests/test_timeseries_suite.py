@@ -23,7 +23,24 @@ from textgrader.document import DocumentAnalysis
 from textgrader.metrics import REGISTRY, timeseries_suite as ts
 
 FEATURES = ts._FEATURES
+EXTENDED = ts._EXTENDED_FEATURES
 SETTINGS = ts._settings({})
+
+
+def _ctx(sequence_name, working, cfg=None, detrended=False, analysis=None):
+    """A minimal ``ctx`` for calling an ``_EXTENDED_FEATURES`` function directly.
+
+    catch22/wavelet results are cached via ``analysis.memo``, keyed on
+    ``sequence_name`` + settings + ``detrended`` -- not on the document's
+    actual text -- so a throwaway analysis and a synthetic ``working`` array
+    exercise the real caching path exactly like a real sequence would.
+    """
+
+    return {
+        "analysis": analysis if analysis is not None else DocumentAnalysis.from_text("Cache scope."),
+        "sequence_name": sequence_name, "sequence": None,
+        "cfg": cfg if cfg is not None else SETTINGS, "detrended": detrended, "working": working,
+    }
 
 
 def _constant(n=50, value=5.0):
@@ -352,6 +369,359 @@ def test_sequence_settings_are_recorded_in_the_distribution():
     assert distribution["sequence"] == "window_pronoun_rate"
     assert distribution["sample_unit"] == "window"
     assert distribution["sequence_settings"]["window_words"] == 500
+
+
+# ------------------------------------------------- the never-executed ruptures path
+
+def test_change_point_penalty_scales_with_log_n_to_control_false_positives():
+    # This is the bug the module docstring documents: a flat penalty let PELT
+    # flag noise more and more often as the sequence got longer, because the
+    # penalty never grew to keep pace with the number of candidate splits.
+    # Checked across several lengths rather than one, since a single length
+    # could pass by luck.
+    if not optional.have("ruptures") or not optional.have("numpy"):
+        pytest.skip("ruptures/numpy not installed in this environment")
+    total_points = total_false = 0
+    for seed in range(12):
+        rng = random.Random(seed)
+        n = rng.choice([150, 400, 900])
+        values = [rng.gauss(0.0, 1.0) for _ in range(n)]
+        out = FEATURES["change_points"](values, SETTINGS)
+        assert out.distribution["backend"] == "ruptures.Pelt"
+        total_points += n
+        total_false += out.distribution["count"]
+    # A flat pen=3.0 measured roughly 1.5% of points as false change points in
+    # pure noise (see the module docstring); log(n)-scaled measured near 0%.
+    assert total_false / total_points < 0.01
+
+
+def test_change_point_penalty_is_a_log_n_multiplier_not_a_flat_score():
+    if not optional.have("ruptures") or not optional.have("numpy"):
+        pytest.skip("ruptures/numpy not installed in this environment")
+    values = [1.0] * 50 + [10.0] * 50
+    out = FEATURES["change_points"](values, {**SETTINGS, "change_point_penalty": 2.0})
+    assert out.distribution["penalty"] == pytest.approx(2.0 * math.log(100), rel=1e-6)
+
+
+# ------------------------------------------------------------------- catch22
+
+CATCH22 = "catch22_"
+
+
+def test_catch22_alias_expands_to_all_22_stable_names():
+    expanded = ts._settings({"feature_groups": ["catch22"]})["feature_groups"]
+    assert len(expanded) == 22
+    assert set(expanded) == set(ts._CATCH22_FEATURE_NAMES)
+    assert all(name.startswith(CATCH22) for name in expanded)
+
+
+def test_catch22_metric_ids_never_expose_the_library_or_a_position():
+    # The task's own stable-id rule: no "catch22_DN_HistogramMode_5", no
+    # "catch22_3". Every stable suffix must be readable and never equal a
+    # bare integer or the exact library feature name it came from.
+    library_names = {library for library, _, _, _ in ts._CATCH22_CATALOGUE}
+    for index, name in enumerate(ts._CATCH22_FEATURE_NAMES):
+        suffix = name[len(CATCH22):]
+        assert not suffix.isdigit(), f"{name} is a bare position, not a stable name"
+        assert suffix not in library_names, f"{name} exposes the raw pycatch22 name"
+        assert suffix.islower() or "_" in suffix  # snake_case, not CamelCase library style
+    # Every catalogue entry's library name resolves back to exactly one of our ids.
+    assert len({library for library, _, _, _ in ts._CATCH22_CATALOGUE}) == 22
+    assert len(set(ts._CATCH22_LIBRARY_NAME_BY_FEATURE.values())) == 22
+
+
+def test_catch22_acf_first_minimum_matches_known_sine_half_period():
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    values = _sine(n=150, period=10)
+    out = EXTENDED["catch22_acf_first_minimum"](values, SETTINGS, _ctx("sentence_words", values))
+    assert out.value == pytest.approx(5.0, abs=1.0)  # theoretical first minimum is period/2
+
+
+def test_catch22_longest_above_mean_run_separates_ramp_from_alternation():
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    ramp, alt = _ramp(150), _alternating(150)
+    ramp_out = EXTENDED["catch22_longest_above_mean_run"](
+        ramp, SETTINGS, _ctx("sentence_words", ramp))
+    alt_out = EXTENDED["catch22_longest_above_mean_run"](
+        alt, SETTINGS, _ctx("sentence_words", alt))
+    assert ramp_out.value > 50  # one long monotonic run, roughly half the series
+    assert alt_out.value < 5   # alternation never sustains a run above its mean
+    assert ramp_out.value > alt_out.value
+
+
+def test_catch22_large_step_fraction_is_maximal_for_alternation():
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    alt = _alternating(100)
+    out = EXTENDED["catch22_large_step_fraction"](alt, SETTINGS, _ctx("sentence_words", alt))
+    assert out.value == pytest.approx(1.0, abs=1e-6)  # every step is the maximal jump
+
+
+def test_catch22_reports_none_not_a_number_on_zero_variance():
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    constant = _constant(40)
+    out = EXTENDED["catch22_histogram_mode_5bin"](
+        constant, SETTINGS, _ctx("sentence_words", constant))
+    assert out.value is None
+    assert "non-finite" in out.warning
+
+
+def test_catch22_features_share_one_pycatch22_call_per_sequence(monkeypatch):
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    import pycatch22
+    calls = []
+    real = pycatch22.catch22_all
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pycatch22, "catch22_all", counting)
+    analysis = DocumentAnalysis.from_text("Shared cache scope for this test only.")
+    values = _noise(80)
+    ctx = _ctx("sentence_words", values, analysis=analysis)
+    for name in list(ts._CATCH22_FEATURE_NAMES)[:5]:
+        EXTENDED[name](values, SETTINGS, ctx)
+    assert len(calls) == 1
+
+
+def test_catch22_degrades_without_pycatch22(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "pycatch22")
+    optional.reset_cache()
+    try:
+        values = _noise(80)
+        out = EXTENDED["catch22_acf_first_minimum"](values, SETTINGS, _ctx("sentence_words", values))
+        assert out.value is None
+        assert "pycatch22" in out.warning
+    finally:
+        optional.reset_cache()
+
+
+def test_catch22_needs_context_and_never_raises_standalone():
+    out = EXTENDED["catch22_histogram_mode_5bin"](_noise(40), SETTINGS, None)
+    assert out.value is None
+    assert out.warning
+
+
+def test_catch22_through_the_suite_reports_insufficient_data_below_its_minimum():
+    analysis = _analysis("One short sentence. Another short one.")
+    findings = ts.measure(analysis, config={
+        "sequences": ["sentence_words"], "feature_groups": ["catch22_acf_first_minimum"]})
+    assert findings[0]["value"] is None
+    assert "insufficient data" in findings[0]["warning"]
+    assert findings[0]["min_sample"] == ts.DEFAULT_MIN_LENGTHS["catch22_acf_first_minimum"]
+
+
+# ------------------------------------------------------------------- wavelets
+
+def test_wavelet_entropy_orders_ramp_below_sine_below_noise():
+    if not optional.have("pywt") or not optional.have("numpy"):
+        pytest.skip("pywt/numpy not installed in this environment")
+    ramp, sine, noisy = _ramp(150), _sine(150, period=8), _noise(150)
+    ramp_out = EXTENDED["wavelet_entropy"](ramp, SETTINGS, _ctx("sentence_words", ramp))
+    sine_out = EXTENDED["wavelet_entropy"](sine, SETTINGS, _ctx("sentence_words", sine))
+    noise_out = EXTENDED["wavelet_entropy"](noisy, SETTINGS, _ctx("sentence_words", noisy))
+    assert ramp_out.value < sine_out.value < noise_out.value
+    assert ramp_out.value < 0.05  # a smooth ramp concentrates almost all energy at one scale
+
+
+def test_wavelet_energy_is_concentrated_in_the_coarsest_scale_for_a_ramp():
+    if not optional.have("pywt") or not optional.have("numpy"):
+        pytest.skip("pywt/numpy not installed in this environment")
+    ramp = _ramp(150)
+    out = EXTENDED["wavelet_energy"](ramp, SETTINGS, _ctx("sentence_words", ramp))
+    assert out.value > 99.0  # almost all variance is at the coarsest (trend) scale
+    assert out.distribution["band_labels"][0].startswith("cA")
+
+
+def test_wavelet_energy_and_entropy_share_one_decomposition(monkeypatch):
+    if not optional.have("pywt") or not optional.have("numpy"):
+        pytest.skip("pywt/numpy not installed in this environment")
+    import pywt
+    calls = []
+    real = pywt.wavedec
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pywt, "wavedec", counting)
+    analysis = DocumentAnalysis.from_text("Shared cache scope for this test only.")
+    values = _noise(80)
+    ctx = _ctx("sentence_words", values, analysis=analysis)
+    EXTENDED["wavelet_energy"](values, SETTINGS, ctx)
+    EXTENDED["wavelet_entropy"](values, SETTINGS, ctx)
+    assert len(calls) == 1
+
+
+def test_wavelet_degrades_without_pywt(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "pywt")
+    optional.reset_cache()
+    try:
+        values = _noise(80)
+        out = EXTENDED["wavelet_entropy"](values, SETTINGS, _ctx("sentence_words", values))
+        assert out.value is None
+        assert "pywt" in out.warning
+    finally:
+        optional.reset_cache()
+
+
+def test_wavelet_features_respect_their_own_minimum_length():
+    analysis = _analysis(_long_text(paragraphs=5))
+    findings = ts.measure(analysis, config={
+        "sequences": ["sentence_punctuation"], "feature_groups": ["wavelet_entropy"]})
+    if findings[0]["sample_size"] < ts.DEFAULT_MIN_LENGTHS["wavelet_entropy"]:
+        assert findings[0]["value"] is None
+        assert "insufficient data" in findings[0]["warning"]
+
+
+# ------------------------------------------------------- textdescriptives check
+
+def test_textdescriptives_check_agrees_closely_but_not_perfectly_with_our_own_sequence():
+    if not optional.have("textdescriptives") or not optional.have("spacy"):
+        pytest.skip("textdescriptives/spacy not installed in this environment")
+    analysis = _analysis(_long_text(paragraphs=150))
+    if analysis.nlp_unavailable:
+        pytest.skip("no spaCy model available in this environment")
+    findings = ts.measure(analysis, config={
+        "sequences": ["sentence_dependency_distance"], "feature_groups": ["textdescriptives_check"]})
+    result = findings[0]
+    if result["value"] is None:
+        pytest.skip(result["warning"])
+    # Strongly correlated (same underlying parse) but not identical: textdescriptives
+    # includes the ROOT token (distance 0) in its per-sentence mean and this
+    # suite's own sequence excludes it, a real, preserved disagreement.
+    assert result["value"] > 0.9
+    assert result["distribution"]["mean_absolute_gap"] > 0.0
+    assert "ROOT" in result["distribution"]["note"]
+
+
+def test_textdescriptives_check_is_not_defined_for_unrelated_sequences():
+    analysis = _analysis(_long_text(paragraphs=20))
+    findings = ts.measure(analysis, config={
+        "sequences": ["sentence_words"], "feature_groups": ["textdescriptives_check"]})
+    assert findings[0]["value"] is None
+    assert "no textdescriptives cross-check is defined" in findings[0]["warning"]
+
+
+def test_textdescriptives_check_degrades_without_textdescriptives(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "textdescriptives")
+    optional.reset_cache()
+    try:
+        analysis = _analysis(_long_text(paragraphs=60))
+        findings = ts.measure(analysis, config={
+            "sequences": ["sentence_dependency_distance"],
+            "feature_groups": ["textdescriptives_check"]})
+        assert findings[0]["value"] is None
+        assert "textdescriptives" in findings[0]["warning"]
+    finally:
+        optional.reset_cache()
+
+
+# --------------------------------------------------- new-group combinatorics guard
+
+def test_default_selection_is_unchanged_by_this_pass():
+    # The whole point of keeping catch22/wavelets/embeddings opt-in: the
+    # default report a user gets is exactly the one that existed before.
+    assert ts.DEFAULT_SEQUENCES == ("sentence_words", "paragraph_words", "sentence_punctuation")
+    assert ts.DEFAULT_FEATURE_GROUPS == ("dispersion", "acf", "trend", "turning_points", "runs")
+    analysis = _analysis(_long_text())
+    findings = ts.measure(analysis, config={})
+    assert len(findings) == 15
+
+
+def test_new_feature_groups_are_all_opt_in():
+    new_groups = set(ts._CATCH22_FEATURE_NAMES) | {"wavelet_energy", "wavelet_entropy",
+                                                    "textdescriptives_check"}
+    assert new_groups.isdisjoint(ts.DEFAULT_FEATURE_GROUPS)
+    assert set(ts._EMBEDDING_SEQUENCES).isdisjoint(ts.DEFAULT_SEQUENCES)
+
+
+def test_every_feature_name_has_a_label_unit_and_minimum_length():
+    for name in ts.FEATURE_NAMES:
+        assert name in ts.FEATURE_LABELS, name
+        assert name in ts.FEATURE_UNITS, name
+        assert name in ts.DEFAULT_MIN_LENGTHS, name
+
+
+def test_catch22_over_default_sequences_would_blow_past_the_old_default_size():
+    # Documents *why* catch22 stays off the default rather than merely
+    # asserting that it does: 22 features over even the three default
+    # sequences alone would be more than four times the current default.
+    combos = len(ts.DEFAULT_SEQUENCES) * len(ts._CATCH22_FEATURE_NAMES)
+    assert combos == 66
+    assert combos > 4 * len(ts.DEFAULT_SEQUENCES) * len(ts.DEFAULT_FEATURE_GROUPS)
+
+
+def test_max_findings_still_caps_a_large_catch22_selection():
+    analysis = _analysis(_long_text(paragraphs=150))
+    findings = ts.measure(analysis, config={
+        "sequences": list(ts.DEFAULT_SEQUENCES), "feature_groups": ["catch22"],
+        "max_findings": 10})
+    real = [item for item in findings if item["metric_id"] != "rhythm.timeseries_truncated"]
+    truncated = [item for item in findings if item["metric_id"] == "rhythm.timeseries_truncated"]
+    assert len(real) == 10
+    assert len(truncated) == 1
+
+
+# --------------------------------------------------- the critical gating rule
+
+def test_default_configuration_never_loads_an_embedding_model(monkeypatch):
+    from textgrader.metrics import semantic_adjacent
+    calls = []
+    monkeypatch.setattr(semantic_adjacent, "_load_model",
+                        lambda name: (calls.append(name), (None, "blocked for this test"))[1])
+    analysis = _analysis(_long_text())
+    ts.measure(analysis, config={})  # exactly what corpus profiling would run
+    assert not calls, "the default configuration must never load an embedding model"
+
+
+def test_registered_metric_spec_does_not_require_sentence_transformers():
+    # MetricSpec.needs_model is defined as "sentence_transformers" in requires,
+    # and needs_model gates this suite out of corpus profiling entirely. This
+    # suite's cheap sequences must keep being profiled, so REQUIRES must stay
+    # empty even though two of its sequences can use that package.
+    spec = REGISTRY["timeseries_suite"]
+    assert "sentence_transformers" not in spec.requires
+    assert not spec.needs_model
+    assert not spec.needs_parse
+
+
+def test_embedding_sequences_are_reachable_only_when_explicitly_selected(monkeypatch):
+    from textgrader.metrics import semantic_adjacent
+    calls = []
+    monkeypatch.setattr(semantic_adjacent, "_load_model",
+                        lambda name: (calls.append(name), (None, "blocked for this test"))[1])
+    analysis = _analysis(_long_text())
+    ts.measure(analysis, config={"sequences": ["sentence_similarity_prev"],
+                                 "feature_groups": ["dispersion"]})
+    assert calls == ["all-MiniLM-L6-v2"]
+
+
+def test_embedding_backend_differs_from_the_lexical_fallback_on_a_paraphrase():
+    if not optional.have("sentence_transformers"):
+        pytest.skip("sentence_transformers not installed in this environment")
+    # A paraphrase with no shared content words: the lexical TF-IDF fallback
+    # cannot see it (near zero), a real embedding should (well above it).
+    text = ("The dog was extremely happy to see her. "
+            "The canine was overjoyed at her arrival. "
+            "Meanwhile the weather in the mountains stayed cold and grey.")
+    analysis = _analysis(text)
+    from textgrader import sequences as seq
+    embedding_sequence = seq.get_sequence(analysis, "sentence_similarity_prev")
+    assert "backend=embedding" in (embedding_sequence.warning or "")
+    lexical_vectors = __import__("textgrader.metrics.semantic_adjacent",
+                                 fromlist=["lexical_vectors"]).lexical_vectors(analysis.sentences)
+    from textgrader.metrics import semantic_adjacent
+    lexical_value = semantic_adjacent.similarity_at("lexical", lexical_vectors, 0, 1)
+    embedding_value = embedding_sequence.values[0]
+    assert embedding_value > 0.5
+    assert lexical_value < 0.2
+    assert embedding_value - lexical_value > 0.3
 
 
 # --------------------------------------------------------- repository contract

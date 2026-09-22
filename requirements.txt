@@ -58,25 +58,23 @@ networkx>=3.0
 # identity matching.
 nltk>=3.8
 
-# Neural coreference resolution for the same suite's optional "coreference"
-# feature (also off by default). Like sentence-transformers above, this pulls
-# in torch and downloads a transformer model on first use; nothing in
-# coherence_suite imports it unless that flag is explicitly turned on.
-# Entity continuity without it stays on the honestly-labelled
-# surface/noun-chunk-lemma fallback, which is kept as its own finding even
-# once this is installed, because the two disagreeing is data the suite
-# reports, not a problem to hide.
-fastcoref>=2.1
+# Neural coreference for coherence_suite's optional "coreference" feature is
+# NOT here: fastcoref pulls in torch, so it lives in
+# requirements-embeddings.txt.  Without it, entity continuity stays on the
+# honestly-labelled surface/noun-chunk-lemma channel, which is kept as its own
+# finding even once fastcoref is installed, because the two disagreeing is data
+# the suite reports rather than a problem to hide.
 
 # Tabular convenience for corpus work.
 pandas>=2.0
 
 # Descriptive statistics, readability, dependency distance and coherence on top
-# of spaCy.  Used directly by randomness_suite's textdescriptives cross-check
-# (features.textdescriptives_cross_check, off by default): it builds its own
-# spaCy pipeline with textdescriptives' information_theory component attached
-# and reports the result next to this suite's own wordfreq-based rarity
-# channel, without reconciling them - see that channel's docstring.
+# of spaCy.  Two experimental suites use it as a deliberate cross-check and
+# keep the disagreement rather than reconciling it: randomness_suite's
+# `textdescriptives_cross_check` (against its own wordfreq rarity channel,
+# via textdescriptives' own information_theory pipeline) and
+# timeseries_suite's `textdescriptives_check` (against its own
+# sentence_dependency_distance sequence).  Both are off by default.
 textdescriptives>=2.8
 
 # Test runner.  The suite is pytest-based; `unittest discover` silently skipped
@@ -102,6 +100,14 @@ pyppmd>=1.1
 # Page-Hinkley) is dependency-free or already covered by numpy/scipy/ruptures
 # above; without this one it falls back to a labelled, weaker half-split proxy.
 statsmodels>=0.14
+
+# catch22: 22 canonical time-series features (Lubba et al. 2019), used by
+# timeseries_suite's optional, off-by-default "catch22_*" feature group.
+pycatch22>=0.4
+
+# Discrete wavelet transform, used by timeseries_suite's optional,
+# off-by-default "wavelet_energy"/"wavelet_entropy" feature group.
+PyWavelets>=1.4
 
 # Date parsing for logic_suite's "temporal_ordering" feature (which of two
 # differing dates on the same subject+predicate is earlier).  Lightweight and
