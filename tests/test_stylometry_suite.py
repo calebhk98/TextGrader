@@ -104,8 +104,16 @@ def test_every_default_option_is_mirrored_in_the_registry_and_config_json():
         "section_window_words", "section_shift_threshold", "k_neighbors", "distance_metrics",
         "primary_distance", "compression_algorithm", "min_corpus_documents",
         "min_documents_per_author", "outlier_threshold", "seed",
+        "word_frequency_vocab_cap", "embedding_model", "embedding_primary_distance",
+        "impostors_k", "impostors_iterations", "impostors_feature_fraction",
+        "impostors_min_authors", "impostors_target_author",
     }
     assert set(spec.defaults["features"]) == set(m.DEFAULT_FEATURES)
+    # sentence_transformers must never appear here: it would flip needs_model
+    # for the whole suite and drop it out of the corpus builder's default
+    # profiling pass (see the module docstring's "The critical gating rule").
+    assert "sentence_transformers" not in spec.requires
+    assert not spec.needs_model
 
     config = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
     entry = config["metrics"]["stylometry_suite"]
@@ -337,3 +345,180 @@ def test_corpus_wide_cross_entropy_uses_the_word_frequency_table(tmp_path):
     found = _findings(_prose(STYLE_A_VOCAB, 80, paragraphs=60), profile=profile)
     assert found["style.stylometry_corpus_unigram_cross_entropy"]["value"] > 0
     assert found["style.stylometry_corpus_unigram_perplexity"]["value"] >= 1.0
+
+
+# ------------------------------------------------------- newly-closed gaps (phase 2)
+
+def test_default_config_never_loads_a_sentence_transformers_model():
+    """The critical gating rule: embedding_style is off by default, and it must
+    be the ONLY thing in this suite that can ever trigger a model load."""
+
+    from textgrader.metrics import semantic_adjacent
+
+    semantic_adjacent._reset_model_cache()
+    _findings(_prose(STYLE_A_VOCAB, 90, paragraphs=200))
+    assert semantic_adjacent._MODEL_CACHE == {}, "a model was loaded under the default config"
+
+
+def test_sentence_transformers_is_not_in_requires():
+    """Documents the deliberate choice not to flip needs_model for this suite
+    (see the module docstring's "The critical gating rule")."""
+
+    from textgrader.metrics import REGISTRY
+
+    spec = REGISTRY["stylometry_suite"]
+    assert "sentence_transformers" not in spec.requires
+    assert spec.needs_model is False
+    assert spec.needs_parse is False
+
+
+def test_embedding_style_off_by_default_and_degrades_without_enough_sections():
+    found = _findings(_prose(STYLE_A_VOCAB, 91, paragraphs=10))
+    assert "style.stylometry_embedding_dispersion" not in found
+
+    on = _findings(_prose(STYLE_A_VOCAB, 91, paragraphs=10),
+                   config={"features": {"embedding_style": True}})
+    assert on["style.stylometry_embedding_dispersion"]["value"] is None
+    assert on["style.stylometry_embedding_dispersion"]["warning"]
+
+
+def test_embedding_style_runs_when_enabled_and_sentence_transformers_is_available():
+    module, reason = optional.require("sentence_transformers")
+    if module is None:
+        pytest.skip(f"sentence-transformers not usable in this environment: {reason}")
+    text = _prose(STYLE_A_VOCAB, 92, paragraphs=400)
+    found = _findings(text, config={"features": {"embedding_style": True},
+                                    "section_window_words": 1500})
+    assert found["style.stylometry_embedding_drift_open_close_cosine"]["value"] is not None
+    assert found["style.stylometry_embedding_section_stability"]["value"] is not None
+    assert found["style.stylometry_embedding_dispersion"]["value"] >= 0.0
+
+
+def test_word_frequency_distance_degrades_without_a_profile_and_runs_with_one(tmp_path):
+    off = _findings(_prose(STYLE_A_VOCAB, 93, paragraphs=60))
+    for name in ("cosine", "euclidean", "manhattan", "jensen_shannon"):
+        item = off[f"style.stylometry_word_frequency_distance_{name}"]
+        assert item["value"] is None
+        assert item["warning"]
+
+    profile = _corpus_profile(tmp_path, [(94 + i, STYLE_A_VOCAB, None) for i in range(5)])
+    on = _findings(_prose(STYLE_A_VOCAB, 99, paragraphs=60), profile=profile)
+    for name in ("cosine", "euclidean", "manhattan", "jensen_shannon"):
+        item = on[f"style.stylometry_word_frequency_distance_{name}"]
+        assert item["value"] is not None
+        assert item["value"] >= 0.0
+        assert item["distribution"]["distance_family"] == name
+
+
+def test_author_language_model_degrades_on_a_profile_missing_the_key():
+    """Backward compatibility: a profile built before author_word_frequency
+    existed simply omits the key; this must degrade, not raise."""
+
+    found = _findings(_prose(STYLE_A_VOCAB, 100, paragraphs=60), profile={"books": []})
+    item = found["style.stylometry_author_unigram_cross_entropy_best_fit"]
+    assert item["value"] is None
+    assert "per-author" in item["warning"]
+
+
+def test_author_language_model_picks_the_best_fitting_author(tmp_path):
+    profile = _corpus_profile(tmp_path, [
+        (101, STYLE_A_VOCAB, "alice"), (102, STYLE_A_VOCAB, "alice"),
+        (103, STYLE_B_VOCAB, "bob"), (104, STYLE_B_VOCAB, "bob"),
+    ])
+    assert set(profile["author_word_frequency"]) == {"alice", "bob"}
+    found = _findings(_prose(STYLE_A_VOCAB, 105, paragraphs=60), profile=profile)
+    item = found["style.stylometry_author_unigram_cross_entropy_best_fit"]
+    assert item["value"] is not None
+    assert item["distribution"]["author"] == "alice"
+    margin = found["style.stylometry_author_unigram_cross_entropy_margin"]
+    assert margin["value"] is not None
+    assert margin["value"] >= 0.0
+
+
+def test_impostors_off_by_default_and_degrades_without_authors():
+    off = _findings(_prose(STYLE_A_VOCAB, 106, paragraphs=60))
+    assert "style.stylometry_impostors_verification_score" not in off
+
+    on = _findings(_prose(STYLE_A_VOCAB, 106, paragraphs=60),
+                   config={"features": {"impostors": True}})
+    item = on["style.stylometry_impostors_verification_score"]
+    assert item["value"] is None
+    assert item["warning"]
+
+
+def test_impostors_scores_a_document_against_its_own_authors_corpus(tmp_path):
+    profile = _corpus_profile(tmp_path, [
+        (110, STYLE_A_VOCAB, "alice"), (111, STYLE_A_VOCAB, "alice"), (112, STYLE_A_VOCAB, "alice"),
+        (120, STYLE_B_VOCAB, "bob"), (121, STYLE_B_VOCAB, "bob"), (122, STYLE_B_VOCAB, "bob"),
+    ])
+    found = _findings(_prose(STYLE_A_VOCAB, 199, paragraphs=60),
+                      config={"features": {"impostors": True}, "impostors_iterations": 10,
+                              "impostors_k": 5, "impostors_min_authors": 1, "seed": 7},
+                      profile=profile)
+    score = found["style.stylometry_impostors_verification_score"]
+    variance = found["style.stylometry_impostors_score_variance"]
+    assert score["value"] is not None
+    assert 0.0 <= score["value"] <= 1.0
+    assert variance["value"] is not None
+    assert variance["value"] >= 0.0
+    assert score["distribution"]["candidate_author"] == "alice"
+    assert score["distribution"]["iterations"] <= 10
+    assert score["distribution"]["k"] <= 5
+    assert "approximation" in score["warning"]
+
+
+def test_impostors_is_deterministic_given_a_seed(tmp_path):
+    profile = _corpus_profile(tmp_path, [
+        (130, STYLE_A_VOCAB, "alice"), (131, STYLE_A_VOCAB, "alice"),
+        (140, STYLE_B_VOCAB, "bob"), (141, STYLE_B_VOCAB, "bob"),
+        (150, STYLE_A_VOCAB, "carol"), (151, STYLE_A_VOCAB, "carol"),
+    ])
+    text = _prose(STYLE_A_VOCAB, 198, paragraphs=60)
+    config = {"features": {"impostors": True}, "seed": 99}
+    first = _findings(text, config=config, profile=profile)
+    second = _findings(text, config=config, profile=profile)
+    assert (first["style.stylometry_impostors_verification_score"]["value"]
+           == second["style.stylometry_impostors_verification_score"]["value"])
+
+
+def test_lexicalrichness_crosscheck_reports_alongside_the_own_metric():
+    module, reason = optional.require("lexicalrichness")
+    if module is None:
+        pytest.skip(f"lexicalrichness not usable in this environment: {reason}")
+    found = _findings(_prose(STYLE_A_VOCAB, 200, paragraphs=150))
+    item = found["style.stylometry_lexicalrichness_yules_k"]
+    assert item["value"] is not None
+    assert item["distribution"]["own_metric_id"] == "style.stylometry_yules_k"
+    # Both numbers exist and are allowed to disagree -- this cross-check's
+    # whole point -- so only their presence, not their equality, is asserted.
+    assert found["style.stylometry_yules_k"]["value"] is not None
+
+
+def test_lexicalrichness_crosscheck_degrades_when_the_package_is_disabled(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "lexicalrichness")
+    optional.reset_cache()
+    try:
+        found = _findings(_prose(STYLE_A_VOCAB, 201, paragraphs=150))
+    finally:
+        optional.reset_cache()
+    item = found["style.stylometry_lexicalrichness_yules_k"]
+    assert item["value"] is None
+    assert item["warning"]
+    # Only this group is affected; everything else still ran.
+    assert found["style.stylometry_yules_k"]["value"] is not None
+    assert found["style.stylometry_char_ngram_entropy_2"]["value"] is not None
+
+
+def test_corpus_profile_carries_an_optional_per_author_frequency_table(tmp_path):
+    from textgrader.corpus import build_profile
+
+    labelled = _corpus_profile(tmp_path, [(210, STYLE_A_VOCAB, "alice"), (211, STYLE_B_VOCAB, "bob")])
+    assert labelled["author_word_frequency"]["alice"]
+    assert labelled["author_word_frequency_total"]["alice"] > 0
+
+    corpus_dir = tmp_path / "unlabelled"
+    corpus_dir.mkdir()
+    (corpus_dir / "book.txt").write_text(_prose(STYLE_A_VOCAB, 212, paragraphs=20), encoding="utf-8")
+    unlabelled = build_profile([corpus_dir])
+    assert unlabelled["author_word_frequency"] == {}
+    assert unlabelled["author_word_frequency_total"] == {}

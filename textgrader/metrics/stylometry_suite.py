@@ -43,6 +43,15 @@ Corpus-reference measurements
     dispersion, standardized distance, kNN author agreement) need per-book
     ``metadata.author`` entries in that profile's manifest, which is optional
     and gracefully degrades to "unavailable, no author labels" when absent.
+    Four more groups were added once the reference environment grew
+    ``sentence-transformers``, ``torch`` and ``lexicalrichness``, and once
+    :mod:`textgrader.corpus` gained a per-author frequency table (see below):
+    a document/section-level sentence-embedding representation
+    (``embedding_style``), a bounded impostors-style verification
+    (``impostors``), per-author unigram cross-entropy
+    (``author_language_model``), and a word-frequency distance family against
+    the corpus's pooled vocabulary (``word_frequency_distance``). Every one of
+    these is documented in its own section below.
 
 Feature representations are cached on ``analysis._shared`` via
 :meth:`DocumentAnalysis.memo`, because several distance and entropy
@@ -55,64 +64,170 @@ existing sibling metric modules' *public* helpers (``function_words.vector``,
 ``drift_chapter_zscores.get_sections``), which is reuse in the same sense the
 project already practises for those constants, not a new coupling.
 
-No third-party package is required for any of the within-document
-measurements: every distance, entropy, regression and compression routine is
-plain standard library (``math``, ``statistics``, ``collections.Counter``,
-``zlib``, ``lzma``). This was a judgement call, not an oversight -- scipy,
-numpy and scikit-learn are available in the reference environment, but the
-underlying arithmetic (cosine/Manhattan/Euclidean/Jensen-Shannon distance,
-ordinary least squares on ~20-1000 points) is simple enough that adding a
-hard dependency would buy nothing except a new way for
-``TEXTGRADER_DISABLE_OPTIONAL=all`` to have something to disable. The one
-optional package this module touches is spaCy, and only for the
-``pos_dependency`` feature group, which is why that group defaults to
-``False``: enabling it forces the shared parse (tens of seconds on a novel)
-that every other feature group in this suite does not need. That is also why
-this suite is registered at ``cost="moderate"`` rather than ``"parse"`` --
-misdeclaring it would make the corpus builder skip profiling it by default,
-and it is cheap unless a user explicitly asks for the syntactic features.
+No third-party package is required for most of the within-document
+measurements: every distance, entropy, regression and compression routine in
+groups A-E is plain standard library (``math``, ``statistics``,
+``collections.Counter``, ``zlib``, ``lzma``). This was a judgement call, not
+an oversight -- scipy, numpy and scikit-learn are available in the reference
+environment, but the underlying arithmetic (cosine/Manhattan/Euclidean/
+Jensen-Shannon distance, ordinary least squares on ~20-1000 points) is simple
+enough that adding a hard dependency would buy nothing except a new way for
+``TEXTGRADER_DISABLE_OPTIONAL=all`` to have something to disable. spaCy (the
+``pos_dependency`` feature group) and now sentence-transformers (the
+``embedding_style`` group) and lexicalrichness (the
+``lexicalrichness_crosscheck`` group) are the exceptions, and each defaults to
+``False``/gracefully-degrading for a different reason -- see each group's own
+section below. This suite is registered at ``cost="moderate"`` rather than
+``"parse"`` or ``"model"``, and ``REQUIRES`` deliberately does **not** list
+``sentence_transformers`` (see ``embedding_style``, below, for why): both
+choices keep the corpus builder profiling this suite's cheap channels by
+default, which misdeclaring either one would silently switch off.
 
-Deferred (named here rather than faked):
+Sentence-embedding style representation (``embedding_style``, off by default)
+    :func:`_embedding_style_findings` embeds this document's own sections
+    (the same ``get_sections`` split ``section_stability`` uses) with
+    ``sentence-transformers`` and reports how far the opening section's
+    embedding sits from the closing section's (three distance families:
+    cosine, Euclidean, Manhattan -- Jensen-Shannon is not computed here
+    because an embedding is not a probability distribution), the median and
+    largest section-to-section embedding shift, and each section's distance
+    from the document's own mean embedding. This is the "biggest new
+    channel" this pass adds, and it is deliberately *within-document*: a
+    corpus profile does not retain raw book text or per-book embedding
+    vectors (see :mod:`textgrader.corpus`'s docstring on portability, and the
+    note in "Still deferred" below), so there is nothing to embed on the
+    corpus side to compare against directly. It still becomes
+    corpus-comparable the same way every other scalar finding in this suite
+    does: :mod:`textgrader.corpus` folds every scalar finding value into
+    ``profile.distributions`` automatically for any suite it profiles, so a
+    corpus rebuilt with ``metrics.stylometry_suite.features.embedding_style``
+    turned on in *its own* config populates a real reference distribution for
+    ``style.stylometry_embedding_dispersion`` (and the others), and
+    ``grade.py`` then compares a manuscript's value against it exactly the
+    way it already compares ``compression_ratio``. Loading the model is
+    strictly gated behind this feature flag -- see "The critical gating rule"
+    below.
+
+Impostors-style verification (``impostors``, off by default)
+    :func:`_impostors_findings` is a bounded, distance-based approximation of
+    Koppel & Winter's impostors method, reconsidered now that the corpus
+    profile has enough structure to make a *cheap* version honest. It picks
+    a candidate author (the corpus author whose function-word centroid is
+    nearest this document, or ``impostors_target_author`` if set), samples up
+    to ``impostors_k`` other corpus authors as impostors, and repeats
+    ``impostors_iterations`` times: sample a random ``impostors_feature_fraction``
+    slice of the function-word list, and check whether this document sits
+    closer to the candidate author's centroid than to *every* sampled
+    impostor's centroid on that feature slice. The mean win rate is
+    ``impostors_verification_score``; its variance across iterations is
+    ``impostors_score_variance``. This is what the module docstring's
+    previous pass judged infeasible under the label "impostors" -- and that
+    judgement was right for the *literature's* impostors method, which fits
+    a real classifier per iteration; what is implemented here is the
+    distance-comparison idea the technique is built on, over data the corpus
+    profile already stores (aligned per-book function-word vectors plus
+    author labels), with no retraining and no raw text. Every finding says so
+    in its warning: this is an approximation, not the citable technique, and
+    should be read as one more weak signal among the suite's many, not a
+    verdict.
+
+Per-author language model (``author_language_model``, on by default)
+    :func:`_author_language_model_findings` scores this document's
+    cross-entropy under *every* author's unigram frequency table in
+    ``profile.author_word_frequency`` (see "Corpus schema: the per-author
+    frequency table" below) and reports the best (lowest-cross-entropy)
+    author's cross-entropy and perplexity, plus the margin to the
+    second-best author. Genuinely author-specific, unlike
+    ``corpus_language_model``'s corpus-*wide* table.
+
+Word-frequency distance family (``word_frequency_distance``, on by default)
+    :func:`_word_frequency_distance_findings` treats the corpus's pooled
+    ``word_frequency`` table as a second aligned representation (besides
+    ``feature_profiles['function_words']``) and runs the same four distance
+    families against it that ``corpus_reference`` already runs against the
+    function-word vectors, restricted to the corpus's most frequent words
+    unioned with this document's own most frequent words (bounded by
+    ``word_frequency_vocab_cap``). This is what closes the "distance families
+    beyond function words" gap: not a new distance family, but the same four
+    applied to a second representation the profile already, genuinely holds.
+
+lexicalrichness cross-check (``lexicalrichness_crosscheck``, on by default)
+    :func:`_lexicalrichness_crosscheck_findings` reports ``lexicalrichness``'s
+    own ``yulek``/``yulei``/``Herdan``/``Dugast``/``Maas``/``rttr`` alongside
+    this module's own hand-rolled Yule's K/I, Herdan's C, Uber/Dugast and
+    Guiraud's R (group B, above), in the project's established voice for a
+    cross-check: report both, keep the disagreement, never silently prefer
+    one. Each finding's ``distribution`` names which of this module's own
+    metric ids it corresponds to.
+
+The critical gating rule
+    :class:`textgrader.metrics.MetricSpec.needs_model` is defined as
+    ``"sentence_transformers" in self.requires`` -- nothing else -- and
+    :mod:`textgrader.corpus` uses exactly that to decide whether to run a
+    metric over every corpus book by default. A ``torch``-backed feature is
+    invisible to that guard unless the *whole suite's* ``REQUIRES`` says so,
+    and this suite's ``REQUIRES`` deliberately still does **not** include
+    ``"sentence_transformers"``: doing so would flip ``needs_model`` for the
+    *entire* suite (every within-document group in it, not just
+    ``embedding_style``) and silently drop this suite out of the corpus
+    builder's default profiling pass -- a real regression to the "cheap
+    unless asked" property the previous pass built and documented (see the
+    cost/``REQUIRES`` paragraph above). The correct, finer-grained guard is
+    already in this module: ``embedding_style`` defaults to ``False`` in
+    ``DEFAULT_FEATURES``, and :func:`_embedding_style_findings` is the *only*
+    code path in this file that imports ``sentence_transformers`` (via
+    :func:`textgrader.metrics.semantic_adjacent.embed_texts`, reused rather
+    than duplicated), and only calls it when that flag is explicitly on.
+    ``tests/test_stylometry_suite.py`` asserts this directly: measuring with
+    the suite's default config never populates
+    ``semantic_adjacent``'s model cache.
+
+Corpus schema: the per-author frequency table
+    :mod:`textgrader.corpus` now builds ``profile["author_word_frequency"]``
+    (``{author: {word: count}}``) and ``profile["author_word_frequency_total"]``
+    (``{author: total_tokens}``) alongside the existing corpus-wide
+    ``word_frequency``, populated whenever a book's manifest entry gives an
+    ``author``. Both keys are optional and additive: ``build_profile``'s
+    existing keys, arguments and behaviour are unchanged, a profile with no
+    author metadata gets empty dicts for both, and this module reads them
+    with ``.get(..., {})`` so a profile built *before* this change (which has
+    neither key at all) degrades to the same "no per-author table" warning
+    rather than raising.
+
+Still deferred (named here rather than faked):
 
 * **pystylometry, PyDelta, MOWEN, JGAAP, stylo (R), stylometry-cli, fastText,
-  Vowpal Wabbit, MALLET, KenLM, pyppmd/PPM.** None are installed in the
-  reference environment, several require an R or JVM runtime this project
-  does not shell out to, and a from-scratch reimplementation of any of them
-  well enough to trust its numbers is a larger project than one pass can
-  responsibly deliver. Their standard-library-reachable *ideas* are kept
-  (Delta-style distances, NCD, n-gram cross-entropy, growth-curve fits); their
-  specific implementations, and anything that would need a model download
-  that cannot be exercised here, are not.
-* **Per-author character/word/POS language models and their cross-entropy.**
-  A corpus-*wide* unigram cross-entropy is implemented (``profile`` already
-  carries a corpus-wide word-frequency table), but a genuinely *author*-
-  specific language model needs per-author frequency tables that
-  :mod:`textgrader.corpus` does not build, and this task's file list does not
-  include ``textgrader/corpus.py``. Extending the corpus schema is future
-  work, tracked by this gap rather than papered over with a corpus-wide
-  number relabelled as author-specific.
-* **Impostors-style verification and unmasking.** Both need repeated
-  retraining of a classifier over many feature subsets per candidate author,
-  which is exactly the kind of per-document model-fitting the corpus-profile
-  architecture is built to avoid (:mod:`textgrader.corpus` prepares profiles
-  offline; grading should load artifacts, not retrain). A cheap approximation
-  would not carry the statistical guarantees the technique is named for, so
-  it is left out rather than offered under a name it has not earned.
-* **NCD against specific reference documents/authors.** Normalized
-  Compression Distance needs the *raw text* of the reference side, and corpus
-  profiles deliberately do not retain raw book text (see
-  :mod:`textgrader.corpus`'s module docstring on portability). NCD is
-  implemented instead as an *internal* measurement, between this document's
-  opening and closing text, which needs no stored reference text and still
-  answers a real question: has the redundancy structure of the prose changed.
-* **Distance families beyond cosine/Euclidean/Manhattan/Jensen-Shannon for
-  every representation.** All four are computed for the function-word
-  reference-corpus comparison (the one representation this codebase already
-  stores per-book, aligned, via ``feature_profiles['function_words']``); the
-  margin/centroid/dispersion/OOD/kNN measurements use one of those four
-  (``primary_distance``, default cosine) rather than repeating the full
-  eight-way cross product, which would multiply the corpus-reference finding
-  count without adding a new *representation*.
+  Vowpal Wabbit, MALLET, KenLM, pyppmd/PPM.** Permanently out of scope: none
+  are installed in the reference environment, several require an R or JVM
+  runtime this project does not shell out to, and a from-scratch
+  reimplementation of any of them well enough to trust its numbers is a
+  larger project than any pass can responsibly deliver. Their standard-
+  library-reachable *ideas* are kept (Delta-style distances, NCD, n-gram
+  cross-entropy, growth-curve fits, and now an embedding representation and
+  a distance-based impostors approximation); their specific implementations,
+  and KenLM's actual language-model machinery, are not.
+* **NCD against specific reference documents/authors.** Still needs the *raw
+  text* of the reference side, and corpus profiles deliberately do not
+  retain raw book text (see :mod:`textgrader.corpus`'s module docstring on
+  portability). NCD remains an *internal* measurement, between this
+  document's opening and closing text.
+* **Per-book embedding vectors stored in the corpus profile
+  (``feature_profiles['embedding']``), enabling a true nearest/centroid
+  *embedding* distance against specific reference books.** This task's file
+  list authorizes editing :mod:`textgrader.corpus` for the per-author
+  frequency table only; adding a second, vector-valued ``feature_profiles``
+  entry (parallel to ``feature_profiles['function_words']``) the way
+  ``embedding_style`` would need is a further, structural corpus-schema
+  change deliberately left for a future pass rather than smuggled in under a
+  narrower authorization. ``embedding_style`` answers a real question
+  without it (see above); it does not answer the specific "nearest reference
+  book by embedding" question the way ``corpus_reference`` answers it for
+  function words.
+* **Full impostors/unmasking with a real classifier and a large,
+  independently-sampled impostor pool.** ``impostors`` (above) is a bounded
+  approximation over the corpus profile's own aligned data; it does not
+  retrain a classifier and does not carry the original technique's
+  statistical guarantees.
 * **Byte n-grams beyond order 2, POS n-grams beyond order 4, more than one
   dependency n-gram order at once.** Available as ``byte_ngram_orders``,
   ``pos_ngram_orders`` and ``dependency_ngram_order`` options for a user who
@@ -124,25 +239,36 @@ from __future__ import annotations
 
 import lzma
 import math
+import random
 import statistics
+import warnings
 import zlib
 from collections import Counter
 from typing import Any, Mapping, Sequence
 
 from .. import stats as stats_module
 from ..document import DocumentAnalysis
+from ..optional import require
 from .common import MODERATE, cosine_distance, finding, option, rate
 from .common import tokens as tokenize
 from .dialogue_contractions import CONTRACTION_SUFFIXES, WHOLE_WORD_CONTRACTIONS
 from .drift_chapter_zscores import get_sections
 from .function_words import FUNCTION, vector as function_word_vector
 from .punctuation_profile import MARK_NAMES, MARK_RE, marks_for
+from .semantic_adjacent import embed_texts as _embed_texts
 
 FAMILY = "authorial"
 COST = MODERATE
-# Nothing here has a hard third-party requirement; spaCy is used opportunistically
-# by the pos_dependency feature group (default off) and degrades to unavailable().
-REQUIRES: tuple[str, ...] = ()
+# spaCy is used opportunistically by the pos_dependency feature group (default
+# off) and lexicalrichness by lexicalrichness_crosscheck (default on, degrades
+# to unavailable()); neither changes needs_parse/needs_model. sentence_transformers
+# is used by embedding_style (default off, via semantic_adjacent.embed_texts) but
+# is DELIBERATELY NOT listed here: MetricSpec.needs_model is "sentence_transformers"
+# in requires with no finer grain, so listing it would flip needs_model for this
+# WHOLE suite and silently drop it from the corpus builder's default profiling
+# pass (see the module docstring's "The critical gating rule"). The feature flag,
+# not this tuple, is what keeps the model from loading uninvited.
+REQUIRES: tuple[str, ...] = ("lexicalrichness",)
 MIN_SAMPLE = 300
 UNIT_SENSITIVE = False
 
@@ -170,6 +296,24 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "corpus_reference": True,
     # Off by default: forces the shared spaCy parse, tens of seconds on a novel.
     "pos_dependency": False,
+    # Cheap: reads profile["author_word_frequency"], which is just a dict lookup
+    # and a linear pass over this document's own tokens per candidate author.
+    "author_language_model": True,
+    # Cheap: reuses the corpus-wide word_frequency table already read by
+    # corpus_language_model, just against more distance families.
+    "word_frequency_distance": True,
+    # Cheap: lexicalrichness's own routines are the same order of cost as this
+    # module's hand-rolled ones; degrades to unavailable() if the package is
+    # missing or disabled.
+    "lexicalrichness_crosscheck": True,
+    # Off by default: loads a sentence-transformers model (see the module
+    # docstring's "The critical gating rule" -- this is the ONLY feature flag
+    # in this suite that gates a model load, and it must stay off by default).
+    "embedding_style": False,
+    # Off by default: a heavier, more specialized analysis than the rest of
+    # this suite's cheap channels, and only meaningful with author-labelled
+    # corpus data (see the module docstring's "Impostors-style verification").
+    "impostors": False,
 }
 
 DEFAULT_CHAR_NGRAM_ORDERS = (2, 3, 4, 5, 6)
@@ -193,6 +337,31 @@ DEFAULT_MIN_CORPUS_DOCUMENTS = 4
 DEFAULT_MIN_DOCUMENTS_PER_AUTHOR = 2
 DEFAULT_OUTLIER_THRESHOLD = 3.5
 DEFAULT_SEED = 42
+
+# word_frequency_distance: how much of the corpus's/document's own vocabulary
+# to align on. Bounded so a huge corpus or a huge manuscript cannot turn this
+# into an unbounded-size dict comparison.
+DEFAULT_WORD_FREQUENCY_VOCAB_CAP = 3000
+
+# embedding_style
+DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+#: Distance families that apply to a dense embedding vector. Jensen-Shannon is
+#: intentionally excluded: an embedding is a point in a learned vector space,
+#: not a probability distribution, so treating it as one would not mean what
+#: it means for the function-word or word-frequency representations.
+EMBEDDING_DISTANCE_METRICS = ("cosine", "euclidean", "manhattan")
+DEFAULT_EMBEDDING_PRIMARY_DISTANCE = "cosine"
+
+# impostors: every one of these bounds the cost of the group. m iterations of
+# (1 candidate + up to k impostors) distance comparisons over a
+# feature_fraction-sized slice of the (57-word) function-word list is cheap
+# regardless of corpus size -- it is bounded by these constants, not by the
+# corpus -- which is what makes this feasible where a real impostors
+# implementation (per-iteration classifier refitting) is not.
+DEFAULT_IMPOSTORS_K = 10
+DEFAULT_IMPOSTORS_ITERATIONS = 25
+DEFAULT_IMPOSTORS_FEATURE_FRACTION = 0.5
+DEFAULT_IMPOSTORS_MIN_AUTHORS = 2
 
 # Lexical-richness measures are unstable on short samples; every finding in
 # that group uses this floor rather than the module's general MIN_SAMPLE.
@@ -342,6 +511,34 @@ def _distance(name: str, a: Mapping[str, float], b: Mapping[str, float],
         return _manhattan(a, b, keys)
     if name == "jensen_shannon":
         return _jensen_shannon(a, b, keys)
+    return None
+
+
+def _dense_distance(name: str, a: Sequence[float], b: Sequence[float]) -> float | None:
+    """The subset of :data:`EMBEDDING_DISTANCE_METRICS` that apply to a dense,
+    fixed-order vector (a sentence-embedding), rather than the sparse,
+    key-addressed representation :func:`_distance` compares.
+
+    Cosine distance normalizes both vectors itself rather than assuming they
+    already carry unit norm: ``sentence-transformers`` embeddings do (see
+    ``embed_texts``'s ``normalize_embeddings=True``), but a centroid built by
+    averaging several of them generally does not, and this function is used
+    for exactly that comparison (``embedding_dispersion``).
+    """
+
+    if len(a) != len(b) or len(a) == 0:
+        return None
+    if name == "cosine":
+        dot = sum(float(x) * float(y) for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(float(x) * float(x) for x in a))
+        norm_b = math.sqrt(sum(float(x) * float(x) for x in b))
+        if norm_a <= 0 or norm_b <= 0:
+            return None
+        return 1.0 - dot / (norm_a * norm_b)
+    if name == "euclidean":
+        return math.sqrt(sum((float(x) - float(y)) ** 2 for x, y in zip(a, b)))
+    if name == "manhattan":
+        return sum(abs(float(x) - float(y)) for x, y in zip(a, b))
     return None
 
 
@@ -1317,6 +1514,454 @@ def _pos_dependency_findings(analysis: DocumentAnalysis, config, max_reported) -
     return out
 
 
+# --------------------------------------------- I. word-frequency distance family
+
+def _bounded_vocabulary(doc_counts: Counter, corpus_frequency: Mapping[str, int],
+                        cap: int) -> list[str]:
+    """The corpus's ``cap`` commonest words unioned with this document's own
+    ``cap`` commonest words, so the vocabulary a rare document introduces is
+    not simply invisible to the comparison, while the total stays bounded
+    regardless of how large the corpus or the document is."""
+
+    top_corpus = {word for word, _ in Counter(corpus_frequency).most_common(cap)}
+    top_doc = {word for word, _ in doc_counts.most_common(cap)}
+    return sorted(top_corpus | top_doc)
+
+
+def _word_frequency_distance_findings(analysis: DocumentAnalysis, config,
+                                      profile) -> list[dict[str, Any]]:
+    """Distance, in each of the four families, between this document's own
+    word-frequency distribution and the corpus's pooled one.
+
+    Closes the "distance families beyond function words" gap: ``profile``
+    already carries one more aligned representation besides
+    ``feature_profiles['function_words']`` -- the corpus-wide
+    ``word_frequency`` table ``corpus_language_model`` already reads for
+    cross-entropy -- so the same four distance families used for the
+    function-word comparison apply here too, over a bounded shared vocabulary
+    (see :func:`_bounded_vocabulary`).
+    """
+
+    frequency = (profile or {}).get("word_frequency")
+    total = (profile or {}).get("word_frequency_total")
+    sample_size = analysis.word_count
+
+    def _unavailable(warning: str, size: int) -> list[dict[str, Any]]:
+        return [finding(f"{PREFIX}word_frequency_distance_{name}",
+                        f"Document-vs-corpus word-frequency distance ({name})", None, name,
+                        family=FAMILY, sample_size=size, min_sample=200, warning=warning)
+               for name in ALL_DISTANCE_METRICS]
+
+    if not profile or not frequency or not total:
+        return _unavailable("no corpus profile with a word-frequency table configured",
+                            sample_size)
+    doc_counts = _word_frequencies(analysis)
+    n = sum(doc_counts.values())
+    if n == 0:
+        return _unavailable("no words in text", 0)
+    cap = max(50, int(option(config, "word_frequency_vocab_cap", DEFAULT_WORD_FREQUENCY_VOCAB_CAP)))
+    keys = _bounded_vocabulary(doc_counts, frequency, cap)
+    if not keys:
+        return _unavailable("no shared vocabulary between this document and the corpus", n)
+
+    doc_vector = {word: doc_counts.get(word, 0) / n for word in keys}
+    corpus_vector = {word: frequency.get(word, 0) / total for word in keys}
+    return [
+        finding(f"{PREFIX}word_frequency_distance_{name}",
+                f"Document-vs-corpus word-frequency distance ({name})",
+                _distance(name, doc_vector, corpus_vector, keys), name, family=FAMILY,
+                sample_size=n, min_sample=200,
+                distribution={"distance_family": name, "vocabulary_size": len(keys),
+                             "vocabulary_cap": cap})
+        for name in ALL_DISTANCE_METRICS
+    ]
+
+
+# ------------------------------------------------ J. per-author language model
+
+def _score_authors_by_cross_entropy(
+        tokens: Sequence[str], n: int, author_frequency: Mapping[str, Mapping[str, int]],
+        author_totals: Mapping[str, int]) -> list[tuple[str, float, int, int]]:
+    """``[(author, cross_entropy, author_vocabulary, author_tokens), ...]``, best fit first.
+
+    Add-one (Laplace) smoothed over each author's OWN vocabulary -- the same
+    smoothing :func:`_corpus_language_model_findings` uses for the corpus-wide
+    table -- so an author-specific cross-entropy and the corpus-wide one read
+    the same way and differ only in whose frequency table produced them.
+    """
+
+    scored = []
+    for author, freq in (author_frequency or {}).items():
+        total = (author_totals or {}).get(author)
+        if not freq or not total:
+            continue
+        vocab_size = len(freq)
+        denominator = total + vocab_size
+        surprisal = sum(-math.log2((freq.get(token, 0) + 1) / denominator) for token in tokens)
+        scored.append((author, surprisal / n, vocab_size, total))
+    scored.sort(key=lambda row: row[1])
+    return scored
+
+
+def _author_language_model_findings(analysis: DocumentAnalysis, profile,
+                                    max_reported: int) -> list[dict[str, Any]]:
+    """Cross-entropy under the best-fitting REFERENCE AUTHOR's unigram model.
+
+    Genuinely author-specific, unlike :func:`_corpus_language_model_findings`'s
+    corpus-*wide* table: this reads ``profile['author_word_frequency']``,
+    built by :mod:`textgrader.corpus` from books whose manifest entries carry
+    an ``author`` (see the module docstring's "Corpus schema" section), and
+    scores this document against every author's table rather than picking one
+    in advance, so "best fit" is a real minimum over the corpus's authors
+    rather than an assumption.
+    """
+
+    ids = (
+        (f"{PREFIX}author_unigram_cross_entropy_best_fit",
+         "Cross-entropy under the best-fitting reference author's unigram model"),
+        (f"{PREFIX}author_unigram_perplexity_best_fit",
+         "Perplexity under the best-fitting reference author's unigram model"),
+        (f"{PREFIX}author_unigram_cross_entropy_margin",
+         "Cross-entropy margin, best-fitting author vs second-best-fitting author"),
+    )
+    units = ("bits/token", "perplexity", "bits/token")
+    tokens = analysis.tokens
+    n = len(tokens)
+    author_frequency = (profile or {}).get("author_word_frequency") or {}
+    author_totals = (profile or {}).get("author_word_frequency_total") or {}
+
+    if not profile or not author_frequency:
+        warning = ("no per-author frequency table in this corpus profile (build one with "
+                  "textgrader.corpus from books whose manifest gives each an 'author', or "
+                  "rebuild an older profile that predates this table)")
+        return [finding(mid, name, None, unit, family=FAMILY, sample_size=n, min_sample=200,
+                        warning=warning) for (mid, name), unit in zip(ids, units)]
+    if n == 0:
+        return [finding(mid, name, None, unit, family=FAMILY, sample_size=0, min_sample=200,
+                        warning="no words in text") for (mid, name), unit in zip(ids, units)]
+
+    scored = _score_authors_by_cross_entropy(tokens, n, author_frequency, author_totals)
+    if not scored:
+        return [finding(mid, name, None, unit, family=FAMILY, sample_size=n, min_sample=200,
+                        warning="the per-author frequency table has no author with both a word "
+                                "count and a recorded token total")
+               for (mid, name), unit in zip(ids, units)]
+
+    best_author, best_ce, best_vocab, best_total = scored[0]
+    second = scored[1] if len(scored) > 1 else None
+    margin = (second[1] - best_ce) if second else None
+    evidence = [{"author": author, "cross_entropy": ce} for author, ce, *_ in scored[:max_reported]]
+    common = {"author": best_author, "author_vocabulary": best_vocab, "author_tokens": best_total,
+             "authors_scored": len(scored)}
+    return [
+        finding(ids[0][0], ids[0][1], best_ce, "bits/token", family=FAMILY, sample_size=n,
+                min_sample=200, distribution=common, evidence=evidence),
+        finding(ids[1][0], ids[1][1], 2 ** best_ce, "perplexity", family=FAMILY, sample_size=n,
+                min_sample=200, distribution=common),
+        finding(ids[2][0], ids[2][1], margin, "bits/token", family=FAMILY, sample_size=n,
+                min_sample=200, distribution={**common, "second_author": second[0] if second else None},
+                warning=None if margin is not None else
+                "only one author has a usable frequency table; no second-best to compare"),
+    ]
+
+
+# -------------------------------------------------- K. impostors verification
+
+_IMPOSTORS_CAVEAT = (
+    "distance-based approximation of the impostors technique: repeated distance comparisons "
+    "against author centroids already stored in the corpus profile, over random function-word "
+    "subsets, rather than a refitted classifier per iteration; it does not carry the original "
+    "technique's statistical guarantees (see the module docstring's 'Impostors-style "
+    "verification')")
+
+
+def _impostors_findings(analysis: DocumentAnalysis, config, profile) -> list[dict[str, Any]]:
+    """A bounded, distance-based approximation of impostors verification.
+
+    See the module docstring's "Impostors-style verification" section for the
+    algorithm and for why this is an approximation rather than the literature's
+    technique. Every finding this function returns carries
+    :data:`_IMPOSTORS_CAVEAT` in its warning, on both the success and the
+    degraded path, because that caveat is the one thing a reader must not miss
+    about a number called "impostors verification score".
+    """
+
+    ids = (
+        (f"{PREFIX}impostors_verification_score",
+         "Impostors verification score (mean share of sampled impostor authors this document "
+         "sits closer to the candidate author than to, across feature-subset iterations)"),
+        (f"{PREFIX}impostors_score_variance",
+         "Variance of the impostors verification score across feature-subset iterations"),
+    )
+    units = ("share", "share^2")
+
+    def _unavailable(warning: str, size: int) -> list[dict[str, Any]]:
+        combined = f"{warning}; {_IMPOSTORS_CAVEAT}"
+        return [finding(mid, name, None, unit, family=FAMILY, sample_size=size, min_sample=1,
+                        warning=combined) for (mid, name), unit in zip(ids, units)]
+
+    rows = ((profile or {}).get("feature_profiles") or {}).get("function_words")
+    books = (profile or {}).get("books")
+    if not profile or not rows or not books or len(rows) != len(books):
+        return _unavailable("no corpus profile with aligned function-word feature vectors "
+                            "and author metadata configured", 0)
+    authors = [((books[i].get("metadata") or {}).get("author")) for i in range(len(books))]
+    author_counts = Counter(author for author in authors if author)
+    if not author_counts:
+        return _unavailable("no author metadata in this corpus profile's book manifest", len(rows))
+
+    doc_vector = function_word_vector(analysis.text)
+    if not any(doc_vector.values()):
+        return _unavailable("no function words found in this document", len(rows))
+
+    primary = str(option(config, "primary_distance", DEFAULT_PRIMARY_DISTANCE))
+    if primary not in ALL_DISTANCE_METRICS:
+        primary = DEFAULT_PRIMARY_DISTANCE
+    min_per_author = max(1, int(option(config, "min_documents_per_author",
+                                       DEFAULT_MIN_DOCUMENTS_PER_AUTHOR)))
+
+    target_author = option(config, "impostors_target_author", None)
+    if target_author and author_counts.get(target_author, 0) < min_per_author:
+        target_author = None
+    if not target_author:
+        distances = sorted(
+            ((authors[i], d) for i in range(len(rows)) if authors[i]
+             and (d := _distance(primary, doc_vector, rows[i], FUNCTION)) is not None),
+            key=lambda item: item[1])
+        if not distances:
+            return _unavailable("no author-labelled corpus row was comparable under the "
+                                "primary distance", len(rows))
+        target_author = distances[0][0]
+    if author_counts.get(target_author, 0) < min_per_author:
+        return _unavailable(f"candidate author {target_author!r} has fewer than "
+                            f"{min_per_author} corpus document(s) to build a centroid from",
+                            author_counts.get(target_author, 0))
+
+    other_authors = sorted(author for author in author_counts if author != target_author)
+    min_impostors = max(1, int(option(config, "impostors_min_authors",
+                                      DEFAULT_IMPOSTORS_MIN_AUTHORS)))
+    if len(other_authors) < min_impostors:
+        return _unavailable(f"need at least {min_impostors} other reference author(s) to sample "
+                            f"impostors from; this corpus has {len(other_authors)}", len(rows))
+
+    seed = int(option(config, "seed", DEFAULT_SEED))
+    rng = random.Random(seed)
+    k = max(1, int(option(config, "impostors_k", DEFAULT_IMPOSTORS_K)))
+    m = max(1, int(option(config, "impostors_iterations", DEFAULT_IMPOSTORS_ITERATIONS)))
+    fraction = min(1.0, max(0.05, float(option(config, "impostors_feature_fraction",
+                                               DEFAULT_IMPOSTORS_FEATURE_FRACTION))))
+    impostor_authors = (other_authors if len(other_authors) <= k
+                        else rng.sample(other_authors, k))
+
+    target_rows = [rows[i] for i in range(len(rows)) if authors[i] == target_author]
+    impostor_rows = {author: [rows[i] for i in range(len(rows)) if authors[i] == author]
+                     for author in impostor_authors}
+    feature_pool = list(FUNCTION)
+    subset_size = max(3, round(len(feature_pool) * fraction))
+
+    def _centroid(rows_subset: Sequence[Mapping[str, float]],
+                 keys: Sequence[str]) -> dict[str, float]:
+        return {word: statistics.fmean(row.get(word, 0.0) for row in rows_subset) for word in keys}
+
+    scores: list[float] = []
+    for _ in range(m):
+        subset = rng.sample(feature_pool, min(subset_size, len(feature_pool)))
+        d_target = _distance(primary, doc_vector, _centroid(target_rows, subset), subset)
+        if d_target is None:
+            continue
+        wins = counted = 0
+        for impostor_book_rows in impostor_rows.values():
+            if not impostor_book_rows:
+                continue
+            d_impostor = _distance(primary, doc_vector, _centroid(impostor_book_rows, subset), subset)
+            if d_impostor is None:
+                continue
+            counted += 1
+            if d_target < d_impostor:
+                wins += 1
+        if counted:
+            scores.append(wins / counted)
+
+    if not scores:
+        return _unavailable("no iteration produced a comparable distance; this document and "
+                            "the sampled corpus rows may share no function words", len(rows))
+
+    mean_score = statistics.fmean(scores)
+    variance = statistics.pvariance(scores) if len(scores) > 1 else 0.0
+    common = {"candidate_author": target_author, "impostor_authors": sorted(impostor_rows),
+             "k": len(impostor_rows), "iterations": len(scores),
+             "feature_subset_size": subset_size, "distance_family": primary, "seed": seed}
+    evidence = [{"iteration": index, "score": score} for index, score in enumerate(scores)][:25]
+    return [
+        finding(ids[0][0], ids[0][1], mean_score, "share", family=FAMILY,
+                sample_size=len(target_rows), min_sample=min_per_author,
+                distribution=common, evidence=evidence, warning=_IMPOSTORS_CAVEAT),
+        finding(ids[1][0], ids[1][1], variance, "share^2", family=FAMILY,
+                sample_size=len(scores), min_sample=2, distribution=common,
+                warning=_IMPOSTORS_CAVEAT),
+    ]
+
+
+# --------------------------------------------- L. sentence-embedding representation
+
+def _embedding_style_findings(analysis: DocumentAnalysis, config) -> list[dict[str, Any]]:
+    """Sentence-embedding based section-to-section style drift within this document.
+
+    See the module docstring's "Sentence-embedding style representation"
+    section for what this does and does not compare against, and "The
+    critical gating rule" for why loading the model is strictly conditioned
+    on ``features.embedding_style`` (this function's only caller) being
+    explicitly on: this is the only code path anywhere in this suite that
+    can trigger a ``sentence_transformers`` import.
+    """
+
+    model_name = str(option(config, "embedding_model", DEFAULT_EMBEDDING_MODEL))
+    primary = str(option(config, "embedding_primary_distance", DEFAULT_EMBEDDING_PRIMARY_DISTANCE))
+    if primary not in EMBEDDING_DISTANCE_METRICS:
+        primary = DEFAULT_EMBEDDING_PRIMARY_DISTANCE
+    window_words = int(option(config, "section_window_words", DEFAULT_SECTION_WINDOW_WORDS))
+
+    family_ids = [(f"{PREFIX}embedding_drift_open_close_{name}",
+                   f"Sentence-embedding distance, opening section to closing section ({name})")
+                 for name in EMBEDDING_DISTANCE_METRICS]
+    other_ids = (
+        (f"{PREFIX}embedding_section_stability",
+         "Median section-to-section sentence-embedding distance"),
+        (f"{PREFIX}embedding_max_section_shift",
+         "Largest single section-to-section sentence-embedding distance"),
+        (f"{PREFIX}embedding_dispersion",
+         "Mean distance of each section's embedding from the document's own mean embedding"),
+    )
+    all_ids = family_ids + list(other_ids)
+
+    sections, method = get_sections(analysis, window_words)
+    if len(sections) < MIN_SAMPLE_SECTIONS:
+        warning = (f"only {len(sections)} section(s) available (method={method}); need at "
+                  f"least {MIN_SAMPLE_SECTIONS} to compare a book with itself" if method else
+                  "text has no measurable sections")
+        return [finding(mid, name, None, primary, family=FAMILY, sample_size=len(sections),
+                        min_sample=MIN_SAMPLE_SECTIONS, warning=warning) for mid, name in all_ids]
+
+    vectors, reason = _embed_texts([view.text for _, view in sections], model_name)
+    if vectors is None:
+        return [finding(mid, name, None, primary, family=FAMILY, sample_size=len(sections),
+                        min_sample=MIN_SAMPLE_SECTIONS, warning=reason) for mid, name in all_ids]
+
+    n = len(vectors)
+    section_labels = [title or f"section {i + 1}" for i, (title, _) in enumerate(sections)]
+    out: list[dict[str, Any]] = []
+    for name in EMBEDDING_DISTANCE_METRICS:
+        out.append(finding(
+            f"{PREFIX}embedding_drift_open_close_{name}",
+            f"Sentence-embedding distance, opening section to closing section ({name})",
+            _dense_distance(name, vectors[0], vectors[-1]), name, family=FAMILY, sample_size=n,
+            min_sample=MIN_SAMPLE_SECTIONS,
+            distribution={"method": method, "model": model_name, "distance_family": name,
+                         "opening_section": section_labels[0], "closing_section": section_labels[-1]}))
+
+    pair_distances = [_dense_distance(primary, vectors[i], vectors[i + 1]) for i in range(n - 1)]
+    clean = [d for d in pair_distances if d is not None]
+    median_distance = statistics.median(clean) if clean else None
+    max_distance = max(clean) if clean else None
+    mean_vector = [statistics.fmean(dim) for dim in zip(*vectors)]
+    dispersion_values = [d for d in (_dense_distance(primary, vec, mean_vector) for vec in vectors)
+                         if d is not None]
+    dispersion = statistics.fmean(dispersion_values) if dispersion_values else None
+
+    pair_evidence = [{"from": section_labels[i], "to": section_labels[i + 1],
+                      f"{primary}_distance": pair_distances[i]} for i in range(n - 1)][:25]
+    common = {"method": method, "model": model_name, "distance_family": primary}
+
+    out.append(finding(f"{PREFIX}embedding_section_stability",
+                f"Median section-to-section sentence-embedding distance (method={method}, "
+                f"distance={primary}, model={model_name})",
+                median_distance, primary, family=FAMILY, sample_size=n,
+                min_sample=MIN_SAMPLE_SECTIONS, evidence=pair_evidence, distribution=common))
+    out.append(finding(f"{PREFIX}embedding_max_section_shift",
+                f"Largest single section-to-section sentence-embedding distance (method={method}, "
+                f"distance={primary}, model={model_name})",
+                max_distance, primary, family=FAMILY, sample_size=n,
+                min_sample=MIN_SAMPLE_SECTIONS, evidence=pair_evidence, distribution=common))
+    out.append(finding(f"{PREFIX}embedding_dispersion",
+                f"Mean distance of each section's embedding from the document's own mean "
+                f"embedding (method={method}, distance={primary}, model={model_name})",
+                dispersion, primary, family=FAMILY, sample_size=n,
+                min_sample=MIN_SAMPLE_SECTIONS, distribution=common))
+    return out
+
+
+# --------------------------------------------------- M. lexicalrichness cross-check
+
+def _lexicalrichness_crosscheck_findings(analysis: DocumentAnalysis) -> list[dict[str, Any]]:
+    """``lexicalrichness``'s own diversity measures, alongside this module's
+    hand-rolled equivalents (group B, above) -- reported side by side rather
+    than reconciled, per the project's established cross-check philosophy
+    (see :mod:`lexical_mtld`'s module docstring for the precedent). Each
+    finding's ``distribution.own_metric_id`` names the metric id this
+    module's own computation of the "same" quantity lives under, so a reader
+    can pull both numbers up together.
+    """
+
+    ids = (
+        (f"{PREFIX}lexicalrichness_yules_k", "Yule's K (lexicalrichness)", "K",
+         f"{PREFIX}yules_k", "yulek"),
+        (f"{PREFIX}lexicalrichness_yules_i", "Yule's I (lexicalrichness)", "I",
+         f"{PREFIX}yules_i", "yulei"),
+        (f"{PREFIX}lexicalrichness_herdan_c", "Herdan's C (lexicalrichness)", "C",
+         f"{PREFIX}herdan_c", "Herdan"),
+        (f"{PREFIX}lexicalrichness_dugast_uber", "Dugast's Uber index (lexicalrichness)", "U",
+         f"{PREFIX}uber_index", "Dugast"),
+        (f"{PREFIX}lexicalrichness_maas_index", "Maas's a^2 (lexicalrichness)", "a^2",
+         f"{PREFIX}maas_index", "Maas"),
+        (f"{PREFIX}lexicalrichness_rttr", "Root TTR / Guiraud's R (lexicalrichness)", "R",
+         f"{PREFIX}guiraud_r", "rttr"),
+    )
+    n = analysis.word_count
+
+    def _degrade(warning: str, size: int) -> list[dict[str, Any]]:
+        return [finding(mid, name, None, unit, family=FAMILY, sample_size=size,
+                        min_sample=MIN_SAMPLE_LEXICAL, sample_size_sensitive=True,
+                        distribution={"own_metric_id": own_id}, warning=warning)
+               for mid, name, unit, own_id, _ in ids]
+
+    module, reason = require("lexicalrichness")
+    if module is None:
+        return _degrade(reason, n)
+    if n == 0:
+        return _degrade("no words in text", 0)
+
+    try:
+        lr = module.LexicalRichness(analysis.tokens, preprocessor=None, tokenizer=None)
+        # A near-degenerate sample (every token distinct, or every token
+        # identical) makes lexicalrichness divide by zero internally and warn
+        # rather than raise; the non-finite result is caught below instead.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            values = {attribute: getattr(lr, attribute) for _, _, _, _, attribute in ids}
+    except Exception as exc:  # pragma: no cover - defensive; lexicalrichness edge cases
+        return _degrade(f"lexicalrichness raised {type(exc).__name__}: {exc}", n)
+
+    out = []
+    for mid, name, unit, own_id, attribute in ids:
+        value = values.get(attribute)
+        if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                or not math.isfinite(value)):
+            # lexicalrichness divides by (terms**2 - total) or similar on a
+            # near-degenerate sample (e.g. every token distinct, or every
+            # token identical) and returns +/-inf or nan rather than raising;
+            # this module's own equivalent measure (group B) guards the same
+            # edge case explicitly and reports None with a warning, so the
+            # cross-check does too rather than writing a non-finite number
+            # into a JSON report.
+            value = None
+        out.append(finding(mid, name, value, unit, family=FAMILY, sample_size=n,
+                           min_sample=MIN_SAMPLE_LEXICAL, sample_size_sensitive=True,
+                           distribution={"own_metric_id": own_id},
+                           warning=None if value is not None else
+                           f"lexicalrichness.{attribute} was undefined (non-finite) on this sample"))
+    return out
+
+
 # ---------------------------------------------------------------------- measure
 
 def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
@@ -1356,5 +2001,15 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_corpus_reference_findings(analysis, config, profile, max_reported))
     if _feature(config, "pos_dependency", False):
         out.extend(_pos_dependency_findings(analysis, config, max_reported))
+    if _feature(config, "word_frequency_distance", True):
+        out.extend(_word_frequency_distance_findings(analysis, config, profile))
+    if _feature(config, "author_language_model", True):
+        out.extend(_author_language_model_findings(analysis, profile, max_reported))
+    if _feature(config, "lexicalrichness_crosscheck", True):
+        out.extend(_lexicalrichness_crosscheck_findings(analysis))
+    if _feature(config, "impostors", False):
+        out.extend(_impostors_findings(analysis, config, profile))
+    if _feature(config, "embedding_style", False):
+        out.extend(_embedding_style_findings(analysis, config))
 
     return out

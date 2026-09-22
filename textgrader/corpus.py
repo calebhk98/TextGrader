@@ -183,6 +183,14 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     books: list[dict[str, Any]] = []
     used_ids: Counter[str] = Counter()
     frequency: Counter[str] = Counter()
+    # Per-author unigram frequency, alongside the corpus-wide ``frequency``
+    # above. Populated only for books whose manifest entry gives an ``author``;
+    # a corpus built without author metadata gets an empty dict, and a reader
+    # of an OLDER profile (built before this table existed) finds the key
+    # simply absent -- both are the same "no per-author table" case to
+    # ``textgrader.metrics.stylometry_suite``'s ``author_language_model``
+    # group, which reads this with ``.get(..., {})`` rather than requiring it.
+    author_frequency: dict[str, Counter[str]] = {}
     feature_profiles: dict[str, list[dict[str, float]]] = {"function_words": []}
     metric_errors: dict[str, str] = {}
     skipped: list[str] = []
@@ -224,6 +232,9 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
             used_ids[base_id] += 1
             source_id = base_id if used_ids[base_id] == 1 else f"{base_id}-{used_ids[base_id]}"
             frequency.update(analysis.tokens)
+            author = item_meta.get("author")
+            if author:
+                author_frequency.setdefault(str(author), Counter()).update(analysis.tokens)
             book = {
                 "source_id": source_id, "source_filename": path.name,
                 "source_path": relative_name, "source_hash": f"sha256:{digest}",
@@ -332,6 +343,17 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                    "sources": len(books)}
             for name, values in pooled.items() if values},
         "word_frequency_total": sum(frequency.values()),
+        # Per-author unigram frequency tables, additive to the schema: empty
+        # when no book's manifest entry carried an "author", and absent
+        # entirely from any profile written before this field existed, which
+        # is why every reader of these two keys uses .get(..., {}) rather
+        # than assuming they are present. See CORPUS_LANGUAGE_MODEL /
+        # AUTHOR_LANGUAGE_MODEL in textgrader.metrics.stylometry_suite.
+        "author_word_frequency": {
+            author: {word: counter[word] for word in sorted(counter)}
+            for author, counter in sorted(author_frequency.items())},
+        "author_word_frequency_total": {
+            author: sum(counter.values()) for author, counter in sorted(author_frequency.items())},
         "feature_profiles": feature_profiles,
     }
 

@@ -326,6 +326,13 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "sequences (sentence length, punctuation, parse depth, ...); each sequence "
                   "and feature group is independently selectable."),
     _spec("stylometry_suite", "stylometry_suite", "authorial", "moderate",
+          # Deliberately NOT ("lexicalrichness", "sentence_transformers"): the
+          # latter would flip needs_model for this WHOLE suite and drop it out
+          # of the corpus builder's default profiling pass (see the module
+          # docstring's "The critical gating rule"). lexicalrichness alone is
+          # safe -- it affects neither needs_parse nor needs_model -- and is
+          # used opportunistically by lexicalrichness_crosscheck (default on).
+          requires=("lexicalrichness",),
           defaults={
               "features": {
                   "character_ngrams": True, "byte_ngrams": True, "word_ngrams": True,
@@ -335,6 +342,14 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "compression": True, "corpus_language_model": True, "corpus_reference": True,
                   # Off by default: forces the shared spaCy parse (tens of seconds on a novel).
                   "pos_dependency": False,
+                  "author_language_model": True, "word_frequency_distance": True,
+                  "lexicalrichness_crosscheck": True,
+                  # Off by default: loads a sentence-transformers model; the ONLY
+                  # feature in this suite that can (see "The critical gating rule").
+                  "embedding_style": False,
+                  # Off by default: a heavier, more specialized analysis, only
+                  # meaningful with author-labelled corpus data.
+                  "impostors": False,
               },
               "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_orders": [2],
               "word_ngram_orders": [1, 2, 3], "pos_ngram_orders": [1, 2, 3, 4],
@@ -346,12 +361,20 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "primary_distance": "cosine", "compression_algorithm": "zlib",
               "min_corpus_documents": 4, "min_documents_per_author": 2,
               "outlier_threshold": 3.5, "seed": 42,
+              "word_frequency_vocab_cap": 3000,
+              "embedding_model": "all-MiniLM-L6-v2", "embedding_primary_distance": "cosine",
+              "impostors_k": 10, "impostors_iterations": 25,
+              "impostors_feature_fraction": 0.5, "impostors_min_authors": 2,
+              "impostors_target_author": None,
           },
           summary="Stylometry/authorship suite: character/word/POS/punctuation n-gram entropy, "
-                  "lexical-richness statistics, Heaps/Zipf fits, section-to-section style "
-                  "stability, compression-based measures, and nearest/centroid/OOD distances "
-                  "against a reference corpus. Every measurement group is independently "
-                  "switchable; see the module docstring for what was deferred."),
+                  "lexical-richness statistics (plus a lexicalrichness cross-check), Heaps/Zipf "
+                  "fits, section-to-section style stability, compression-based measures, "
+                  "nearest/centroid/OOD distances against a reference corpus, a word-frequency "
+                  "distance family, per-author unigram cross-entropy, a bounded distance-based "
+                  "impostors approximation, and an off-by-default sentence-embedding "
+                  "section-drift representation. Every measurement group is independently "
+                  "switchable; see the module docstring for what remains deferred."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

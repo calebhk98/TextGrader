@@ -417,7 +417,12 @@
         "compression": true,
         "corpus_language_model": true,
         "corpus_reference": true,
-        "pos_dependency": false
+        "pos_dependency": false,
+        "author_language_model": true,
+        "word_frequency_distance": true,
+        "lexicalrichness_crosscheck": true,
+        "embedding_style": false,
+        "impostors": false
       },
       "char_ngram_orders": [2, 3, 4, 5, 6],
       "byte_ngram_orders": [2],
@@ -438,7 +443,15 @@
       "min_corpus_documents": 4,
       "min_documents_per_author": 2,
       "outlier_threshold": 3.5,
-      "seed": 42
+      "seed": 42,
+      "word_frequency_vocab_cap": 3000,
+      "embedding_model": "all-MiniLM-L6-v2",
+      "embedding_primary_distance": "cosine",
+      "impostors_k": 10,
+      "impostors_iterations": 25,
+      "impostors_feature_fraction": 0.5,
+      "impostors_min_authors": 2,
+      "impostors_target_author": null
     }
   },
   "allow_external_metric_commands": false,
