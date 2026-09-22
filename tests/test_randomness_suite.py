@@ -213,7 +213,9 @@ def test_missing_optional_compressors_degrade_without_crashing(monkeypatch):
 
 @pytest.mark.parametrize("text", ["", "Hi.", "A\n\nB\n\nC", "word " * 5])
 def test_degenerate_documents_never_crash(text):
-    findings = _measure(text, features={**rs.DEFAULT_FEATURES, "pos_dependency": True})
+    findings = _measure(text, features={**rs.DEFAULT_FEATURES, "pos_dependency": True,
+                                        "neural_language_model": True,
+                                        "textdescriptives_cross_check": True})
     assert findings
     for item in findings.values():
         assert isinstance(item["metric_id"], str) and item["metric_id"].startswith(rs.ID)
@@ -239,6 +241,71 @@ def test_settings_are_recorded_on_compression_findings(all_findings):
     assert dist["block_chars"] > 0
 
 
+# ------------------------------------------------ newly-available compressors
+#
+# zstandard, brotli, lz4 and pyppmd were installed but never exercised before
+# this task: every one of these had only ever produced "unavailable". These
+# tests run them for real and pin the bugs that surfaced the first time they
+# did (see the module's ``_effective_setting``/``_library_version`` docstrings).
+
+NEW_COMPRESSORS = ("zstd", "brotli", "lz4", "ppmd")
+
+
+@pytest.mark.parametrize("name", NEW_COMPRESSORS)
+def test_newly_available_compressors_produce_a_sane_ratio(name, all_findings):
+    if not optional.have(rs._COMPRESSOR_MODULE_NAME[name]):
+        pytest.skip(f"{name} not installed in this environment")
+    item = all_findings["real_prose"][f"{rs.ID}compression_ratio_{name}"]
+    zlib_item = all_findings["real_prose"][f"{rs.ID}compression_ratio_zlib"]
+    assert item["value"] is not None and item["warning"] is None
+    # Same ballpark as zlib on the same text, not an order of magnitude off in
+    # either direction: a real bug here (e.g. compressing zero bytes, or
+    # scoring compressed-and-then-recompressed data) shows up as a wildly
+    # wrong ratio long before anyone reads the number closely.
+    assert 0.2 * zlib_item["value"] < item["value"] < 6 * zlib_item["value"]
+
+
+def test_lz4_library_version_is_reported():
+    """Regression test: require("lz4") returns the lz4.frame submodule, which
+    carries no __version__ of its own - only the top-level lz4 package does.
+    _library_version silently returned None for every lz4 finding before this
+    was special-cased."""
+
+    if not optional.have("lz4"):
+        pytest.skip("lz4 not installed in this environment")
+    assert rs._library_version("lz4") is not None
+
+
+@pytest.mark.parametrize("name,low,high", [("zstd", 1, 22), ("ppmd", 2, 16),
+                                           ("bz2", 1, 9), ("lzma", 0, 9), ("brotli", 0, 11)])
+def test_effective_setting_stays_inside_each_codecs_valid_range(name, low, high):
+    for level in (-5, 0, 1, 6, 9, 16, 22, 30, 200):
+        _, value = rs._effective_setting(name, level)
+        assert low <= value <= high, (name, level, value)
+
+
+def test_out_of_range_compression_level_still_compresses_instead_of_degrading():
+    """Regression test: zstandard raises ValueError above level 22, and
+    pyppmd's default variant raises for a negative max_order. Both used to be
+    swallowed by _compress's blanket except-and-degrade, silently turning "the
+    user configured an unusual level" into "zstd/ppmd is unavailable"."""
+
+    data = b"the quick brown fox jumps over the lazy dog. " * 50
+    if optional.have("zstandard"):
+        compressed, error = rs._compress("zstd", data, 99)
+        assert compressed is not None and error is None
+    if optional.have("pyppmd"):
+        compressed, error = rs._compress("ppmd", data, -3)
+        assert compressed is not None and error is None
+
+
+def test_compression_ratio_finding_records_the_effective_setting(all_findings):
+    item = all_findings["real_prose"][f"{rs.ID}compression_ratio_ppmd"]
+    if item["value"] is None:
+        pytest.skip("pyppmd not installed in this environment")
+    assert item["distribution"]["effective_setting"] == {"max_order": rs.DEFAULTS["compression_level"]}
+
+
 # ------------------------------------------------------- corruption ordering
 
 def test_character_level_channels_rank_repeated_lowest_and_random_highest(all_findings):
@@ -248,13 +315,16 @@ def test_character_level_channels_rank_repeated_lowest_and_random_highest(all_fi
     def value(name, metric_id):
         return all_findings[name][metric_id]["value"]
 
-    for metric_id in (f"{rs.ID}char_ngram_cross_entropy",):
+    metric_ids = [f"{rs.ID}char_ngram_cross_entropy"]
+    if optional.have("pyppmd"):
+        metric_ids.append(f"{rs.ID}ppm_cross_entropy")
+    for metric_id in metric_ids:
         repeated = value("repeated_phrase", metric_id)
         real = value("real_prose", metric_id)
         shuffled_chars = value("shuffled_chars", metric_id)
         random_letters = value("random_letters", metric_id)
-        assert repeated < real < shuffled_chars
-        assert repeated < real < random_letters
+        assert repeated < real < shuffled_chars, metric_id
+        assert repeated < real < random_letters, metric_id
 
     for metric_id in (f"{rs.ID}compression_ratio_zlib",):
         repeated = value("repeated_phrase", metric_id)
@@ -309,6 +379,112 @@ def test_letter_frequency_diverges_more_for_random_letters_than_real_prose(all_f
     assert random_letters > real
 
 
+# ---------------------------------------------------- letter-bigram divergence
+
+def test_bigram_reference_table_is_derived_from_the_shipped_corpus_profile():
+    reference, total, reason = rs._bigram_reference_table()
+    assert reason is None and reference is not None
+    assert total > 0
+    assert abs(sum(reference.values()) - 1.0) < 1e-9
+    # The real top English bigrams, if this table means what it claims to.
+    top = sorted(reference, key=reference.get, reverse=True)[:10]
+    assert {"th", "he", "in", "er", "an"} & set(top)
+
+
+def test_bigram_reference_table_is_cached():
+    first, _, _ = rs._bigram_reference_table()
+    second, _, _ = rs._bigram_reference_table()
+    assert first is second
+
+
+def test_bigram_reference_table_degrades_visibly_when_the_profile_is_unreadable(monkeypatch, tmp_path):
+    missing = tmp_path / "does-not-exist.json"
+    monkeypatch.setattr(rs, "PROSE_REFERENCE", missing)
+    rs._reset_randomness_suite_caches()
+    try:
+        reference, total, reason = rs._bigram_reference_table()
+        assert reference is None and total == 0
+        assert reason and "does-not-exist.json" in reason
+        findings = _measure(REAL_PROSE)
+        item = findings[f"{rs.ID}letter_bigram_divergence"]
+        assert item["value"] is None and item["warning"]
+    finally:
+        rs._reset_randomness_suite_caches()
+
+
+def test_letter_bigram_divergence_is_unchanged_by_word_order(all_findings):
+    """Shuffling word order cannot change which letters follow which inside a
+    word, so this channel (unlike letter_frequency_divergence's cousin
+    channels that look at sequence, not composition) should not move at
+    all when only word order is corrupted."""
+
+    real = all_findings["real_prose"][f"{rs.ID}letter_bigram_divergence"]["value"]
+    shuffled_words = all_findings["shuffled_words"][f"{rs.ID}letter_bigram_divergence"]["value"]
+    assert real == pytest.approx(shuffled_words, rel=1e-9)
+
+
+def test_letter_bigram_divergence_is_higher_for_random_letters_than_real_prose(all_findings):
+    real = all_findings["real_prose"][f"{rs.ID}letter_bigram_divergence"]["value"]
+    random_letters = all_findings["random_letters"][f"{rs.ID}letter_bigram_divergence"]["value"]
+    assert random_letters > real
+
+
+def test_letter_bigram_divergence_records_its_source(all_findings):
+    item = all_findings["real_prose"][f"{rs.ID}letter_bigram_divergence"]
+    assert "prose_reference.json" in item["distribution"]["reference"]
+
+
+def test_letter_bigram_divergence_is_off_by_a_dedicated_toggle():
+    with_it = _measure(REAL_PROSE)
+    without_it = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "letter_bigram_divergence": False})
+    assert f"{rs.ID}letter_bigram_divergence" in with_it
+    assert f"{rs.ID}letter_bigram_divergence" not in without_it
+    # The single-letter channel is a different toggle and must still be there.
+    assert f"{rs.ID}letter_frequency_divergence" in without_it
+
+
+# ------------------------------------------------------- PPM language model
+
+def test_ppm_cross_entropy_is_off_by_a_dedicated_toggle():
+    with_it = _measure(REAL_PROSE)
+    without_it = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "ppm_language_model": False})
+    if optional.have("pyppmd"):
+        assert with_it[f"{rs.ID}ppm_cross_entropy"]["value"] is not None
+    assert f"{rs.ID}ppm_cross_entropy" not in without_it
+
+
+def test_ppm_cross_entropy_degrades_visibly_without_pyppmd(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "pyppmd")
+    optional.reset_cache()
+    try:
+        findings = _measure(REAL_PROSE)
+        item = findings[f"{rs.ID}ppm_cross_entropy"]
+        assert item["value"] is None and item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+def test_ppm_cross_entropy_records_its_method_and_order(all_findings):
+    item = all_findings["real_prose"][f"{rs.ID}ppm_cross_entropy"]
+    if item["value"] is None:
+        pytest.skip("pyppmd not installed in this environment")
+    assert item["distribution"]["algorithm"] == "ppmd"
+    assert item["distribution"]["max_order"] == rs.DEFAULTS["ppm_max_order"]
+    assert "compress(train" in item["distribution"]["method"]
+
+
+def test_ppm_cross_entropy_is_distinct_from_the_compression_ratio_channel(all_findings):
+    """A real predictive-model measurement, not the same number relabelled."""
+
+    findings = all_findings["real_prose"]
+    ppm = findings[f"{rs.ID}ppm_cross_entropy"]
+    ratio = findings[f"{rs.ID}compression_ratio_ppmd"]
+    if ppm["value"] is None or ratio["value"] is None:
+        pytest.skip("pyppmd not installed in this environment")
+    assert ppm["unit"] == "bits/char"
+    assert ratio["unit"] == "ratio"
+
+
 # ----------------------------------------------------- corruption baselines
 
 def test_word_and_char_shuffle_baselines_increase_surprisal_more_than_sentence_shuffle():
@@ -343,6 +519,148 @@ def test_ncd_channels_are_bounded_and_present():
         value = findings[metric_id]["value"]
         assert value is not None
         assert 0.0 <= value <= 1.5  # NCD can exceed 1 slightly with small blocks
+
+
+# ------------------------------------------------------- neural language model
+#
+# The gating rule this whole group exists to satisfy: textgrader/corpus.py
+# profiles this suite (cost="moderate", "sentence_transformers" not in
+# requires) over every reference book using MetricSpec.defaults, so a model
+# load hiding behind a default-True flag would silently cost every corpus
+# build a multi-gigabyte download and a slow CPU forward pass per book.
+
+def test_neural_language_model_is_off_by_default():
+    assert rs.DEFAULT_FEATURES["neural_language_model"] is False
+    findings = _measure(REAL_PROSE)
+    assert f"{rs.ID}neural_lm_perplexity" not in findings
+
+
+def test_neural_language_model_imports_nothing_under_default_config(monkeypatch):
+    """The hard requirement: measuring with MetricSpec.defaults must never
+    even ask optional.require for torch or transformers, let alone import
+    them - so corpus profiling (which uses exactly these defaults) cannot
+    trigger a model load no matter what is installed."""
+
+    requested: list[str] = []
+    real_require = optional.require
+
+    def _tracking_require(name):
+        requested.append(name)
+        return real_require(name)
+
+    monkeypatch.setattr(rs, "require", _tracking_require)
+    _measure(REAL_PROSE)  # rs.DEFAULTS: neural_language_model is False
+    assert "torch" not in requested
+    assert "transformers" not in requested
+
+
+def test_neural_language_model_degrades_visibly_without_torch_or_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "torch,transformers")
+    optional.reset_cache()
+    try:
+        findings = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "neural_language_model": True})
+        item = findings[f"{rs.ID}neural_lm_perplexity"]
+        assert item["value"] is None and item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+_HAVE_NEURAL_LM = optional.have("torch") and optional.have("transformers")
+
+
+@pytest.mark.skipif(not _HAVE_NEURAL_LM, reason="torch/transformers not installed")
+def test_neural_language_model_scores_real_text_when_enabled():
+    findings = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "neural_language_model": True},
+                        neural_lm_max_chars=1500)
+    item = findings[f"{rs.ID}neural_lm_perplexity"]
+    if item["value"] is None:
+        pytest.skip(f"model unavailable in this environment: {item['warning']}")
+    assert item["value"] > 0
+    assert item["distribution"]["model"] == rs.DEFAULTS["neural_lm_model"]
+    assert item["sample_size_sensitive"] is True
+    assert "gibberish" in item["distribution"]["warning_not_a_gibberish_detector"]
+
+
+@pytest.mark.skipif(not _HAVE_NEURAL_LM, reason="torch/transformers not installed")
+def test_neural_language_model_reflects_the_documented_subword_gibberish_trap():
+    """The caveat this channel's docstring makes at length, pinned down: on
+    this exact model, purely random letters can score a LOWER (more
+    "fluent") perplexity than the same real sentence with only its word
+    order scrambled - the opposite of what the character n-gram and
+    compression channels correctly show for the same corruption. This is
+    documented behaviour, not a bug to chase away."""
+
+    real = "The lighthouse keeper walked down to the shore at dawn."
+    shuffled = "shore the at keeper down dawn walked lighthouse to The."
+    random_letters = "qwtz bklm vxpr njgd hfsa ouei rlmt bzkq."
+
+    def score(text):
+        analysis = DocumentAnalysis.from_text(text)
+        config = {**rs.DEFAULTS, "features": {**rs.DEFAULT_FEATURES, "neural_language_model": True},
+                 "neural_lm_max_chars": 500}
+        findings = {item["metric_id"]: item for item in rs.measure(analysis, config=config)}
+        return findings[f"{rs.ID}neural_lm_perplexity"]["value"]
+
+    real_ppl, shuffled_ppl, random_ppl = score(real), score(shuffled), score(random_letters)
+    if None in (real_ppl, shuffled_ppl, random_ppl):
+        pytest.skip("model unavailable in this environment")
+    assert real_ppl < shuffled_ppl
+    assert random_ppl < shuffled_ppl  # the trap: word-order noise scores worse than character noise.
+
+
+@pytest.mark.skipif(not _HAVE_NEURAL_LM, reason="torch/transformers not installed")
+def test_neural_language_model_still_ranks_real_prose_most_fluent(all_findings):
+    """The one ordering this channel keeps even with the trap above: real,
+    grammatical prose is never LESS fluent than a corruption of itself. Which
+    corruption is worst is exactly the part this channel gets non-intuitively
+    (see the docstring and the trap test above), so that part is not asserted
+    here."""
+
+    overrides = {"features": {**rs.DEFAULT_FEATURES, "neural_language_model": True},
+                "neural_lm_max_chars": 1500}
+    findings = {name: _measure(text, **overrides) for name, text in CORRUPTIONS.items()}
+    real = findings["real_prose"][f"{rs.ID}neural_lm_perplexity"]["value"]
+    if real is None:
+        pytest.skip("model unavailable in this environment")
+    for name in ("shuffled_words", "shuffled_chars", "random_letters"):
+        other = findings[name][f"{rs.ID}neural_lm_perplexity"]["value"]
+        assert real < other, name
+
+
+# ------------------------------------------------------- textdescriptives cross-check
+
+def test_textdescriptives_cross_check_is_off_by_default():
+    assert rs.DEFAULT_FEATURES["textdescriptives_cross_check"] is False
+    findings = _measure(REAL_PROSE)
+    assert f"{rs.ID}textdescriptives_word_perplexity" not in findings
+
+
+def test_textdescriptives_cross_check_degrades_visibly_without_the_package(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "textdescriptives")
+    optional.reset_cache()
+    try:
+        findings = _measure(REAL_PROSE,
+                            features={**rs.DEFAULT_FEATURES, "textdescriptives_cross_check": True})
+        item = findings[f"{rs.ID}textdescriptives_word_perplexity"]
+        assert item["value"] is None and item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+_HAVE_TEXTDESCRIPTIVES = optional.have("spacy") and optional.have("textdescriptives")
+
+
+@pytest.mark.skipif(not _HAVE_TEXTDESCRIPTIVES, reason="spacy/textdescriptives not installed")
+def test_textdescriptives_cross_check_reports_a_finite_value_next_to_unknown_word_rate():
+    findings = _measure(REAL_PROSE,
+                        features={**rs.DEFAULT_FEATURES, "textdescriptives_cross_check": True},
+                        textdescriptives_max_chars=4000)
+    item = findings[f"{rs.ID}textdescriptives_word_perplexity"]
+    if item["value"] is None:
+        pytest.skip(f"unavailable in this environment: {item['warning']}")
+    assert item["value"] > 0
+    assert item["distribution"]["cross_check_of"] == f"{rs.ID}unknown_word_rate"
+    assert f"{rs.ID}unknown_word_rate" in findings  # the channel it is meant to sit beside
 
 
 # --------------------------------------------------------- registry contract

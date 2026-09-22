@@ -55,9 +55,11 @@ networkx>=3.0
 pandas>=2.0
 
 # Descriptive statistics, readability, dependency distance and coherence on top
-# of spaCy.  TextGrader computes these directly from the shared parse, so this
-# is here for users who want its extra features in their own code rather than
-# because a metric needs it.
+# of spaCy.  Used directly by randomness_suite's textdescriptives cross-check
+# (features.textdescriptives_cross_check, off by default): it builds its own
+# spaCy pipeline with textdescriptives' information_theory component attached
+# and reports the result next to this suite's own wordfreq-based rarity
+# channel, without reconciling them - see that channel's docstring.
 textdescriptives>=2.8
 
 # Test runner.  The suite is pytest-based; `unittest discover` silently skipped
@@ -68,6 +70,10 @@ pytest>=7.0
 # (textgrader.metrics.randomness_suite).  zlib, gzip, bz2 and lzma need none of
 # these; each package below backs exactly one additional compressor and
 # degrades to a visible "unavailable" finding, never a crash, if it is absent.
+# pyppmd additionally backs a real PPM predictive-model channel
+# (ppm_cross_entropy), not only a compression ratio. python-snappy needs the
+# system libsnappy-dev package; without it, its one finding degrades visibly,
+# which is the point - it is left in compression_algorithms on purpose.
 zstandard>=0.21
 brotli>=1.1
 lz4>=4.3
@@ -79,3 +85,14 @@ pyppmd>=1.1
 # Page-Hinkley) is dependency-free or already covered by numpy/scipy/ruptures
 # above; without this one it falls back to a labelled, weaker half-split proxy.
 statsmodels>=0.14
+
+# A pretrained causal language model, for randomness_suite's neural-LM
+# perplexity channel only (features.neural_language_model, off by default).
+# Multi-gigabyte install, same concern requirements-embeddings.txt keeps
+# sentence-transformers out of this file for - but that channel is one row in
+# a suite whose whole point is broad, individually-switchable coverage, not a
+# standalone feature with its own extra-requirements file, so it is here,
+# clearly called out: skip these two lines if you do not want the neural-LM
+# channel, and nothing else in this file needs them.
+torch>=2.0
+transformers>=4.30

@@ -278,7 +278,9 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "char_entropy": True, "compression": True, "complexity_measures": True,
                   "language_model": True, "punctuation_sequence": True,
                   "pos_dependency": False, "corruption_baselines": True,
-                  "lexical_gibberish": True,
+                  "lexical_gibberish": True, "ppm_language_model": True,
+                  "letter_bigram_divergence": True, "neural_language_model": False,
+                  "textdescriptives_cross_check": False,
               },
               "language": "en",
               "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_order": 3,
@@ -295,12 +297,18 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "corruption_seed": 1337, "corruption_permutations": 3,
               "corruption_sentence_fraction": 0.3, "corruption_char_order": 4,
               "corruption_word_order": 2, "corruption_max_chars": 20000,
-              "consonant_cluster_min": 4,
+              "consonant_cluster_min": 4, "ppm_max_order": 6,
+              "neural_lm_model": "distilgpt2", "neural_lm_max_chars": 6000,
+              "textdescriptives_max_chars": 50000,
           },
           summary="Character/word/POS/punctuation language-likeness, multi-algorithm "
-                  "compression ratios and NCD, entropy/complexity families (Shannon, "
-                  "Renyi, Tsallis, permutation, spectral, SVD, ApEn/SampEn, LZ), and "
-                  "seeded shuffle-corruption baselines. Off by default; experimental."),
+                  "compression ratios (zlib/gzip/bz2/lzma/zstd/brotli/lz4/pyppmd) and NCD, "
+                  "a real PPM predictive-model cross-entropy, entropy/complexity families "
+                  "(Shannon, Renyi, Tsallis, permutation, spectral, SVD, ApEn/SampEn, LZ), "
+                  "single-letter and corpus-derived letter-bigram divergence from English, "
+                  "seeded shuffle-corruption baselines, and two opt-in external cross-checks "
+                  "(a pretrained causal-LM perplexity, and textdescriptives). Off by "
+                  "default; experimental."),
     _spec("timeseries_suite", "timeseries_suite", "sentence_rhythm", "moderate",
           defaults={
               "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
