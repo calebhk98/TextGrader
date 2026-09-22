@@ -1,3 +1,12 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Trained/binary language-model artifacts. randomness_suite's KenLM channel
+# always trains into a tempfile.TemporaryDirectory() that is removed before
+# the channel returns, so none of these should ever appear in this repo --
+# these patterns are a backstop for local, ad-hoc experimentation only.
+*.arpa
+*.klm
+*.binary
+*.kenlm
