@@ -372,7 +372,11 @@
         "negation_and_quantifiers": true,
         "connective_relations": true,
         "propositions": true,
-        "modal_argument_position": true
+        "modal_argument_position": true,
+        "nli_entailment": false,
+        "coreference_resolution": false,
+        "lexical_opposition": false,
+        "temporal_ordering": false
       },
       "window_sentences": 6,
       "max_pairs": 200,
@@ -380,7 +384,11 @@
       "max_evidence": 20,
       "proposition_cap": 20000,
       "connective_min_words": 4,
-      "repeated_assertion_min_words": 5
+      "repeated_assertion_min_words": 5,
+      "coreference_max_chars": 20000,
+      "nli_model": "cross-encoder/nli-deberta-v3-small",
+      "nli_max_pairs": 60,
+      "nli_batch_size": 16
     },
     "timeseries_suite": {
       "enabled": false,

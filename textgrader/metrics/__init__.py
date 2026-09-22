@@ -258,13 +258,24 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "sentence/paragraph order-permutation baselines. Off by default; each group "
                   "toggles independently under 'features', and the coreference/WordNet groups "
                   "stay off even when the rest of the suite is enabled."),
-    _spec("logic_suite", "logic_suite", "discourse", "parse", ("spacy",),
+    _spec("logic_suite", "logic_suite", "discourse", "parse",
+          ("spacy", "transformers", "fastcoref", "nltk", "dateutil"),
           defaults={
               "features": {
                   "negation_and_quantifiers": True,
                   "connective_relations": True,
                   "propositions": True,
                   "modal_argument_position": True,
+                  # Off by default -- see the module docstring's "Gating" note:
+                  # this suite's cost class ("parse") means MetricSpec.needs_model
+                  # (which only checks for "sentence_transformers") does NOT
+                  # exclude this from corpus profiling, so these four flags are
+                  # the only thing standing between an NLI/coreference model and
+                  # a book nobody asked to run one against.
+                  "nli_entailment": False,
+                  "coreference_resolution": False,
+                  "lexical_opposition": False,
+                  "temporal_ordering": False,
               },
               "window_sentences": 6,
               "max_pairs": 200,
@@ -273,10 +284,20 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "proposition_cap": 20_000,
               "connective_min_words": 4,
               "repeated_assertion_min_words": 5,
+              "coreference_max_chars": 20_000,
+              "nli_model": "cross-encoder/nli-deberta-v3-small",
+              "nli_max_pairs": 60,
+              "nli_batch_size": 16,
           },
           summary="Candidate contradictions, connective-relation overlap and proposition "
-                  "structure; no NLI/OpenIE model is available here, so every value is a "
-                  "surface-heuristic candidate, never a truth or entailment claim."),
+                  "structure from surface heuristics (on by default), plus four off-by-default "
+                  "channels that need an installed model or resource: real NLI entailment/"
+                  "contradiction scoring over the same candidate pairs with a heuristic-vs-model "
+                  "agreement readout, fastcoref coreference resolution so pronoun subjects can "
+                  "enter the candidate pool, WordNet antonym/hypernym lexical relations, and "
+                  "dateutil-based temporal ordering. Every heuristic value stays a candidate, "
+                  "never a truth claim; every NLI value is a labelled model score, never a "
+                  "fact about the text -- see the module docstring."),
     _spec("randomness_suite", "randomness_suite", "lexical", "moderate",
           requires=("wordfreq",),
           defaults={

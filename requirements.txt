@@ -96,3 +96,25 @@ pyppmd>=1.1
 # Page-Hinkley) is dependency-free or already covered by numpy/scipy/ruptures
 # above; without this one it falls back to a labelled, weaker half-split proxy.
 statsmodels>=0.14
+
+# NLI cross-encoder and coreference backends for the experimental logic_suite
+# metric's "nli_entailment" and "coreference_resolution" features.  Both are
+# off by default and, like sentence-transformers above, pull in a multi-
+# gigabyte torch install that most users do not need -- installed here rather
+# than split into a second embeddings-style extras file only because
+# logic_suite's own gate (cost="parse", features off by default) already keeps
+# them from ever loading uninvited; see the module docstring's "gating rule"
+# note before changing that. Without transformers, the NLI channel reports
+# "unavailable" with an install hint and every other logic_suite measurement
+# is unaffected. fastcoref additionally pulls in its own spaCy dependency and,
+# as shipped, was found at the time of writing to be incompatible with recent
+# transformers releases (see textgrader/propositions.py); coreference
+# resolution degrades to "unavailable" rather than crashing when that happens.
+transformers>=4.40
+torch>=2.0
+fastcoref>=2.1
+
+# Date parsing for logic_suite's "temporal_ordering" feature (which of two
+# differing dates on the same subject+predicate is earlier). Lightweight, no
+# torch dependency, unlike the three packages just above.
+python-dateutil>=2.8

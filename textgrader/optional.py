@@ -59,6 +59,29 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # already covered by numpy/scipy/ruptures above; this is the one classical
     # time-series statistic worth a real implementation rather than a proxy.
     "statsmodels": ("statsmodels", "pip install statsmodels"),
+    # NLI cross-encoder backend for logic_suite's "nli_entailment" feature (off
+    # by default). Heavy (pulls in a transformer checkpoint) and never imported
+    # unless that flag is explicitly on -- see the module docstring's gating
+    # note for why that matters here more than anywhere else in this codebase.
+    "transformers": ("transformers", "pip install transformers"),
+    # Only transformers' own import is touched directly; this entry exists so
+    # `installed()`/`requirements.txt` account for the CPU wheel transformers
+    # needs, and so a broken torch build reports through the same channel as
+    # every other optional dependency instead of raising on import.
+    "torch": ("torch", "pip install torch"),
+    # Coreference resolution for logic_suite's "coreference_resolution"
+    # feature (off by default). See textgrader/propositions.py for why a
+    # pronoun subject is otherwise dropped from every cross-sentence check.
+    "fastcoref": ("fastcoref", "pip install fastcoref"),
+    # WordNet antonym/hypernym relations for logic_suite's "lexical_opposition"
+    # feature. The `nltk` package alone is not enough -- its corpus data is a
+    # separate download; textgrader.propositions checks for that data itself
+    # and reports a LookupError as an actionable "unavailable", not a crash.
+    "nltk": ("nltk", "pip install nltk"),
+    # Date parsing for logic_suite's "temporal_ordering" feature: which of two
+    # differing dates on the same subject+predicate is earlier, not just that
+    # they differ.
+    "dateutil": ("dateutil.parser", "pip install python-dateutil"),
 }
 
 _lock = threading.Lock()

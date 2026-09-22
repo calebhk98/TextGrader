@@ -1,27 +1,35 @@
-"""Logic, consistency, entailment and argument-structure sensors -- the
-honest subset.
+"""Logic, consistency, entailment and argument-structure sensors.
 
-The spec this module implements from (``docs/experimental-tasks/03-...``)
-is written against a toolchain this environment does not have: no NLI
-cross-encoder, no OpenIE service, no argument-mining model, no GPU, no
-network access to fetch one. Rather than stub those behind an
-``unavailable`` branch nobody ran, this module ships only what a
-dependency-free pass and the installed spaCy pipeline can genuinely compute,
-and names every one of them for what it actually measures. See ``Deferred``
-at the end of this docstring for what was left out and why.
+The first pass through this module (see git history) was written against a
+toolchain this environment did not have: no NLI cross-encoder, no OpenIE
+service, no argument-mining model, no GPU, no network access to fetch one.
+It shipped only what a dependency-free pass and the installed spaCy pipeline
+could genuinely compute, and named every one of them for what it actually
+measured. An NLI model, ``fastcoref``, downloaded WordNet corpus data and
+``python-dateutil`` are now installed, and four more measurement groups --
+``nli_entailment``, ``coreference_resolution``, ``lexical_opposition`` and
+``temporal_ordering`` -- close most of what that pass's own ``Deferred``
+section named. See ``Deferred`` at the end of this docstring for what is
+still, permanently, out of scope, and see the "Gating" section below before
+touching any of the four new groups' defaults.
 
-Nothing here checks whether a claim is *true*. Two sentences that share a
-subject and a verb but disagree about the object are a **contradiction
-candidate** -- worth a human's attention, not a verdict. A "therefore" that
-connects two sentences with no shared vocabulary is a **low lexical-overlap
-premise/conclusion pair** -- it might still be a perfectly good inference
-dressed in different words, or it might be a non sequitur; this module
-cannot tell you which, only that the surface signal a reader would lean on is
-absent. Every finding below says this in its name or its docstring, not just
-once here.
+Nothing here checks whether a claim is *true*, including the groups backed by
+a real model. Two sentences that share a subject and a verb but disagree
+about the object are a **contradiction candidate** -- worth a human's
+attention, not a verdict. A "therefore" that connects two sentences with no
+shared vocabulary is a **low lexical-overlap premise/conclusion pair** -- it
+might still be a perfectly good inference dressed in different words, or it
+might be a non sequitur. An NLI model's "contradiction" label is a **model
+score on a sentence pair stripped of context**, not a fact about the text --
+fiction legitimately contains contradictions (unreliable narrators, lies,
+hypotheticals, quoted falsehoods), so a high contradiction share is never
+reported as an error count. Every finding below says this in its name or its
+docstring, not just once here.
 
-Four independently switchable measurement groups, under ``features`` in this
-suite's config block:
+Eight independently switchable measurement groups, under ``features`` in this
+suite's config block. The first four were the original pass and default to
+*on*; the last four are new, need an installed model or resource, and default
+to *off* regardless of their own cost (see "Gating"):
 
 ``negation_and_quantifiers`` (stdlib, cost ``fast``)
     Surface negation density and universal/existential ("all", "never", "no
@@ -42,75 +50,146 @@ suite's config block:
     entity/property/numeric/temporal conflict *candidates*, a paragraph-scoped
     version of the same scan, an exact-repeated-proposition rate, and a proxy
     for claims introduced about a brand-new named entity with no connective
-    linking them to what came before.
+    linking them to what came before. These candidate counts are unchanged by
+    every group added since: WordNet and NLI report their own readings of the
+    same pairs alongside them rather than editing them, so this group's
+    numbers stay comparable across a run with or without the new groups on.
 
 ``modal_argument_position`` (stdlib, cost ``fast``)
     Whether hedges and modals cluster around the sentences that carry an
     argumentative connective, compared with the rest of the text.
 
-Every scalar this module reports is a **candidate rate or a lexical-overlap
-score**, not a truth value, and every one records the settings it was
-computed under (``window_sentences``, ``max_pairs``, the spaCy pipeline
-name/version) in its ``distribution``, because two runs with different caps
-or a different spaCy model are not the same measurement.
+``nli_entailment`` (``transformers`` cross-encoder, off by default)
+    Real entailment/neutral/contradiction scores, from
+    ``cross-encoder/nli-deberta-v3-small`` by default, over a candidate pool
+    built the same way as ``propositions``' heuristic scans (shared subject
+    and predicate, capped separately and much lower via ``nli_max_pairs``
+    because this is the most expensive thing in the module). Reports the
+    label distribution with the model name and version recorded alongside it,
+    the strongest contradictions as bounded evidence, and a confusion-matrix
+    cross-check of how often this suite's own negation/attribute-conflict
+    heuristics agree or disagree with the model's label on the same pairs.
+
+``coreference_resolution`` (``fastcoref``, off by default; modifies
+``propositions``/``nli_entailment`` rather than adding metrics of its own)
+    Resolves a pronoun subject ("she") to a named antecedent ("Alice") over
+    the first ``coreference_max_chars`` characters, so it can enter the same
+    subject+predicate buckets a directly-named subject would. Off by default
+    both because it is another neural model on top of the spaCy parse this
+    module already pays for, and because -- found by actually trying it, not
+    assumed -- the installed ``fastcoref`` release does not load cleanly
+    against the installed ``transformers`` release in this environment; see
+    ``textgrader/propositions.py`` for the exact failure and how it degrades.
+
+``lexical_opposition`` (``nltk`` + downloaded WordNet corpus data, off by
+default)
+    A WordNet antonym channel independent of both the surface heuristics and
+    the NLI model (``discourse.logic_wordnet_antonym_candidates``), plus an
+    informational hypernym/hyponym cross-check on ``propositions``'
+    ``property``-subtype candidates that flags likely false positives
+    ("dog"/"poodle" is not a contradiction) without ever changing that
+    metric's own count.
+
+``temporal_ordering`` (``python-dateutil``, off by default)
+    For ``propositions``' ``temporal``-subtype candidates (two differing
+    explicit years/dates on the same subject+predicate), which one is
+    chronologically earlier and whether that matches narrative order --
+    explicitly framed as an observation, not an error, since flashbacks and
+    non-chronological narration produce this legitimately.
+
+Every scalar this module reports is a **candidate rate, a lexical-overlap
+score, or a labelled model score**, never a truth value on its own, and every
+one records the settings it was computed under (``window_sentences``,
+``max_pairs``, the spaCy pipeline name/version, the NLI model name, whether
+coreference resolution ran) in its ``distribution``, because two runs with
+different caps, a different spaCy model, or a different NLI checkpoint are
+not the same measurement.
+
+Gating
+------
+
+``textgrader/corpus.py`` decides which metrics it profiles over every
+reference book by excluding ``needs_parse`` and ``needs_model`` metrics, and
+``MetricSpec.needs_model`` is defined as ``"sentence_transformers" in
+self.requires`` -- nothing else. ``nli_entailment`` is backed by
+``transformers``, not ``sentence_transformers``, so that guard **cannot see
+it**: a corpus build run with ``include_model_metrics=True`` would not
+exclude this suite on that basis alone. Two things currently stand between
+this and a book-length NLI pass nobody asked for, and both must stay true:
+
+1. This suite's registry ``cost`` is ``"parse"``, so ``needs_parse`` already
+   excludes it from corpus profiling regardless of ``needs_model`` -- do not
+   make this suite cheaper without re-checking this.
+2. ``features.nli_entailment`` (and ``coreference_resolution``,
+   ``lexical_opposition``, ``temporal_ordering``) default to ``False`` in
+   both ``MetricSpec.defaults`` and ``config.json``, and the ``on()`` helper
+   in :func:`measure` falls back to ``False`` for any of these four when a
+   caller's ``features`` mapping omits them -- unlike the original four
+   groups, which fall back to ``True`` for backward compatibility. Getting
+   that fallback backwards for a new group would turn on a transformer-model
+   pass for every caller that passes ``config=None`` or a partial ``features``
+   mapping, most of which are tests.
+
+``_load_nli_pipeline`` and ``prop_lib._load_coref_model`` are the only two
+places this module (and the ``propositions`` module it uses) ever import
+``transformers`` or ``fastcoref``, and both are called only from inside
+``_nli_findings``/coreference resolution -- never at import time, never
+unless the owning feature is on. ``tests/test_logic_suite.py`` asserts this
+directly by monkeypatching both loaders to raise and running ``measure()``
+under the default config.
+
+Measured cost, CPU only, ``cross-encoder/nli-deberta-v3-small``: loading the
+pipeline is about 2.5s; scoring is roughly 30ms/pair batched (measured on an
+otherwise idle core), so the default ``nli_max_pairs=60`` costs on the order
+of 4-5s end to end on top of whatever ``propositions`` already paid for the
+parse and the two heuristic bucket scans, which this group does not repeat.
+That per-pair figure rose sharply (tens of seconds for the same 60 pairs) when
+measured on a machine with four other CPU-bound processes contending for the
+same cores -- a real property of shared hardware, not of this code -- so
+timing this channel is only meaningful on an otherwise-quiet machine.
+Proposition extraction and the heuristic bucket scans stay ``parse``-class
+and are entirely unaffected by whether this group is on.
 
 Deferred
 --------
 
-Left out entirely, rather than shipped as an ``unavailable`` branch this
-environment could never exercise:
+Permanently out of scope -- not a matter of what happens to be installed:
 
-* **Pairwise NLI (entailment/neutral/contradiction probabilities).** Needs a
-  cross-encoder NLI model (``sentence-transformers`` CrossEncoder or
-  ``transformers``); neither package is installed here, there is no GPU, and
-  downloading one is not something a metric module should attempt silently.
-  This is the single biggest gap against the spec: "Adjacent-sentence
-  entailment probability distribution", "Adjacent-sentence contradiction
-  probability distribution", and the connective *entailment/support scores*
-  the spec asks for are all, properly, NLI's job. The lexical-overlap scores
-  in ``connective_relations`` are a much weaker proxy for the same intuition
-  and say so in their own docstrings.
 * **OpenIE / Stanford CoreNLP / AllenNLP SRL.** No such service or legacy
   model is installed or reachable. ``textgrader/propositions.py`` extracts a
   dependency-parse proxy instead (documented there), which is narrower:
   single subject, single object, no semantic roles, no nested clauses.
-* **Coreference resolution.** No coreference resolver is installed. Every
-  pronoun-subject proposition is excluded from cross-sentence matching
-  rather than guessed at, which means most of the ordinary "Alice was
-  tired... She wasn't, though" contradictions in real prose are invisible to
-  this suite. This is a real, significant recall loss, not a rounding error.
-* **WordNet / ConceptNet / VerbNet / FrameNet / PropBank antonymy and
-  commonsense checks.** ``nltk`` is installed but its ``wordnet`` corpus data
-  is not present in this environment and cannot be downloaded here
-  (confirmed: ``nltk.corpus.wordnet`` raises ``LookupError`` on import); no
-  ConceptNet/ VerbNet/FrameNet/PropBank wrapper is installed either.
-  Shipping an antonym-based contradiction check without ever having run it
-  against real WordNet data is exactly the untested-behind-``unavailable``
-  trap the task brief warns against, so it is left out rather than guessed.
 * **Argument mining (claim/premise/support/attack extraction).** No
   argument-mining model or toolkit is installed. ``connective_chain_length``
   is offered as a much narrower proxy -- built only from where "therefore"
   and "because" sit relative to each other -- and is named and documented as
   exactly that, never as claim/premise/support/attack labels from a model.
-* **Temporal-order reasoning.** No date parser (``dateparser``/``dateutil``)
-  is added; ``entity_attribute_conflict_candidates`` can only notice that two
-  explicit numbers/years attached to the same subject+predicate differ, never
-  which one comes first or whether the difference is even meaningful (a
-  birth year and a death year for the same person are supposed to differ).
 * **Semantic-role pattern consistency / argument omission rates.** These need
   real SRL (PropBank-style ARG0/ARG1/ARGM labels), which needs AllenNLP or an
   equivalent model this environment does not have; the shallow dependency
   triples here are not semantic roles and are not offered as a substitute.
+* **FrameNet / PropBank / VerbNet / ConceptNet.** No wrapper for any of these
+  is installed; WordNet (``lexical_opposition``) is the one lexical resource
+  this module now uses, and it is not a substitute for frame or role
+  inventories.
+
+Closed since the first pass, with real limitations of their own (each
+documented at its own feature group above and, for coreference and WordNet,
+in ``textgrader/propositions.py``): pairwise NLI, coreference resolution,
+WordNet antonymy, and temporal ordering.
 """
 
 from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Mapping
 
 from .. import text as textlib
 from ..document import DocumentAnalysis
+from ..optional import on_reset, require
 from .. import propositions as prop_lib
 from ..stats import run_lengths, summarize
 from .common import PARSE, finding, option, rate, unavailable
@@ -167,7 +246,17 @@ _METRIC_NAMES = {
     "discourse.logic_repeated_assertion_rate": "Exact-repeated-proposition rate",
     "discourse.logic_new_entity_claim_rate": "Unlinked new-named-entity introduction rate",
     "discourse.logic_modal_density_near_connectives": "Modal/hedge density near argumentative connectives vs. elsewhere",
+    "discourse.logic_nli_label_distribution": "NLI-scored candidate-pair label distribution (entailment/neutral/contradiction)",
+    "discourse.logic_nli_heuristic_agreement": "Heuristic-candidate vs. NLI-label agreement",
+    "discourse.logic_wordnet_antonym_candidates": "WordNet antonym-based lexical-opposition candidates",
+    "discourse.logic_wordnet_hypernym_downgrade_rate": "Property-conflict candidates WordNet marks as hypernym/hyponym-related, not opposed",
+    "discourse.logic_temporal_order_candidates": "Temporal-conflict pairs whose parsed date order contradicts narrative order",
 }
+
+#: Reference date for :func:`dateutil.parser.parse` when a parsed string omits
+#: a field (a bare year has no month/day). Fixed rather than "now" so the same
+#: input parses to the same value on every run, which a comparable metric needs.
+_TEMPORAL_PARSE_DEFAULT = datetime(2000, 1, 1)
 
 
 def _snippet(text: str, limit: int = 140) -> str:
@@ -199,6 +288,59 @@ def _settings(**extra: Any) -> dict[str, Any]:
     """Settings worth recording alongside a number so two runs can be compared."""
 
     return dict(extra)
+
+
+# --------------------------------------------------------------- NLI backend
+#
+# The one place in this module that imports a heavy ML dependency, and it
+# does so lazily, through ``require``, only from inside ``_load_nli_pipeline``
+# -- never at module import time and never unless ``features.nli_entailment``
+# is explicitly on. See the module docstring's "Gating" section for why that
+# matters more here than for any other metric in this codebase: this suite's
+# cost class is ``parse``, not ``model``, so the corpus builder's
+# ``include_model_metrics`` guard does not see it -- ``features`` being off by
+# default is the only thing standing between this and a book-length NLI pass
+# nobody asked for.
+
+_NLI_MODEL_CACHE: dict[str, tuple[Any, str | None]] = {}
+
+
+def _reset_nli_cache() -> None:
+    _NLI_MODEL_CACHE.clear()
+
+
+on_reset(_reset_nli_cache)
+
+
+def _load_nli_pipeline(model_name: str) -> tuple[Any, str | None]:
+    if model_name in _NLI_MODEL_CACHE:
+        return _NLI_MODEL_CACHE[model_name]
+    module, reason = require("transformers")
+    if module is None:
+        _NLI_MODEL_CACHE[model_name] = (None, reason)
+        return _NLI_MODEL_CACHE[model_name]
+    try:
+        pipeline_obj = module.pipeline("text-classification", model=model_name, device=-1, top_k=None)
+        outcome: tuple[Any, str | None] = (pipeline_obj, None)
+    except Exception as exc:  # pragma: no cover - model download/runtime failure
+        outcome = (None, f"transformers NLI model {model_name!r} unavailable "
+                         f"({type(exc).__name__}: {exc}); pip install transformers torch")
+    _NLI_MODEL_CACHE[model_name] = outcome
+    return outcome
+
+
+def _nli_label_scores(pipeline_obj: Any, pairs: list[tuple[str, str]],
+                      batch_size: int) -> list[tuple[str, dict[str, float]]]:
+    """``(top_label, {label: score, ...})`` per pair, batched through the pipeline."""
+
+    inputs = [{"text": a, "text_pair": b} for a, b in pairs]
+    raw = pipeline_obj(inputs, batch_size=batch_size, truncation=True)
+    out = []
+    for rows in raw:
+        scores = {row["label"].lower(): float(row["score"]) for row in rows}
+        top_label = max(scores, key=scores.get) if scores else "neutral"
+        out.append((top_label, scores))
+    return out
 
 
 # -------------------------------------------------------- negation/quantifiers
@@ -434,32 +576,98 @@ def _connective_relations(analysis: DocumentAnalysis, min_words: int, max_eviden
 
 # --------------------------------------------------------------- propositions
 
-def _proposition_findings(analysis: DocumentAnalysis, *, proposition_cap: int, window_sentences: int,
-                          max_pairs: int, max_comparisons: int, max_evidence: int,
+@dataclass
+class _PropContext:
+    """Everything the propositions/NLI/WordNet/temporal groups share.
+
+    Built once per :func:`measure` call so that enabling several of these
+    groups together pays for extraction, coreference resolution and the two
+    heuristic bucket scans exactly once -- the same sharing discipline
+    :meth:`DocumentAnalysis.spacy_sents_by_channel` already gives the parse
+    itself.
+    """
+
+    analysis: DocumentAnalysis
+    unavailable_reason: str | None
+    extraction: "prop_lib.Extraction | None"
+    props: list  # list[prop_lib.Proposition]; coreference-resolved when that feature is on
+    coref_meta: dict[str, Any]
+    negation_scan: "prop_lib.PairScan | None"
+    attribute_scan: "prop_lib.PairScan | None"
+    settings: dict[str, Any]
+    window_sentences: int
+    max_pairs: int
+    max_comparisons: int
+
+
+def _build_proposition_context(analysis: DocumentAnalysis, *, proposition_cap: int, window_sentences: int,
+                               max_pairs: int, max_comparisons: int, coreference_enabled: bool,
+                               coreference_max_chars: int) -> _PropContext:
+    empty = lambda reason: _PropContext(  # noqa: E731 - small, local, and only used twice
+        analysis, reason, None, [], {"enabled": coreference_enabled}, None, None, {},
+        window_sentences, max_pairs, max_comparisons)
+    if analysis.nlp_unavailable:
+        return empty(analysis.nlp_unavailable)
+
+    extraction = prop_lib.extract(analysis, proposition_cap)
+    props = extraction.propositions
+    if not props:
+        return empty("no sentence yielded a usable (subject, predicate) proposition")
+
+    coref_meta: dict[str, Any] = {"enabled": coreference_enabled}
+    if coreference_enabled:
+        resolution = prop_lib.resolve_coreference(analysis, extraction, coreference_max_chars)
+        coref_meta.update(applied=resolution.available, reason=resolution.reason,
+                          resolved_count=resolution.resolved_count, chars_used=resolution.chars_used,
+                          truncated=resolution.truncated, model=resolution.model_name)
+        props = resolution.propositions
+
+    settings = _settings(window_sentences=window_sentences, max_pairs=max_pairs,
+                         proposition_cap=proposition_cap, spacy_model=extraction.spacy_model,
+                         spacy_version=extraction.spacy_version, ner_available=extraction.ner_available,
+                         coreference_resolution=coref_meta)
+    negation_scan = prop_lib.bucketed_pairs(
+        props, window_sentences=window_sentences, max_pairs=max_pairs,
+        max_comparisons=max_comparisons, test=prop_lib.negation_conflict)
+    attribute_scan = prop_lib.bucketed_pairs(
+        props, window_sentences=window_sentences, max_pairs=max_pairs,
+        max_comparisons=max_comparisons, test=prop_lib.attribute_conflict)
+    return _PropContext(analysis, None, extraction, props, coref_meta, negation_scan, attribute_scan,
+                        settings, window_sentences, max_pairs, max_comparisons)
+
+
+def _coref_note(coref_meta: Mapping[str, Any]) -> str:
+    if not coref_meta.get("enabled"):
+        return ("pronoun-subject sentences are excluded entirely because "
+                "features.coreference_resolution is off (see module docstring)")
+    if not coref_meta.get("applied"):
+        return ("features.coreference_resolution is on but unavailable this run "
+                f"({coref_meta.get('reason')}); pronoun-subject sentences are excluded entirely, "
+                "exactly as when the feature is off")
+    return (f"features.coreference_resolution resolved {coref_meta.get('resolved_count', 0):,} "
+           f"pronoun-subject proposition(s) against a named antecedent within the first "
+           f"{coref_meta.get('chars_used', 0):,} characters"
+           f"{' (document is longer; the rest was not scanned)' if coref_meta.get('truncated') else ''}"
+           "; every resolution is the model's own judgement, not a verified reading")
+
+
+def _proposition_findings(context: _PropContext, *, max_evidence: int,
                           repeated_assertion_min_words: int) -> list[dict[str, Any]]:
     ids = ["discourse.logic_negation_flip_candidates", "discourse.logic_paragraph_contradiction_rate",
           "discourse.logic_entity_attribute_conflict_candidates", "discourse.logic_repeated_assertion_rate",
           "discourse.logic_new_entity_claim_rate"]
-    if analysis.nlp_unavailable:
-        return [unavailable(metric_id, _METRIC_NAMES[metric_id], analysis.nlp_unavailable, family=FAMILY)
+    if context.unavailable_reason:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], context.unavailable_reason, family=FAMILY)
                 for metric_id in ids]
 
-    extraction = prop_lib.extract(analysis, proposition_cap)
-    props = extraction.propositions
-    settings = _settings(window_sentences=window_sentences, max_pairs=max_pairs,
-                         proposition_cap=proposition_cap, spacy_model=extraction.spacy_model,
-                         spacy_version=extraction.spacy_version, ner_available=extraction.ner_available)
-    base_warning = (
-        "candidates only: matched on shared surface subject and predicate, not confirmed "
-        "coreference or verified meaning; pronoun-subject sentences are excluded entirely "
-        "because no coreference resolver is available (see module Deferred notes)")
+    extraction, props, settings = context.extraction, context.props, context.settings
+    base_warning = ("candidates only: matched on shared surface subject and predicate, not "
+                    "confirmed identity or verified meaning; " + _coref_note(context.coref_meta) +
+                    ". Where features.nli_entailment is also on, "
+                    "discourse.logic_nli_heuristic_agreement cross-checks these same candidates "
+                    "against a real entailment model")
     if extraction.truncated:
-        base_warning += f"; proposition extraction stopped at the proposition_cap of {proposition_cap:,}"
-
-    if not props:
-        no_data = "no sentence yielded a usable (subject, predicate) proposition"
-        return [unavailable(metric_id, _METRIC_NAMES[metric_id], no_data, family=FAMILY)
-                for metric_id in ids]
+        base_warning += f"; proposition extraction stopped at the proposition_cap of {settings['proposition_cap']:,}"
 
     def pair_evidence(pairs, limit) -> list[dict[str, Any]]:
         rows = []
@@ -473,9 +681,7 @@ def _proposition_findings(analysis: DocumentAnalysis, *, proposition_cap: int, w
             })
         return rows
 
-    negation_scan = prop_lib.bucketed_pairs(
-        props, window_sentences=window_sentences, max_pairs=max_pairs,
-        max_comparisons=max_comparisons, test=prop_lib.negation_conflict)
+    negation_scan, attribute_scan = context.negation_scan, context.attribute_scan
     negation_settings = {**settings, "comparisons_examined": negation_scan.comparisons,
                         "pairs_capped": negation_scan.pairs_capped,
                         "buckets_sampled": negation_scan.buckets_sampled}
@@ -487,7 +693,7 @@ def _proposition_findings(analysis: DocumentAnalysis, *, proposition_cap: int, w
         evidence=pair_evidence(negation_scan.pairs, max_evidence), warning=base_warning)]
 
     same_paragraph = [p for p in negation_scan.pairs if p[0].paragraph_index == p[1].paragraph_index]
-    paragraph_total = analysis.paragraph_count
+    paragraph_total = context.analysis.paragraph_count
     out.append(finding(
         "discourse.logic_paragraph_contradiction_rate",
         _METRIC_NAMES["discourse.logic_paragraph_contradiction_rate"],
@@ -498,9 +704,6 @@ def _proposition_findings(analysis: DocumentAnalysis, *, proposition_cap: int, w
         evidence=pair_evidence(same_paragraph, max_evidence),
         warning=base_warning if paragraph_total else "no paragraphs to measure"))
 
-    attribute_scan = prop_lib.bucketed_pairs(
-        props, window_sentences=window_sentences, max_pairs=max_pairs,
-        max_comparisons=max_comparisons, test=prop_lib.attribute_conflict)
     subtype_counts = Counter(label for _, _, label in attribute_scan.pairs)
     attribute_settings = {**settings, "comparisons_examined": attribute_scan.comparisons,
                          "pairs_capped": attribute_scan.pairs_capped,
@@ -514,7 +717,7 @@ def _proposition_findings(analysis: DocumentAnalysis, *, proposition_cap: int, w
                      "settings": attribute_settings},
         evidence=pair_evidence(attribute_scan.pairs, max_evidence),
         warning=base_warning + "; 'temporal' means two differing explicit years/dates were found, "
-                "not that either was verified or that an order was established"))
+                "not that either was verified or ordered (enable features.temporal_ordering for that)"))
 
     eligible = [p for p in props if p.subject_key and p.object_key
                and len(textlib.words(p.text)) >= repeated_assertion_min_words]
@@ -539,10 +742,11 @@ def _proposition_findings(analysis: DocumentAnalysis, *, proposition_cap: int, w
         evidence=dup_evidence,
         warning="exact structural duplication only (same subject, predicate and object reading); "
                 "a paraphrase using different words is invisible here and would need a semantic-"
-                "similarity model (see module Deferred notes)" if eligible else
-                "no proposition had both a non-pronoun subject and an object"))
+                "similarity model (see discourse.logic_nli_label_distribution's entailment share "
+                "for the closest thing this suite offers to that, over a different, capped pool)"
+                if eligible else "no proposition had both a non-pronoun subject and an object"))
 
-    out.append(_new_entity_claim_finding(analysis, max_evidence, extraction))
+    out.append(_new_entity_claim_finding(context.analysis, max_evidence, extraction))
     return out
 
 
@@ -611,6 +815,277 @@ def _new_entity_claim_finding(analysis: DocumentAnalysis, max_evidence: int,
                 "logical handle', nothing stronger")
 
 
+# ------------------------------------------------------------- NLI adjudication
+
+def _nli_findings(context: _PropContext, *, nli_model: str, nli_max_pairs: int, nli_batch_size: int,
+                  max_evidence: int) -> list[dict[str, Any]]:
+    """Real entailment/neutral/contradiction scores over a capped candidate pool.
+
+    The candidate pool is the same shared-subject-and-predicate bucketing
+    :func:`prop_lib.bucketed_pairs` already uses for the heuristic scans, run
+    again with its own, separate ``nli_max_pairs`` cap -- deliberately not
+    reusing the heuristic scans' pairs, so this channel also sees pairs
+    neither heuristic flagged (a real, if narrow, recall gain: two readings
+    that differ in a way ``attribute_conflict``'s exact-value-mismatch test
+    cannot see, e.g. genuine paraphrase, can still score ``contradiction`` or
+    ``entailment`` here).
+    """
+
+    ids = list(FEATURE_METRICS["nli_entailment"])
+    if context.unavailable_reason:
+        return [unavailable(mid, _METRIC_NAMES[mid], context.unavailable_reason, family=FAMILY) for mid in ids]
+    props = context.props
+    if not props:
+        return [unavailable(mid, _METRIC_NAMES[mid], "no usable propositions", family=FAMILY) for mid in ids]
+
+    def any_distinct_pair(a: prop_lib.Proposition, b: prop_lib.Proposition) -> str | None:
+        return None if a.text.strip() == b.text.strip() else "pair"
+
+    # ``max_comparisons`` is the suite-wide search-budget option (cheap, pure
+    # Python, no model call), reused as-is; ``nli_max_pairs`` is the separate,
+    # much smaller cap on how many of the pairs that search finds are ever
+    # actually sent to the model -- the only one of the two that matters for
+    # this channel's wall-clock cost. Deriving the search budget FROM
+    # nli_max_pairs instead (an earlier version of this code did) starves the
+    # search on any document whose matching bucket is large enough to need
+    # ``_BUCKET_SAMPLE_CAP`` sampling, before it ever reaches a real pair --
+    # found by benchmarking this function on a synthetic book, not assumed.
+    scan = prop_lib.bucketed_pairs(
+        props, window_sentences=context.window_sentences, max_pairs=nli_max_pairs,
+        max_comparisons=context.max_comparisons, test=any_distinct_pair)
+    if not scan.pairs:
+        warning = ("no eligible candidate pair (two propositions sharing a subject and predicate, "
+                   "with distinct text, within window_sentences of each other or the same paragraph)")
+        return [unavailable(mid, _METRIC_NAMES[mid], warning, family=FAMILY) for mid in ids]
+
+    pipeline_obj, reason = _load_nli_pipeline(nli_model)
+    if pipeline_obj is None:
+        return [unavailable(mid, _METRIC_NAMES[mid], reason, family=FAMILY) for mid in ids]
+
+    pairs_text = [(a.text, b.text) for a, b, _ in scan.pairs]
+    try:
+        labels = _nli_label_scores(pipeline_obj, pairs_text, nli_batch_size)
+    except Exception as exc:  # pragma: no cover - runtime failure
+        warning = f"NLI scoring failed ({type(exc).__name__}: {exc})"
+        return [unavailable(mid, _METRIC_NAMES[mid], warning, family=FAMILY) for mid in ids]
+
+    heuristic_labels = [prop_lib.negation_conflict(a, b) or prop_lib.attribute_conflict(a, b) or "none"
+                        for a, b, _ in scan.pairs]
+    label_counts = Counter(label for label, _ in labels)
+    total = len(labels)
+    settings = _settings(window_sentences=context.window_sentences, nli_max_pairs=nli_max_pairs,
+                         nli_model=nli_model, nli_batch_size=nli_batch_size,
+                         comparisons_examined=scan.comparisons, pairs_capped=scan.pairs_capped,
+                         buckets_sampled=scan.buckets_sampled, coreference_resolution=context.coref_meta)
+    ranked = sorted(range(total), key=lambda i: -labels[i][1].get("contradiction", 0.0))
+
+    top_evidence = []
+    for i in ranked[:max_evidence]:
+        a, b, _ = scan.pairs[i]
+        label, scores = labels[i]
+        top_evidence.append({
+            "nli_label": label, "scores": {k: round(v, 4) for k, v in scores.items()},
+            "heuristic_label": heuristic_labels[i],
+            "sentence_a": {"index": a.sentence_index, "offset": a.offset, "text": a.text},
+            "sentence_b": {"index": b.sentence_index, "offset": b.offset, "text": b.text},
+        })
+    out = [finding(
+        "discourse.logic_nli_label_distribution", _METRIC_NAMES["discourse.logic_nli_label_distribution"],
+        rate(label_counts.get("contradiction", 0), total, 100.0), "percent labeled contradiction",
+        family=FAMILY, sample_size=total, min_sample=5, sample_size_sensitive=True,
+        distribution={"counts": dict(label_counts),
+                     "percentages": {label: rate(count, total, 100.0) for label, count in label_counts.items()},
+                     "model": nli_model, "settings": settings},
+        evidence=top_evidence,
+        warning=(f"model judgement from {nli_model!r} on each sentence pair in isolation, NOT a "
+                "fact about the text: fiction legitimately contains contradictions (unreliable "
+                "narrators, lies, hypotheticals, quoted falsehoods), so a high contradiction share "
+                "is not evidence of an error in the writing. Evidence is sorted by contradiction "
+                "score; see discourse.logic_nli_heuristic_agreement for how these labels compare "
+                "with the surface-heuristic candidates"))]
+
+    confusion: dict[str, Counter] = defaultdict(Counter)
+    for h, (label, _) in zip(heuristic_labels, labels):
+        confusion[h][label] += 1
+    flagged = sum(count for h, counts in confusion.items() if h != "none" for count in counts.values())
+    corroborated = sum(counts.get("contradiction", 0) for h, counts in confusion.items() if h != "none")
+    disagreements = []
+    for i in ranked:
+        h = heuristic_labels[i]
+        label, scores = labels[i]
+        if h != "none" and label != "contradiction":
+            a, b, _ = scan.pairs[i]
+            disagreements.append({
+                "heuristic_label": h, "nli_label": label,
+                "scores": {k: round(v, 4) for k, v in scores.items()},
+                "sentence_a": {"index": a.sentence_index, "text": a.text},
+                "sentence_b": {"index": b.sentence_index, "text": b.text},
+            })
+        if len(disagreements) >= max_evidence:
+            break
+    out.append(finding(
+        "discourse.logic_nli_heuristic_agreement", _METRIC_NAMES["discourse.logic_nli_heuristic_agreement"],
+        rate(corroborated, flagged, 100.0),
+        "percent of heuristic candidates the NLI model also labels contradiction",
+        family=FAMILY, sample_size=flagged, min_sample=5, sample_size_sensitive=True,
+        distribution={"confusion": {h: dict(c) for h, c in confusion.items()}, "settings": settings},
+        evidence=disagreements,
+        warning=(
+            "cross-tabulates this suite's own negation-flip/attribute-conflict heuristic labels "
+            "against the same pairs' NLI labels (rows: heuristic label including 'none' for a pair "
+            "neither heuristic flagged; columns: NLI label); neither channel is ground truth, so a "
+            "disagreement means the two signals disagree, not that either is wrong -- a heuristic "
+            "flag the model calls 'entailment' or 'neutral' is still worth a second look, not "
+            "dismissed, and this project keeps both readings visible rather than picking one") if flagged
+            else "no pair in this NLI batch was already flagged by the negation or attribute-conflict "
+            "heuristics, so there is nothing to cross-check"))
+    return out
+
+
+# --------------------------------------------------------- WordNet lexical relations
+
+def _wordnet_findings(context: _PropContext, *, max_evidence: int) -> list[dict[str, Any]]:
+    ids = list(FEATURE_METRICS["lexical_opposition"])
+    if context.unavailable_reason:
+        return [unavailable(mid, _METRIC_NAMES[mid], context.unavailable_reason, family=FAMILY) for mid in ids]
+    props = context.props
+    if not props:
+        return [unavailable(mid, _METRIC_NAMES[mid], "no usable propositions", family=FAMILY) for mid in ids]
+    wn, reason = prop_lib.load_wordnet()
+    if wn is None:
+        return [unavailable(mid, _METRIC_NAMES[mid], reason, family=FAMILY) for mid in ids]
+
+    antonym_scan = prop_lib.bucketed_pairs(
+        props, window_sentences=context.window_sentences, max_pairs=context.max_pairs,
+        max_comparisons=context.max_comparisons, test=prop_lib.wordnet_antonym_conflict)
+    settings = _settings(window_sentences=context.window_sentences, max_pairs=context.max_pairs,
+                         comparisons_examined=antonym_scan.comparisons,
+                         pairs_capped=antonym_scan.pairs_capped, coreference_resolution=context.coref_meta)
+
+    def pair_evidence(pairs, limit) -> list[dict[str, Any]]:
+        return [{"type": label, "subject": a.subject_text, "predicate": a.predicate_lemma,
+                "sentence_a": {"index": a.sentence_index, "text": a.text, "object": a.object_text},
+                "sentence_b": {"index": b.sentence_index, "text": b.text, "object": b.object_text}}
+               for a, b, label in pairs[:limit]]
+
+    out = [finding(
+        "discourse.logic_wordnet_antonym_candidates", _METRIC_NAMES["discourse.logic_wordnet_antonym_candidates"],
+        rate(len(antonym_scan.pairs), len(props), 1000.0), "candidates per 1,000 propositions",
+        family=FAMILY, sample_size=len(props), min_sample=100, sample_size_sensitive=True,
+        distribution={"candidate_count": len(antonym_scan.pairs), "settings": settings},
+        evidence=pair_evidence(antonym_scan.pairs, max_evidence),
+        warning="candidates only: WordNet antonymy is checked across every sense of each lemma, not "
+                "disambiguated to this sentence's meaning, so an uncommon sense can produce a false "
+                "positive; and most true opposites in ordinary prose are not encoded as a direct "
+                "WordNet antonym pair at all, so this channel under-reports far more than it "
+                "over-reports. Independent of both the negation/attribute heuristics above and of "
+                "any NLI model -- a separate, lexical-resource-based signal, not a stronger version "
+                "of either")]
+
+    attribute_pairs = context.attribute_scan.pairs if context.attribute_scan else []
+    property_pairs = [(a, b) for a, b, label in attribute_pairs if label == "property"]
+    downgrade_evidence: list[dict[str, Any]] = []
+    downgrade_count = 0
+    for a, b in property_pairs:
+        if prop_lib.wordnet_hypernym_related(a, b):
+            downgrade_count += 1
+            if len(downgrade_evidence) < max_evidence:
+                downgrade_evidence.append({
+                    "subject": a.subject_text, "predicate": a.predicate_lemma,
+                    "sentence_a": {"index": a.sentence_index, "text": a.text, "object": a.object_text},
+                    "sentence_b": {"index": b.sentence_index, "text": b.text, "object": b.object_text}})
+    out.append(finding(
+        "discourse.logic_wordnet_hypernym_downgrade_rate",
+        _METRIC_NAMES["discourse.logic_wordnet_hypernym_downgrade_rate"],
+        rate(downgrade_count, len(property_pairs), 100.0) if property_pairs else None, "percent",
+        family=FAMILY, sample_size=len(property_pairs), min_sample=5, sample_size_sensitive=True,
+        distribution={"downgrade_count": downgrade_count, "property_candidate_count": len(property_pairs)},
+        evidence=downgrade_evidence,
+        warning=(
+            "informational only: never subtracts from discourse.logic_entity_attribute_conflict_"
+            "candidates itself, which is kept exactly as it was for stability regardless of whether "
+            "WordNet is installed. Flags this suite's own 'property'-subtype attribute-conflict "
+            "candidates whose two object readings sit in a WordNet hypernym/hyponym relation "
+            "('dog'/'poodle'), which is usually not a real contradiction; a human should still look, "
+            "since an is-a relation does not rule out the sentence meaning something else here")
+            if property_pairs else "no 'property'-subtype attribute-conflict candidates to check "
+            "(needs features.propositions on, and at least one such pair)"))
+    return out
+
+
+# ------------------------------------------------------------- temporal ordering
+
+def _temporal_findings(context: _PropContext, *, max_evidence: int) -> list[dict[str, Any]]:
+    """Which of two differing dates on the same subject+predicate is earlier.
+
+    Reuses :attr:`_PropContext.attribute_scan`'s ``temporal``-subtype pairs
+    rather than generating its own -- those are already exactly "two
+    propositions, same subject and predicate, differing years/dates"; this
+    group only adds ordering on top, via ``dateutil``, plus a check against
+    where each proposition sits in the narrative.
+    """
+
+    metric_id = "discourse.logic_temporal_order_candidates"
+    if context.unavailable_reason:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], context.unavailable_reason, family=FAMILY)]
+    attribute_pairs = context.attribute_scan.pairs if context.attribute_scan else []
+    temporal_pairs = [(a, b) for a, b, label in attribute_pairs if label == "temporal"]
+    if not temporal_pairs:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id],
+                            "no 'temporal'-subtype attribute-conflict candidates to order (needs "
+                            "features.propositions on, and at least one such pair)", family=FAMILY)]
+    parser_module, reason = require("dateutil")
+    if parser_module is None:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], reason, family=FAMILY)]
+
+    def parse(text: str):
+        try:
+            return parser_module.parse(text, default=_TEMPORAL_PARSE_DEFAULT)
+        except (ValueError, OverflowError, TypeError):
+            return None
+
+    reversed_count = 0
+    parsed_count = 0
+    evidence: list[dict[str, Any]] = []
+    for a, b in temporal_pairs:
+        date_a, date_b = parse(a.object_text or ""), parse(b.object_text or "")
+        if date_a is None or date_b is None or date_a == date_b:
+            continue
+        parsed_count += 1
+        if date_a < date_b:
+            earlier, later, earlier_date, later_date = a, b, date_a, date_b
+        else:
+            earlier, later, earlier_date, later_date = b, a, date_b, date_a
+        if earlier.sentence_index > later.sentence_index:
+            reversed_count += 1
+            if len(evidence) < max_evidence:
+                evidence.append({
+                    "subject": earlier.subject_text, "predicate": earlier.predicate_lemma,
+                    "earlier": {"sentence_index": earlier.sentence_index, "text": earlier.text,
+                                "date_text": earlier.object_text,
+                                "parsed_date": earlier_date.date().isoformat()},
+                    "later": {"sentence_index": later.sentence_index, "text": later.text,
+                             "date_text": later.object_text, "parsed_date": later_date.date().isoformat()},
+                })
+    if not parsed_count:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id],
+                            "dateutil could not parse either value in any temporal-conflict pair",
+                            family=FAMILY)]
+    return [finding(
+        metric_id, _METRIC_NAMES[metric_id], rate(reversed_count, parsed_count, 100.0), "percent",
+        family=FAMILY, sample_size=parsed_count, min_sample=5, sample_size_sensitive=True,
+        distribution={"reversed_count": reversed_count, "temporal_pairs_parsed": parsed_count,
+                     "temporal_pairs_seen": len(temporal_pairs)},
+        evidence=evidence,
+        warning=(
+            "'reversed' means the chronologically earlier date's sentence appears later in the text "
+            "than the chronologically later date's sentence -- a narrative-order observation, NOT an "
+            "error: flashbacks, foreshadowing, frame stories and other non-chronological narration "
+            "all produce this legitimately and often deliberately. Dates are parsed with dateutil "
+            "from a single object token (a bare year or short date string) with no sentence context, "
+            "so an unrelated number could occasionally be mis-read as a date"))]
+
+
 # ----------------------------------------------------------- modal/hedge position
 
 _STANCE_TABLE = _by_length({**HEDGES, **MODALS})
@@ -674,7 +1149,33 @@ FEATURE_METRICS: dict[str, tuple[str, ...]] = {
         "discourse.logic_entity_attribute_conflict_candidates", "discourse.logic_repeated_assertion_rate",
         "discourse.logic_new_entity_claim_rate"),
     "modal_argument_position": ("discourse.logic_modal_density_near_connectives",),
+    "nli_entailment": (
+        "discourse.logic_nli_label_distribution", "discourse.logic_nli_heuristic_agreement"),
+    "lexical_opposition": (
+        "discourse.logic_wordnet_antonym_candidates", "discourse.logic_wordnet_hypernym_downgrade_rate"),
+    "temporal_ordering": ("discourse.logic_temporal_order_candidates",),
 }
+
+#: Feature groups that were part of the module's original, dependency-free
+#: pass and stay on unless a config explicitly turns them off. Every group
+#: added since (NLI, coreference, WordNet, temporal ordering) either loads a
+#: heavy optional model or, per the task that added it, must be opt-in
+#: regardless of cost -- so it defaults to *off* when a ``features`` mapping
+#: does not mention it, not to *on* like the four groups below. This is the
+#: one thing standing between an NLI model and a book nobody asked to run it
+#: against (see the module docstring's "Gating" section): getting it backwards
+#: would turn on a transformer-model pass for anyone who calls this module's
+#: ``measure`` with ``config=None`` or with a partial ``features`` mapping.
+_ON_BY_DEFAULT = frozenset({
+    "negation_and_quantifiers", "connective_relations", "propositions", "modal_argument_position",
+})
+
+#: ``features`` keys that are read directly as plain booleans (no metric ids
+#: of their own, so they are not in ``FEATURE_METRICS``/``_disabled``): they
+#: only change what feeds the groups above. Off by default, like every new
+#: group; listed here purely so ``measure`` and the tests have one place that
+#: enumerates every key a config's ``features`` mapping may set.
+_MODIFIER_FEATURES = frozenset({"coreference_resolution"})
 
 
 def _disabled(feature: str) -> list[dict[str, Any]]:
@@ -693,9 +1194,14 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     proposition_cap = int(option(config, "proposition_cap", 20_000))
     connective_min_words = int(option(config, "connective_min_words", 4))
     repeated_assertion_min_words = int(option(config, "repeated_assertion_min_words", 5))
+    coreference_max_chars = int(option(config, "coreference_max_chars", 20_000))
+    nli_model = str(option(config, "nli_model", "cross-encoder/nli-deberta-v3-small"))
+    nli_max_pairs = int(option(config, "nli_max_pairs", 60))
+    nli_batch_size = int(option(config, "nli_batch_size", 16))
 
     def on(name: str) -> bool:
-        value = features.get(name, True) if isinstance(features, Mapping) else True
+        fallback = name in _ON_BY_DEFAULT
+        value = features.get(name, fallback) if isinstance(features, Mapping) else fallback
         return value is not False
 
     out: list[dict[str, Any]] = []
@@ -703,11 +1209,30 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
               else _disabled("negation_and_quantifiers"))
     out.extend(_connective_relations(analysis, connective_min_words, max_evidence)
               if on("connective_relations") else _disabled("connective_relations"))
-    out.extend(_proposition_findings(
+
+    # Built once, whether one or several of {propositions, nli_entailment,
+    # lexical_opposition, temporal_ordering} are on, so extraction, optional
+    # coreference resolution and the two heuristic bucket scans are each paid
+    # for at most once per document. Never built at all -- so never even
+    # inspecting analysis.nlp_unavailable's spaCy-parse cost -- when none of
+    # the four groups that need it is enabled.
+    needs_props = on("propositions") or on("nli_entailment") or on("lexical_opposition") or on("temporal_ordering")
+    context = _build_proposition_context(
         analysis, proposition_cap=proposition_cap, window_sentences=window_sentences,
-        max_pairs=max_pairs, max_comparisons=max_comparisons, max_evidence=max_evidence,
-        repeated_assertion_min_words=repeated_assertion_min_words)
+        max_pairs=max_pairs, max_comparisons=max_comparisons,
+        coreference_enabled=on("coreference_resolution"),
+        coreference_max_chars=coreference_max_chars) if needs_props else None
+
+    out.extend(_proposition_findings(
+        context, max_evidence=max_evidence, repeated_assertion_min_words=repeated_assertion_min_words)
         if on("propositions") else _disabled("propositions"))
     out.extend([_modal_density_near_connectives(analysis)] if on("modal_argument_position")
               else _disabled("modal_argument_position"))
+    out.extend(_nli_findings(context, nli_model=nli_model, nli_max_pairs=nli_max_pairs,
+                             nli_batch_size=nli_batch_size, max_evidence=max_evidence)
+              if on("nli_entailment") else _disabled("nli_entailment"))
+    out.extend(_wordnet_findings(context, max_evidence=max_evidence)
+              if on("lexical_opposition") else _disabled("lexical_opposition"))
+    out.extend(_temporal_findings(context, max_evidence=max_evidence)
+              if on("temporal_ordering") else _disabled("temporal_ordering"))
     return out
