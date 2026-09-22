@@ -246,7 +246,7 @@ of it, so a slow run always says what was slow.
 | `sentence_length_entropy` | fast | - | no | Entropy of the sentence-length distribution, normalized for range. |
 | `sentence_run_lengths` | fast | - | no | Run-length distribution of short/medium/long sentence bands. |
 | `sentence_segmentation` | fast | pysbd | no | Which segmenter was used, and how much it disagrees with the built-in one. |
-| `timeseries_suite` | moderate | statsmodels, ruptures | no | Trend, autocorrelation, spectral and nonlinear features over named linguistic sequences; every sequence and feature group is selected in config. |
+| `timeseries_suite` | moderate | statsmodels, ruptures, pycatch22, PyWavelets | no | Trend, autocorrelation, spectral, catch22 and wavelet features over named linguistic sequences; every sequence and feature group is selected in config. |
 
 ### paragraph rhythm
 
@@ -278,7 +278,7 @@ of it, so a slow run always says what was slow.
 | `mattr` | moderate | - | yes | Moving-average type-token ratio, length-resistant lexical diversity. |
 | `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
 | `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
-| `randomness_suite` | moderate | wordfreq | no | Language-likeness, compression and entropy channels: how predictable the text is, and how far it sits from English. |
+| `randomness_suite` | moderate | wordfreq, zstandard, brotli, lz4, pyppmd | no | Language-likeness, multi-codec compression and entropy channels: how predictable the text is, and how far it sits from English. |
 | `word_rarity` | moderate | wordfreq | no | Zipf word-rarity distribution from general-language frequencies. |
 
 ### repetition
@@ -319,9 +319,9 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `causal_connectives` | fast | - | no | Causal and explanatory connective rates. |
-| `coherence_suite` | parse | spacy, networkx | no | Lexical and semantic adjacency, a surface entity grid and graph, connective families, and sentence/paragraph order-permutation baselines. |
+| `coherence_suite` | parse | spacy, networkx, nltk, sentence-transformers, fastcoref | no | Lexical, WordNet and semantic adjacency, surface *and* coreference-resolved entity grids kept side by side, connective families, and order-permutation baselines. |
 | `hedges_boosters` | fast | - | no | Hedge, booster and modal rates. |
-| `logic_suite` | parse | spacy | no | Candidate contradictions and argument-shape counts from surface heuristics and proposition triples. |
+| `logic_suite` | parse | spacy, transformers, fastcoref, nltk, python-dateutil | no | Candidate contradictions from surface heuristics and proposition triples, cross-checked against an NLI model when one is installed. |
 | `rhetorical_constructions` | moderate | - | no | Repeated rhetorical templates, discovered rather than listed. |
 | `sentence_initial_connectives` | fast | - | no | Rate of sentences opening on However, Indeed, Moreover and the like. |
 
@@ -356,7 +356,18 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `function_words` | fast | - | no | Burrows's Delta against the corpus function-word profiles. |
-| `stylometry_suite` | moderate | - | no | Authorship channels kept separate on purpose: n-gram profiles, lexical-richness statistics, Heaps/Zipf fits, section stability and corpus-reference distances. |
+| `stylometry_suite` | moderate | lexicalrichness, sentence-transformers | no | Authorship channels kept separate on purpose: n-gram profiles, lexical-richness statistics, Heaps/Zipf fits, section stability, impostors verification and corpus-reference distances. |
+
+Every switch in the five `*_suite` rows above is off by default, and each one
+takes a `features` map so individual measurement groups can be turned on and
+off separately from the suite itself.  Their `needs` column lists what a suite
+*can* use, not what it declares in the registry: the neural channels (an NLI
+model, coreference, a causal language model, sentence embeddings) are off by
+default and are deliberately kept out of each suite's `requires`, because
+`needs_model` is what decides whether the corpus builder profiles a metric, and
+widening it would drop a suite's dozens of cheap channels out of corpus
+profiling to gate one expensive one.  Turning a neural channel on is therefore
+always an explicit act in `config.json`.
 
 ## What these measurements do not claim
 
