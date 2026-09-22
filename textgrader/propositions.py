@@ -24,15 +24,24 @@ logical form.
 
 Two judgement calls shape everything downstream:
 
-**No coreference.** A pronoun subject ("he", "she", "it", "they") cannot be
-linked to the noun phrase it refers to without a coreference resolver, and
-none is available in this environment (neuralcoref and its successors need
-either an old spaCy pipeline or a model download this environment cannot
-fetch). Rather than guess, every pronoun-subject proposition gets an empty
-``subject_key`` and is excluded from every cross-sentence bucket this module
-builds. That is a real loss -- most contradiction pairs in ordinary prose are
-exactly "Alice was tired... She wasn't, though" -- and it is recorded, not
-hidden: see the ``Deferred`` note in :mod:`textgrader.metrics.logic_suite`.
+**No coreference, by default.** A pronoun subject ("he", "she", "it", "they")
+cannot be linked to the noun phrase it refers to without a coreference
+resolver. Every pronoun-subject proposition gets an empty ``subject_key`` and
+is excluded from every cross-sentence bucket this module builds unless a
+caller opts into :func:`resolve_coreference`, which is off by default. That
+default exclusion is a real recall loss on its own -- most contradiction pairs
+in ordinary prose are exactly "Alice was tired... She wasn't, though" -- and
+it is the reason :func:`resolve_coreference` exists: ``fastcoref`` is now
+installed, and when it loads cleanly a pronoun's resolved antecedent is keyed
+the same way a directly-named subject would be, so "she" and "Alice" land in
+the same bucket. It stays opt-in because it is another neural model on top of
+the spaCy parse this module already pays for, its resolution is only
+sampled over the first ``coreference_max_chars`` characters (not the whole
+book), and -- found by actually trying it in this environment, not assumed --
+the installed ``fastcoref`` release does not load cleanly against the
+installed ``transformers`` release here; see ``_load_coref_model`` for the
+exact failure and :mod:`textgrader.metrics.logic_suite` for how that surfaces
+as an ``unavailable`` reason rather than a crash.
 
 **No named-entity recognition required.** The shared spaCy pipeline disables
 ``ner`` by default (:class:`textgrader.document.NlpSettings`) because it
@@ -43,6 +52,17 @@ requirement, subject/object identity here is keyed off proper-noun tokens
 runs) with a fall-back to the lemma of common nouns. If ``ner`` happens to be
 enabled, the entity label is folded into the key for a sharper match and is
 also kept on the ``Proposition`` for evidence; nothing here requires it.
+
+**WordNet, now available.** :func:`wordnet_antonym_conflict` and
+:func:`wordnet_hypernym_related` add a lexical-relation signal that is
+independent of both the surface-heuristic tests above and of any NLI model:
+the former flags a same-subject+predicate pair whose object readings are
+direct WordNet antonyms ("open"/"shut"), the latter flags one where the two
+objects are actually in an is-a relationship ("dog"/"poodle") and so are
+probably not a real conflict despite :func:`attribute_conflict` calling them
+``property``-different. Both check every WordNet sense of each lemma, not
+just the one used in this sentence, so a false positive from an unusual sense
+is possible and each finding built from these says so.
 
 Extraction is bounded by ``cap`` (propositions kept) and runs over
 :meth:`DocumentAnalysis.spacy_sents_by_channel`, the one shared parse, so
@@ -57,11 +77,11 @@ from __future__ import annotations
 import re
 from bisect import bisect_right
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from .document import DocumentAnalysis
-from .optional import require
+from .optional import on_reset, require
 
 #: Occurrences of one (subject, predicate) pair beyond this are sampled down
 #: to the first this-many (in document order) before pairing.  A hard safety
@@ -99,6 +119,16 @@ class Proposition:
     object_is_numeric: bool
     object_number: float | None
     entity_labels: tuple[str, ...]
+    #: Character span of the subject token within :attr:`DocumentAnalysis.text`
+    #: (document-wide, not clause-relative), or ``None`` if it could not be
+    #: computed. Used only by :func:`resolve_coreference` to match a pronoun
+    #: subject against a coreference resolver's mention spans; every other
+    #: consumer of a ``Proposition`` should keep using ``subject_key``.
+    subject_char_span: tuple[int, int] | None = None
+    #: True once :func:`resolve_coreference` has replaced this pronoun
+    #: subject's key with a resolved antecedent's. False for every proposition
+    #: produced directly by :func:`extract`.
+    subject_resolved_via_coref: bool = False
 
 
 @dataclass(frozen=True)
@@ -250,7 +280,7 @@ def _clause_text(root: Any) -> str:
 
 
 def _proposition(root: Any, *, sentence_index: int, paragraph_index: int, start_char: int,
-                 channel: str, entity_labels: tuple[str, ...]) -> "Proposition | None":
+                 doc_offset: int, channel: str, entity_labels: tuple[str, ...]) -> "Proposition | None":
     subject = _find(root.children, ("nsubj", "nsubjpass"))
     if subject is None:
         return None
@@ -266,7 +296,8 @@ def _proposition(root: Any, *, sentence_index: int, paragraph_index: int, start_
         object_key=_normalize_key(obj) if obj is not None else None,
         object_is_numeric=obj is not None and (obj.like_num or _number(obj.text) is not None),
         object_number=_number(obj.text) if obj is not None else None,
-        entity_labels=entity_labels)
+        entity_labels=entity_labels,
+        subject_char_span=(doc_offset + subject.idx, doc_offset + subject.idx + len(subject.text)))
 
 
 def _extract(analysis: DocumentAnalysis, cap: int) -> Extraction:
@@ -291,7 +322,8 @@ def _extract(analysis: DocumentAnalysis, cap: int) -> Extraction:
                 truncated = True
                 break
             prop = _proposition(root, sentence_index=scanned - 1, paragraph_index=paragraph_index,
-                                start_char=start_char, channel=channel, entity_labels=entity_labels)
+                                start_char=start_char, doc_offset=offset, channel=channel,
+                                entity_labels=entity_labels)
             if prop is not None:
                 props.append(prop)
     meta = getattr(analysis.nlp, "meta", {}) or {}
@@ -340,6 +372,19 @@ def bucketed_pairs(propositions: list[Proposition], *, window_sentences: int,
     have been examined, matched or not; ``max_pairs`` stops it once that many
     have matched. Nothing here is O(propositions^2): every pair considered
     shares a bucket, and every bucket is capped before its pairs are counted.
+
+    Buckets are visited in first-seen order, not by size or interest, so
+    ``max_comparisons`` is spent on whichever bucket the document happens to
+    fill first. A pathological document with one enormous, never-matching
+    bucket early on (the same harmless sentence repeated thousands of times,
+    for instance) can exhaust the whole comparison budget before a later,
+    much smaller bucket that actually contains a conflict is ever reached --
+    found by hand-testing this function against a deliberately repetitive
+    synthetic book, not merely suspected. Ordinary prose rarely repeats one
+    exact clause often enough to trigger this, and reordering the scan to be
+    fair across buckets would change the candidate set every existing caller
+    of this function already depends on, so it is documented here rather than
+    changed.
     """
 
     buckets: dict[tuple[str, str], list[Proposition]] = defaultdict(list)
@@ -407,5 +452,289 @@ def attribute_conflict(a: Proposition, b: Proposition) -> str | None:
     return "property"
 
 
-__all__ = ["Proposition", "Extraction", "PairScan", "extract", "bucketed_pairs",
-          "negation_conflict", "attribute_conflict"]
+# ----------------------------------------------------------- WordNet relations
+#
+# nltk's wordnet corpus data is now downloaded and cached in this environment
+# (it previously was not -- see logic_suite's module docstring). Importing
+# ``nltk`` itself never fails, so availability is only known once the corpus
+# data is actually touched; ``load_wordnet`` does that once, eagerly, and
+# caches whichever answer it gets so every later call is free and every
+# metric that wants WordNet sees the same "available"/"unavailable" verdict.
+
+_WORDNET_CACHE: dict[str, tuple[Any, str | None]] = {}
+
+
+def _reset_wordnet_cache() -> None:
+    _WORDNET_CACHE.clear()
+
+
+on_reset(_reset_wordnet_cache)
+
+
+def load_wordnet() -> tuple[Any, str | None]:
+    """``(wordnet_module, None)`` or ``(None, reason)``.  Never raises."""
+
+    if "wn" in _WORDNET_CACHE:
+        return _WORDNET_CACHE["wn"]
+    module, reason = require("nltk")
+    if module is None:
+        _WORDNET_CACHE["wn"] = (None, reason)
+        return _WORDNET_CACHE["wn"]
+    try:
+        from nltk.corpus import wordnet as wn
+        wn.synsets("test")  # forces the corpus-data LookupError now, not on first real use
+        outcome: tuple[Any, str | None] = (wn, None)
+    except LookupError as exc:
+        outcome = (None, f"nltk wordnet corpus data unavailable ({exc}); run "
+                         f"python -c \"import nltk; nltk.download('wordnet')\"")
+    except Exception as exc:  # pragma: no cover - unexpected nltk failure
+        outcome = (None, f"nltk wordnet unavailable ({type(exc).__name__}: {exc})")
+    _WORDNET_CACHE["wn"] = outcome
+    return outcome
+
+
+def _object_lemma(object_key: str | None) -> str | None:
+    """The bare lemma inside an ``object_key``, or ``None`` for a proper noun/entity key.
+
+    Only a plain ``lemma:...`` key (a common noun or adjectival complement) is
+    something WordNet's antonym/hypernym graph can meaningfully be asked
+    about; a name has no synset.
+    """
+
+    if object_key and object_key.startswith("lemma:"):
+        return object_key.split(":", 1)[1]
+    return None
+
+
+def _is_antonym_of(wn: Any, lemma_a: str, lemma_b: str) -> bool:
+    for pos in (wn.ADJ, wn.ADJ_SAT, wn.VERB, wn.NOUN, wn.ADV):
+        for synset in wn.synsets(lemma_a, pos=pos)[:4]:
+            for lemma_obj in synset.lemmas():
+                if lemma_obj.name().lower() != lemma_a:
+                    continue
+                for antonym in lemma_obj.antonyms():
+                    if antonym.name().lower() == lemma_b:
+                        return True
+    return False
+
+
+def wordnet_antonym_conflict(a: Proposition, b: Proposition) -> str | None:
+    """Same subject+predicate pair whose objects are direct WordNet antonyms.
+
+    Independent of :func:`attribute_conflict`: that test only notices the two
+    object readings differ ("open" vs. "shut" AND "open" vs. "ajar" both
+    read as ``property``); this one asks WordNet whether they are lexical
+    opposites specifically, a narrower and independently-sourced signal.
+    Every sense of each lemma is checked -- WordNet is not sense-
+    disambiguated against this sentence's context -- so an uncommon sense can
+    still produce a false positive; the finding built from this warns about
+    exactly that, in its own words, not just here.
+    """
+
+    if a.negated or b.negated:
+        return None
+    lemma_a, lemma_b = _object_lemma(a.object_key), _object_lemma(b.object_key)
+    if not lemma_a or not lemma_b or lemma_a == lemma_b:
+        return None
+    wn, reason = load_wordnet()
+    if wn is None:
+        return None
+    if _is_antonym_of(wn, lemma_a, lemma_b) or _is_antonym_of(wn, lemma_b, lemma_a):
+        return "antonym"
+    return None
+
+
+def wordnet_hypernym_related(a: Proposition, b: Proposition) -> bool:
+    """True when ``a`` and ``b``'s object lemmas sit in a WordNet hypernym/hyponym relation.
+
+    Meant as a cross-check on :func:`attribute_conflict`'s ``property``
+    subtype, never a change to it: "the animal was a poodle" and "the animal
+    was a dog" differ in object text but are not a contradiction, because a
+    poodle is a dog. This function only answers the question; the caller
+    decides what, if anything, to do with a ``True`` -- ``attribute_conflict``
+    itself is left exactly as it was, so its candidate count stays stable and
+    comparable across runs regardless of whether WordNet is installed.
+    """
+
+    lemma_a, lemma_b = _object_lemma(a.object_key), _object_lemma(b.object_key)
+    if not lemma_a or not lemma_b or lemma_a == lemma_b:
+        return False
+    wn, reason = load_wordnet()
+    if wn is None:
+        return False
+    synsets_a = wn.synsets(lemma_a, pos=wn.NOUN)[:3]
+    synsets_b = wn.synsets(lemma_b, pos=wn.NOUN)[:3]
+    for synset_a in synsets_a:
+        ancestors_a = {node.name() for node in synset_a.closure(lambda s: s.hypernyms())}
+        for synset_b in synsets_b:
+            if synset_b.name() in ancestors_a:
+                return True
+            ancestors_b = {node.name() for node in synset_b.closure(lambda s: s.hypernyms())}
+            if synset_a.name() in ancestors_b:
+                return True
+    return False
+
+
+# --------------------------------------------------------------- coreference
+#
+# fastcoref is now installed, but loading it is expensive (another neural
+# model) and, at the time of writing, its packaged version predates the
+# installed transformers release by enough that construction itself can raise
+# before a single document is ever resolved (see ``_load_coref_model``'s own
+# try/except, which is what turns that into an actionable "unavailable"
+# rather than a crash). Both are real reasons this stays optional and off by
+# default, not merely caution for its own sake.
+
+_PRONOUN_WORDS = frozenset({
+    "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them",
+    "their", "theirs", "i", "me", "my", "mine", "we", "us", "our", "ours",
+    "you", "your", "yours", "this", "that", "these", "those",
+})
+
+_COREF_MODEL_CACHE: dict[str, tuple[Any, str | None]] = {}
+
+
+def _reset_coref_cache() -> None:
+    _COREF_MODEL_CACHE.clear()
+
+
+on_reset(_reset_coref_cache)
+
+
+def _load_coref_model() -> tuple[Any, str | None]:
+    if "model" in _COREF_MODEL_CACHE:
+        return _COREF_MODEL_CACHE["model"]
+    module, reason = require("fastcoref")
+    if module is None:
+        _COREF_MODEL_CACHE["model"] = (None, reason)
+        return _COREF_MODEL_CACHE["model"]
+    try:
+        model = module.FCoref(device="cpu", enable_progress_bar=False)
+        outcome: tuple[Any, str | None] = (model, None)
+    except Exception as exc:  # pragma: no cover - model download/runtime/version failure
+        outcome = (None, f"fastcoref model unavailable ({type(exc).__name__}: {exc}); this "
+                         f"environment's fastcoref/transformers combination was found broken at "
+                         f"the time of writing (see requirements.txt) -- try a matched pair of "
+                         f"versions, e.g. pip install 'transformers<4.41' 'fastcoref==2.1.6'")
+    _COREF_MODEL_CACHE["model"] = outcome
+    return outcome
+
+
+def _coref_representative(text: str) -> tuple[str, str] | None:
+    """``(bucket_key, display_text)`` for a cluster's antecedent mention text.
+
+    Formatted the same way :func:`_normalize_key` formats a directly-mentioned
+    subject (``propn:name`` / ``lemma:noun``) so a coreference-resolved "she"
+    lands in the *same* subject+predicate bucket as a sentence that names the
+    character outright, rather than a bucket only pronouns ever reach.
+    """
+
+    words_ = text.strip().split()
+    if not words_:
+        return None
+    last = words_[-1].strip(".,;:!?\"'’”")
+    if not last:
+        return None
+    key = f"propn:{last.lower()}" if last[:1].isupper() else f"lemma:{last.lower()}"
+    return key, text.strip()
+
+
+def _spans_overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    return a[0] < b[1] and b[0] < a[1]
+
+
+@dataclass(frozen=True)
+class CorefResolution:
+    """What :func:`resolve_coreference` did, whether or not it could resolve anything."""
+
+    propositions: list[Proposition]
+    resolved_count: int
+    available: bool
+    reason: str | None
+    chars_used: int
+    truncated: bool
+    model_name: str
+
+
+def _resolve_coreference(analysis: DocumentAnalysis, propositions: list[Proposition],
+                         max_chars: int) -> CorefResolution:
+    model_name = "biu-nlp/f-coref"
+    eligible = [p for p in propositions if p.subject_is_pronoun and p.subject_char_span
+               and p.subject_char_span[1] <= max_chars]
+    if not eligible:
+        return CorefResolution(propositions, 0, False,
+                               "no pronoun-subject proposition within coreference_max_chars",
+                               0, False, model_name)
+    model, reason = _load_coref_model()
+    if model is None:
+        return CorefResolution(propositions, 0, False, reason, 0, False, model_name)
+
+    text = analysis.text[:max_chars]
+    truncated = len(analysis.text) > max_chars
+    try:
+        result = model.predict(texts=text)
+        clusters = result.get_clusters(as_strings=False)
+    except Exception as exc:  # pragma: no cover - runtime failure
+        return CorefResolution(propositions, 0, False,
+                               f"fastcoref prediction failed ({type(exc).__name__}: {exc})",
+                               len(text), truncated, model_name)
+
+    # For each cluster, the longest mention that is not itself a bare pronoun
+    # becomes every pronoun mention's resolved antecedent. A cluster with no
+    # such mention (an isolated "he"/"she" fastcoref could not anchor to a
+    # name or noun phrase) resolves nothing, on purpose.
+    representatives: list[tuple[tuple[int, int], str, str]] = []
+    for cluster in clusters:
+        best: tuple[int, int, str] | None = None
+        for start, end in cluster:
+            mention = text[start:end]
+            if mention.strip().lower() in _PRONOUN_WORDS:
+                continue
+            if best is None or (end - start) > (best[1] - best[0]):
+                best = (start, end, mention)
+        if best is None:
+            continue
+        keyed = _coref_representative(best[2])
+        if keyed is None:
+            continue
+        key, display = keyed
+        for span in cluster:
+            representatives.append((span, key, display))
+
+    resolved_count = 0
+    out: list[Proposition] = []
+    for prop in propositions:
+        match = None
+        if prop.subject_is_pronoun and prop.subject_char_span and prop.subject_char_span[1] <= max_chars:
+            for span, key, display in representatives:
+                if _spans_overlap(prop.subject_char_span, span):
+                    match = (key, display)
+                    break
+        if match is None:
+            out.append(prop)
+            continue
+        key, display = match
+        out.append(replace(prop, subject_key=key, subject_text=display, subject_resolved_via_coref=True))
+        resolved_count += 1
+    return CorefResolution(out, resolved_count, True, None, len(text), truncated, model_name)
+
+
+def resolve_coreference(analysis: DocumentAnalysis, extraction: "Extraction",
+                        max_chars: int) -> CorefResolution:
+    """Cached: resolve pronoun subjects to a named antecedent via fastcoref, if available.
+
+    Off by default and deliberately bounded to the first ``max_chars`` of the
+    document -- coreference over a whole novel is neither validated nor
+    affordable in this pass (see the module docstring). A pronoun proposition
+    whose span falls after that cut, or that fastcoref places in a cluster
+    with no non-pronoun mention, is left exactly as :func:`extract` produced
+    it: excluded from every cross-sentence bucket, never guessed at.
+    """
+
+    return analysis.memo(f"logic_coref:{int(max_chars)}",
+                         lambda: _resolve_coreference(analysis, extraction.propositions, int(max_chars)))
+
+
+__all__ = ["Proposition", "Extraction", "PairScan", "CorefResolution", "extract", "bucketed_pairs",
+          "negation_conflict", "attribute_conflict", "load_wordnet", "wordnet_antonym_conflict",
+          "wordnet_hypernym_related", "resolve_coreference"]
