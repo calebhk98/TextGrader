@@ -10,6 +10,7 @@ import time
 import pytest
 
 import grade
+from textgrader import coherence as coh
 from textgrader import optional
 from textgrader.document import DocumentAnalysis
 from textgrader.metrics import coherence_suite
@@ -71,15 +72,25 @@ def test_features_are_independently_switchable(sample_text):
 
     entity_only = coherence_suite.measure(_analysis(sample_text), config={
         "features": {"lexical": False, "semantic": False, "entity": True,
-                    "connectives": False, "order_permutation": False}})
+                    "coreference": False, "connectives": False, "order_permutation": False}})
     entity_ids = _ids(entity_only)
-    assert entity_ids == {
-        "discourse.coherence_entity_new_given_ratio",
-        "discourse.coherence_entity_reintroduction_distance",
-        "discourse.coherence_entity_dangling_rate",
-        "discourse.coherence_entity_grid_transition_entropy",
-        "discourse.coherence_entity_graph_density",
-    }
+    channels = ("", "_narration", "_dialogue")
+    stems = ("entity_new_given_ratio", "entity_reintroduction_distance", "entity_dangling_rate",
+            "entity_grid_transition_entropy")
+    expected = {f"discourse.coherence_{stem}{tag}" for stem in stems for tag in channels}
+    expected.add("discourse.coherence_entity_graph_density")
+    assert entity_ids == expected
+    # coreference is off by default even when entity is on, and it is a
+    # wholly separate feature flag: no "_coref" id leaks in here.
+    assert not any(mid.endswith("_coref") for mid in entity_ids)
+
+    coref_only = coherence_suite.measure(_analysis(sample_text), config={
+        "features": {"lexical": False, "semantic": False, "entity": False,
+                    "coreference": True, "connectives": False, "order_permutation": False},
+        "coreference_max_words": 200})
+    coref_ids = _ids(coref_only)
+    assert coref_ids == {f"discourse.coherence_{stem}_coref" for stem in stems} | {
+        "discourse.coherence_entity_graph_density_coref"}
 
 
 def test_config_and_registry_declare_the_same_option_surface():
@@ -262,6 +273,134 @@ def test_entity_continuity_with_pronouns_and_repeated_named_entities():
     assert given_new["value"] is not None
     # "Alice", "Bob" and "room" all recur; given mentions should dominate new ones.
     assert given_new["value"] < 1.0
+
+
+# --------------------------------------------------------- real coreference
+
+def _alice_bob_text():
+    sentences = []
+    for _ in range(6):
+        sentences.append("Alice opened the heavy door and looked around the empty room.")
+        sentences.append("She had not expected the room to be so cold.")
+        sentences.append("Bob called her name from the hallway outside.")
+        sentences.append("Alice answered him without turning around.")
+    return _paragraph_of(sentences)
+
+
+def test_no_coreference_model_is_loaded_under_the_default_config(monkeypatch, manuscript,
+                                                                 base_config):
+    """The critical gating rule: coherence_suite's cost stays "parse", so
+    corpus.py's needs_model guard (which only checks for
+    "sentence_transformers") never sees a fastcoref-backed feature - nothing
+    but this suite's own off-by-default feature flag protects a 300,000-word
+    novel from an unwanted coreference pass, so that flag must actually work.
+    """
+
+    def _boom(model_name):
+        raise AssertionError(f"fastcoref model {model_name!r} must not load by default")
+
+    monkeypatch.setattr(coh, "_load_coref_model", _boom)
+    config = {**base_config, "metrics": {**base_config["metrics"],
+                                         "coherence_suite": {"enabled": True}}}
+    report = grade.analyze(manuscript, config)  # default features: coreference is off
+    errors = [item for item in report.results if item.status_type is StatusType.INTERNAL_ERROR]
+    assert not errors, [(item.metric_id, item.error) for item in errors]
+    assert not any(item.metric_id.endswith("_coref") for item in report.results)
+
+
+def test_coreference_backend_is_off_by_default_even_with_the_suite_enabled(sample_text):
+    ids = _ids(coherence_suite.measure(_analysis(sample_text)))
+    assert not any(mid.endswith("_coref") for mid in ids)
+
+
+def test_coreference_resolves_pronouns_the_surface_backend_cannot():
+    """The disagreement the module docstring promises: two implementations
+    of "the same entity recurs", one blind to pronouns and one that resolves
+    them, must actually produce different numbers on text built exactly to
+    show the gap - if they agreed exactly here, the coreference backend would
+    not really be doing anything.
+    """
+
+    analysis = _analysis(_alice_bob_text())
+    if analysis.nlp_unavailable:
+        pytest.skip("spaCy is not available in this environment")
+    module, reason = optional.require("fastcoref")
+    if module is None:
+        pytest.skip(f"fastcoref is not available in this environment: {reason}")
+
+    findings = {item["metric_id"]: item for item in coherence_suite.measure(
+        analysis, config={"features": {"entity": True, "coreference": True, "lexical": False,
+                                       "semantic": False, "connectives": False,
+                                       "order_permutation": False},
+                          "coreference_max_words": 2000})}
+
+    surface = findings["discourse.coherence_entity_reintroduction_distance"]
+    coref = findings["discourse.coherence_entity_reintroduction_distance_coref"]
+    assert surface["value"] is not None and coref["value"] is not None
+    # "She"/"her"/"him" immediately follow the name they refer to, so real
+    # coreference sees much tighter continuity than lemma matching, which is
+    # blind to every pronoun mention entirely.
+    assert coref["value"] < surface["value"]
+    assert coref["distribution"]["backend"] == "coreference"
+    assert surface["distribution"]["backend"] == "surface_lemma"
+
+    surface_new_given = findings["discourse.coherence_entity_new_given_ratio"]
+    coref_new_given = findings["discourse.coherence_entity_new_given_ratio_coref"]
+    assert (coref_new_given["distribution"]["given_mentions"]
+           > surface_new_given["distribution"]["given_mentions"])
+
+    graph = findings["discourse.coherence_entity_graph_density_coref"]
+    if graph["value"] is not None:
+        assert graph["distribution"]["backend"] == "coreference"
+        assert graph["distribution"]["model"]
+
+
+def test_coreference_window_is_bounded_and_recorded(sample_text):
+    analysis = _analysis(sample_text)
+    if analysis.nlp_unavailable:
+        pytest.skip("spaCy is not available in this environment")
+    module, reason = optional.require("fastcoref")
+    if module is None:
+        pytest.skip(f"fastcoref is not available in this environment: {reason}")
+    findings = {item["metric_id"]: item for item in coherence_suite.measure(
+        analysis, config={"features": {"coreference": True, "lexical": False, "semantic": False,
+                                       "entity": False, "connectives": False,
+                                       "order_permutation": False},
+                          "coreference_max_words": 50})}
+    given_new = findings["discourse.coherence_entity_new_given_ratio_coref"]
+    assert given_new["distribution"]["window_word_cap"] == 50
+    assert given_new["distribution"]["window_words"] is not None
+    assert "sentences_considered" in given_new["distribution"]
+
+
+# --------------------------------------------------------- WordNet cohesion
+
+def test_wordnet_lexical_chain_is_reported_alongside_the_identity_chain():
+    wn, reason = coh.require_wordnet()
+    if wn is None:
+        pytest.skip(f"WordNet is not available in this environment: {reason}")
+    sentences = ["The old car rattled down the lane.",
+                "Overhead a hawk circled once.",
+                "That automobile had not been serviced in years.",
+                "The dog slept through the whole afternoon."]
+    analysis = _analysis(_paragraph_of(sentences))
+    findings = {item["metric_id"]: item for item in coherence_suite.measure(
+        analysis, config={"features": {"lexical": True, "lexical_wordnet": True,
+                                       "semantic": False, "entity": False,
+                                       "connectives": False, "order_permutation": False}})}
+    identity = findings["discourse.coherence_lexical_chain_coverage"]
+    wordnet = findings["discourse.coherence_lexical_chain_coverage_wordnet"]
+    assert identity["value"] is not None and wordnet["value"] is not None
+    assert identity["distribution"]["backend"] == "identity"
+    assert wordnet["distribution"]["backend"] == "wordnet"
+    # "car" and "automobile" never repeat a word, so the WordNet-aware chain
+    # covers strictly more of this fixture than the identity-only one.
+    assert wordnet["value"] > identity["value"]
+
+
+def test_lexical_wordnet_is_off_by_default(sample_text):
+    ids = _ids(coherence_suite.measure(_analysis(sample_text)))
+    assert "discourse.coherence_lexical_chain_coverage_wordnet" not in ids
 
 
 # ---------------------------------------------------------------- settings

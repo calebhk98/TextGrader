@@ -51,6 +51,23 @@ scikit-learn>=1.3
 # statistic no other metric needed.
 networkx>=3.0
 
+# WordNet synonymy/hypernymy for the experimental discourse-coherence suite's
+# optional "lexical_wordnet" feature (off by default). The package alone is
+# not the corpus: run `python -m nltk.downloader wordnet` once, or the
+# feature reports itself unavailable rather than silently falling back to
+# identity matching.
+nltk>=3.8
+
+# Neural coreference resolution for the same suite's optional "coreference"
+# feature (also off by default). Like sentence-transformers above, this pulls
+# in torch and downloads a transformer model on first use; nothing in
+# coherence_suite imports it unless that flag is explicitly turned on.
+# Entity continuity without it stays on the honestly-labelled
+# surface/noun-chunk-lemma fallback, which is kept as its own finding even
+# once this is installed, because the two disagreeing is data the suite
+# reports, not a problem to hide.
+fastcoref>=2.1
+
 # Tabular convenience for corpus work.
 pandas>=2.0
 

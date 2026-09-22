@@ -19,11 +19,28 @@ suite measures four largely independent kinds of relationship:
     TF-IDF lexical fallback that family uses, and says so.
 ``entity``
     Does the same person/place/thing keep coming back, and in what
-    grammatical role?  A minimal, honestly-labelled entity grid: subject,
-    object, other mention, or absent, tracked by noun-chunk lemma because no
-    coreference model is available in this environment (see the module
-    docstring in :mod:`textgrader.coherence` for why that is not
-    coreference).  Needs the shared spaCy parse.
+    grammatical role?  A minimal entity grid: subject, object, other mention,
+    or absent, tracked by noun-chunk lemma (surface identity, not
+    coreference: see the module docstring in :mod:`textgrader.coherence`).
+    Also runs the same grid split by dialogue/narration channel, since that
+    costs nothing beyond the one shared-parse walk the full-document grid
+    already pays for.  Needs the shared spaCy parse.
+``coreference``
+    The same entity-grid questions, but backed by real neural coreference
+    (``fastcoref``) instead of lemma matching, so "Alice" / "she" / "her"
+    resolve to one chain.  **Off by default even when the suite is on**: it
+    downloads and runs a transformer model and is the single most expensive
+    thing this module can be asked to do, so it never fires unless a caller
+    explicitly turns it on (see ``coreference_model``/``coreference_max_words``
+    below).  Its findings are separate metric ids from ``entity``'s, not a
+    replacement: the two disagreeing is itself evidence, not something to
+    hide, so both are always reported once ``coreference`` is on.
+``lexical_wordnet``
+    A synonym/hypernym-aware lexical chain, alongside (not instead of) the
+    identity-based one in ``lexical``.  Off by default: it needs the
+    ``nltk`` ``wordnet`` corpus, which is a real download some environments
+    do not have, and it makes a heuristic (first-sense) call that the
+    identity chain does not have to make.
 ``connectives`` / ``order_permutation``
     Whether the text marks its own transitions (explicit connectives, by
     relation family, and whether they cluster at paragraph starts), and
@@ -31,12 +48,19 @@ suite measures four largely independent kinds of relationship:
     random shuffle of themselves on a cohesion score.  Both are
     dependency-free.
 
-Every one of those five groups is switched on or off independently through
+Every one of those seven groups is switched on or off independently through
 ``features`` in this metric's config (see ``DEFAULT_FEATURES`` below); the
 top-level ``coherence_suite.enabled`` switch on its own turns nothing on,
-consistent with every other metric, but once it is on all five groups default
-to on too, so a user opts *out* of the expensive ones rather than having to
-discover and opt into every one of them.
+consistent with every other metric.  Once it is on, the original five groups
+(``lexical``, ``semantic``, ``entity``, ``connectives``, ``order_permutation``)
+default to on too, so a user opts *out* of the ones that were already
+dependency-free or degrade gracefully rather than having to discover and opt
+into every one of them.  ``coreference`` and ``lexical_wordnet`` are the
+exception: both default to off even then, because both are new, both load an
+optional dependency this module did not used to have, and neither is safe to
+fire unasked on a 300,000-word novel (:mod:`textgrader.corpus`'s profiler
+would never load a coreference model on its own either, since this module's
+``cost`` stays ``"parse"`` - see ``COST`` below).
 
 No polarity judgement is made anywhere in this module. High cohesion can be
 repetitive prose; low cohesion can be a deliberate montage or a poem. Every
@@ -44,31 +68,75 @@ finding here is ``Polarity.NEUTRAL`` by the default the rest of the tool
 already applies to optional findings, and nothing in this module aggregates
 these numbers into a single "coherence score".
 
-Deferred (see the task spec's own library table for the fuller list this was
-drawn from):
+Closed since the first pass (real dependencies became available in this
+environment):
 
-* **Real coreference** (fastcoref, Coreferee, spaCy's coref pipe, BookNLP).
-  None is installed, and none can be exercised without a model download this
-  environment cannot fetch and test. Entity continuity below is explicitly
-  surface/lemma based instead, and every finding that depends on it says so.
+* **Real coreference.** ``fastcoref`` is installed and is wired in as the
+  ``coreference`` feature (see above): entity continuity can now follow "she"
+  back to "Alice" rather than only matching repeated nouns.  It is reported
+  as new, separate metric ids alongside the pre-existing surface/lemma ones,
+  never in place of them - see :mod:`textgrader.coherence`'s docstring for
+  why the disagreement between the two is itself data.  Loading the model
+  hit a real version-skew bug between ``fastcoref==2.1.6`` and a newer
+  ``transformers``; :func:`textgrader.coherence._shim_transformers_tied_weights`
+  documents the one-attribute compatibility shim that works around it, and
+  the ordinary ``optional.require``/try-except path still degrades to
+  ``unavailable(...)`` if that shim ever stops being enough.
+* **Real sentence embeddings.** ``sentence-transformers`` is installed; the
+  ``semantic`` group's ``embedding`` backend runs end to end rather than
+  falling back to the ``lexical`` TF-IDF proxy, and a finding still says
+  honestly which backend actually produced it either way.
+* **WordNet-based lexical cohesion.** The ``nltk`` ``wordnet`` corpus is
+  present; ``lexical_wordnet`` adds a synonym/hypernym-aware chain next to
+  the identity-based one, with the same "both reported, disagreement kept"
+  rule as coreference.
+* **Per-channel (dialogue vs. narration) entity grids.** Reconsidered now
+  that real coreference exists: entity *identity* is resolved once, over the
+  whole document (or, for the ``coreference`` backend, over its window - see
+  below), so a chain that crosses a quotation mark is not severed by a
+  channel split; only *which observations count toward a channel's rate* is
+  filtered, the same principle the pre-existing ``lexical``
+  narration/dialogue overlap channels already used.  ``entity``'s four
+  role-sequence metrics (new/given, reintroduction distance, dangling rate,
+  transition entropy) now have narration and dialogue variants.  The
+  co-occurrence **graph** and the **order-permutation tests** deliberately do
+  not: a co-occurrence window and a shuffle-based arrangement score are both
+  questions about the document's overall structure, not about one channel's
+  share of a role sequence, and channel-splitting either would answer a
+  different, not obviously more useful, question rather than the same one
+  more narrowly - inventing that split was judged not worth doing versus
+  documenting the boundary here.
+
+Still deferred:
+
 * **RST parsing** (IsaNLP, Feng-Hirst, discopy, DisCoDisCo) and **PDTB
   implicit-relation labels**. No maintained, installable parser exists in
   this environment; faking a relation label or a tree depth from string
   matching would be worse than not reporting it. Only explicit,
-  surface-matched connectives are measured.
-* **TAACO / ReaderBench / a corpus reference distribution for entity-grid
-  transition likelihood.** These need either an external tool this
-  environment cannot run or a fitted reference corpus this task does not
-  ship; the transition frequencies and their entropy are reported instead of
-  a likelihood-under-a-corpus number, so nothing here is invented against a
-  reference sample that does not exist.
-* **Per-channel (dialogue vs. narration) entity grids and lexical chains.**
-  The adjacent-sentence overlap metric is split into ``full``/``narration``/
-  ``dialogue`` because it is cheap to; the entity grid, the graph and the
-  permutation tests are run on the full document only, because a coreference
-  chain that crosses a quotation mark (a narrator naming a character a
-  speaker then refers to as "I") is exactly the kind of continuity a
-  channel split would sever.
+  surface-matched connectives are measured. Permanently out of scope.
+* **A fitted corpus reference distribution for entity-grid TRANSITION
+  FREQUENCIES** (as opposed to their entropy, which is a single number and
+  already flows through the existing mechanism below). ``textgrader.corpus``
+  turns every scalar ``finding["value"]`` from a profiled metric into a
+  per-book column and then a pooled distribution automatically - so
+  ``discourse.coherence_entity_grid_transition_entropy``'s entropy *already*
+  gets a real corpus reference distribution for free, the day someone builds
+  a profile with both ``--parse-metrics`` and ``--model-metrics`` (this
+  suite's ``cost="parse"`` and its ``sentence_transformers`` requirement mean
+  both flags, not just one, are needed - see ``textgrader/corpus.py``'s
+  ``_metric_names``).  What the corpus mechanism genuinely cannot carry,
+  without a schema change to ``textgrader/corpus.py`` this task does not
+  permit, is the full 16-way transition-frequency *table* itself (S→S, S→O,
+  ...): ``build_profile`` only ever extracts one scalar ``value`` per metric
+  id into a book's row, never a finding's ``distribution`` dict, and
+  ``item_distributions`` only pools the fixed, pre-named list in
+  ``ITEM_SOURCES`` (sentence/paragraph/word/turn counts), not an arbitrary
+  categorical count table a metric produces at measurement time.  Emitting
+  one metric id per transition type to route around that would add sixteen
+  near-duplicate, low-value ids to this suite's surface for one narrow
+  comparison; that trade was judged not worth it, so the transition counts
+  and their entropy are reported as this module already did, and only the
+  entropy number, not the table, is corpus-comparable today.
 * **Pronoun-to-named-mention transition rate.** ``pov.entity_pronoun_ratio``
   already measures named-entity-to-pronoun balance in narration; adding a
   second, entity-grid-flavoured version of the same comparison here would be
@@ -80,7 +148,7 @@ from __future__ import annotations
 import math
 import random
 from collections import Counter
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .. import coherence as coh
 from .. import text as textlib
@@ -98,7 +166,7 @@ FAMILY = "discourse"
 # dependency-free groups still gets the fast path, because grade.py's
 # "> 1s" warning is about what actually ran, not what was declared.
 COST = PARSE
-REQUIRES: tuple[str, ...] = ("spacy", "sentence_transformers", "networkx")
+REQUIRES: tuple[str, ...] = ("spacy", "sentence_transformers", "networkx", "fastcoref", "nltk")
 MIN_SAMPLE = 20
 UNIT_SENSITIVE = False
 
@@ -110,10 +178,20 @@ MIN_SAMPLE_PARAGRAPHS = 5
 MIN_SAMPLE_WORDS = 200
 MIN_SAMPLE_GRAPH_NODES = 3
 
+# features.coreference and features.lexical_wordnet are NOT in this default
+# set of "on unless disabled" groups, even though every other group is: both
+# load an optional dependency this suite did not use to have, coreference
+# runs a transformer model, and the whole point of the gating rule in
+# textgrader/corpus.py (needs_model checks REQUIRES for "sentence_transformers"
+# only, so a fastcoref-backed feature is invisible to it) is that nothing may
+# rely on that guard to keep a model-backed measurement from firing unasked.
+# They are opt-in on top of an already-opt-in suite.
 DEFAULT_FEATURES: dict[str, bool] = {
     "lexical": True,
+    "lexical_wordnet": False,
     "semantic": True,
     "entity": True,
+    "coreference": False,
     "connectives": True,
     "order_permutation": True,
 }
@@ -132,12 +210,16 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     out: list[dict[str, Any]] = []
     if features.get("lexical", True):
         out.extend(_lexical(analysis, config))
+    if features.get("lexical_wordnet", False):
+        out.append(_lexical_chain_coverage_wordnet(analysis, config))
     if features.get("semantic", True):
         out.extend(_semantic(analysis, config))
     if features.get("connectives", True):
         out.extend(_connectives(analysis, config))
     if features.get("entity", True):
         out.extend(_entity(analysis, config))
+    if features.get("coreference", False):
+        out.extend(_coreference_entity(analysis, config))
     if features.get("order_permutation", True):
         out.extend(_order(analysis, config))
     return out
@@ -220,7 +302,7 @@ def _lexical_chain_coverage(analysis: DocumentAnalysis, config: Mapping[str, Any
     return finding(
         metric_id, name, coverage, "%", family=FAMILY, sample_size=len(sentences),
         min_sample=MIN_SAMPLE, sample_size_sensitive=True,
-        distribution={"chain_count": len(real_chains),
+        distribution={"backend": "identity", "chain_count": len(real_chains),
                      "mean_chain_length": (sum(lengths) / len(lengths)) if lengths else None,
                      "longest_chain": max(lengths) if lengths else 0,
                      "gap": gap, "min_chain_length": min_chain_len},
@@ -268,6 +350,49 @@ def _lexical(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict
     out.append(_lexical_chain_coverage(analysis, config, min_len))
     out.append(_global_context_overlap(analysis, min_len))
     return out
+
+
+def _lexical_chain_coverage_wordnet(analysis: DocumentAnalysis,
+                                    config: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``lexical_wordnet`` feature: :func:`_lexical_chain_coverage`'s
+    identity-based chain, rerun with a WordNet synonym/hypernym key instead
+    of the word itself, and reported as its OWN finding rather than replacing
+    the identity one - see ``coh.wordnet_concept_key``'s docstring for why
+    the two are expected to disagree, not just permitted to."""
+
+    metric_id = "discourse.coherence_lexical_chain_coverage_wordnet"
+    name = "Sentence share covered by a WordNet synonym/hypernym lexical chain"
+    min_len = int(option(config, "min_word_len", 3))
+    gap = int(option(config, "chain_gap", 3))
+    min_chain_len = int(option(config, "chain_min_length", 2))
+    sentences = analysis.sentences
+    if not sentences:
+        return finding(metric_id, name, None, "%", family=FAMILY, sample_size=0,
+                       min_sample=MIN_SAMPLE, warning="no sentences to measure")
+    wn, reason = analysis.memo("coherence_wordnet", coh.require_wordnet)
+    if wn is None:
+        return unavailable(metric_id, name, reason, family=FAMILY)
+    chains = coh.lexical_chains(sentences, gap=gap, min_len=min_len,
+                                key_fn=lambda word: coh.wordnet_concept_key(word, wn))
+    real_chains = [chain for chain in chains if len(chain) >= min_chain_len]
+    covered: set[int] = set()
+    for chain in real_chains:
+        covered.update(chain)
+    coverage = 100.0 * len(covered) / len(sentences)
+    lengths = [len(chain) for chain in real_chains]
+    ranked = sorted(real_chains, key=len, reverse=True)[:20]
+    return finding(
+        metric_id, name, coverage, "%", family=FAMILY, sample_size=len(sentences),
+        min_sample=MIN_SAMPLE, sample_size_sensitive=True,
+        distribution={"backend": "wordnet", "chain_count": len(real_chains),
+                     "mean_chain_length": (sum(lengths) / len(lengths)) if lengths else None,
+                     "longest_chain": max(lengths) if lengths else 0,
+                     "gap": gap, "min_chain_length": min_chain_len,
+                     "word_sense_disambiguation": "none (first WordNet sense only)"},
+        evidence=[{"length": len(chain), "first_sentence_index": chain[0],
+                  "last_sentence_index": chain[-1]} for chain in ranked],
+        warning=None if real_chains else
+        "no shared or synonymous content word formed a chain of the minimum length")
 
 
 # -------------------------------------------------------------- semantic group
@@ -454,20 +579,44 @@ def _connectives(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[
 
 # ---------------------------------------------------------------- entity group
 
-_ENTITY_METRIC_NAMES = (
-    ("discourse.coherence_entity_new_given_ratio", "New-vs-given entity mention ratio"),
-    ("discourse.coherence_entity_reintroduction_distance",
+# One (metric_id, name) pair per role-sequence measurement, per channel. The
+# base ("") set is the pre-existing full-document surface metrics whose ids
+# must not move (see the module contract); "_narration"/"_dialogue" are the
+# new per-channel surface variants (see the docstring's "Closed since the
+# first pass" section for why a channel split is now judged safe); "_coref"
+# is the new real-coreference backend, windowed rather than channel-split
+# (see coh.resolve_coreference's docstring for why).
+_GRID_METRIC_STEMS = (
+    ("entity_new_given_ratio", "New-vs-given entity mention ratio"),
+    ("entity_reintroduction_distance",
      "Distance in sentences between repeated mentions of the same entity"),
-    ("discourse.coherence_entity_dangling_rate",
-     "Entities introduced once and never mentioned again"),
-    ("discourse.coherence_entity_grid_transition_entropy",
+    ("entity_dangling_rate", "Entities introduced once and never mentioned again"),
+    ("entity_grid_transition_entropy",
      "Entropy of adjacent subject/object/other/absent entity-grid transitions"),
-    ("discourse.coherence_entity_graph_density", "Density of the entity co-occurrence graph"),
 )
+_GRAPH_METRIC_STEM = ("entity_graph_density", "Density of the entity co-occurrence graph")
+
+_CHANNEL_LABELS = {"": "", "narration": " (narration only)",
+                   "dialogue": " (dialogue turns only, in speaking order)",
+                   "coref": " (real coreference, fastcoref-backed, windowed)"}
 
 
-def _entity_given_new(per_sentence: list[dict[str, str]], total_sentences: int) -> dict[str, Any]:
-    metric_id, name = _ENTITY_METRIC_NAMES[0]
+def _grid_ids(suffix: str) -> tuple[tuple[str, str], ...]:
+    tag = f"_{suffix}" if suffix else ""
+    label = _CHANNEL_LABELS[suffix]
+    return tuple((f"discourse.coherence_{stem}{tag}", f"{name}{label}")
+                 for stem, name in _GRID_METRIC_STEMS)
+
+
+def _graph_ids(suffix: str) -> tuple[str, str]:
+    tag = f"_{suffix}" if suffix else ""
+    stem, name = _GRAPH_METRIC_STEM
+    return f"discourse.coherence_{stem}{tag}", f"{name}{_CHANNEL_LABELS[suffix]}"
+
+
+def _entity_given_new(metric_id: str, name: str, per_sentence: Sequence[Mapping[str, str]],
+                      total_sentences: int, *, channel: str, backend: Mapping[str, Any],
+                      no_mentions_reason: str) -> dict[str, Any]:
     seen: set[str] = set()
     new_count = given_count = carried_over = empty_sentences = 0
     prev_keys: set[str] = set()
@@ -484,25 +633,23 @@ def _entity_given_new(per_sentence: list[dict[str, str]], total_sentences: int) 
                 seen.add(key)
         prev_keys = current_keys
     if new_count == 0:
-        warning = "no entity mentions found (no noun chunk was headed by a noun or proper noun)"
+        warning = no_mentions_reason
     elif given_count == 0:
         warning = "every mention was a first mention of its entity; the ratio is undefined"
     else:
         warning = None
     ratio = (new_count / given_count) if given_count else None
     return finding(metric_id, name, ratio, "ratio", family=FAMILY, sample_size=total_sentences,
-                  min_sample=MIN_SAMPLE,
-                  distribution={"new_mentions": new_count, "given_mentions": given_count,
+                  min_sample=MIN_SAMPLE, channel=(channel or "full"),
+                  distribution={**backend, "new_mentions": new_count, "given_mentions": given_count,
                                "carried_over_from_previous_sentence": carried_over,
                                "sentences_with_no_tracked_entity": empty_sentences,
-                               "distinct_entities": len(seen),
-                               "entity_identity": "noun-chunk root lemma, case-folded "
-                                                  "(surface-based, not coreference)"},
+                               "distinct_entities": len(seen)},
                   warning=warning)
 
 
-def _entity_reintroduction(per_sentence: list[dict[str, str]]) -> dict[str, Any]:
-    metric_id, name = _ENTITY_METRIC_NAMES[1]
+def _entity_reintroduction(metric_id: str, name: str, per_sentence: Sequence[Mapping[str, str]],
+                           *, channel: str, backend: Mapping[str, Any]) -> dict[str, Any]:
     last_seen: dict[str, int] = {}
     gaps: list[int] = []
     for index, roles in enumerate(per_sentence):
@@ -512,15 +659,20 @@ def _entity_reintroduction(per_sentence: list[dict[str, str]]) -> dict[str, Any]
             last_seen[key] = index
     if not gaps:
         return finding(metric_id, name, None, "sentences", family=FAMILY, sample_size=0,
-                      min_sample=MIN_SAMPLE,
+                      min_sample=MIN_SAMPLE, channel=(channel or "full"),
+                      distribution=dict(backend) if backend else None,
                       warning="no entity was mentioned more than once")
-    return shape(metric_id, name, gaps, "sentences", family=FAMILY, min_sample=MIN_SAMPLE,
-                evidence=[{"gap_sentences": gap} for gap in sorted(gaps, reverse=True)[:20]])[0]
+    result = shape(metric_id, name, gaps, "sentences", family=FAMILY, min_sample=MIN_SAMPLE,
+                   channel=(channel or "full"),
+                   evidence=[{"gap_sentences": gap} for gap in sorted(gaps, reverse=True)[:20]])[0]
+    if backend:
+        result["distribution"] = {**backend, **(result["distribution"] or {})}
+    return result
 
 
-def _entity_dangling(per_sentence: list[dict[str, str]], total_sentences: int,
-                     lookback: int) -> dict[str, Any]:
-    metric_id, name = _ENTITY_METRIC_NAMES[2]
+def _entity_dangling(metric_id: str, name: str, per_sentence: Sequence[Mapping[str, str]],
+                     total_sentences: int, lookback: int, *, channel: str,
+                     backend: Mapping[str, Any]) -> dict[str, Any]:
     first_seen: dict[str, int] = {}
     counts: dict[str, int] = {}
     for index, roles in enumerate(per_sentence):
@@ -533,42 +685,45 @@ def _entity_dangling(per_sentence: list[dict[str, str]], total_sentences: int,
     eligible = [key for key, index in first_seen.items() if index < total_sentences - lookback]
     if not eligible:
         return finding(metric_id, name, None, "%", family=FAMILY, sample_size=0,
-                      min_sample=MIN_SAMPLE,
+                      min_sample=MIN_SAMPLE, channel=(channel or "full"),
+                      distribution=dict(backend) if backend else None,
                       warning=f"every tracked entity was introduced in the last {lookback} "
                               f"sentences, too close to the end to judge whether it dangles")
     dangling = [key for key in eligible if counts[key] == 1]
     return finding(
         metric_id, name, 100.0 * len(dangling) / len(eligible), "%", family=FAMILY,
-        sample_size=len(eligible), min_sample=MIN_SAMPLE,
-        distribution={"dangling_entities": len(dangling), "eligible_entities": len(eligible),
-                     "lookback_sentences": lookback},
+        sample_size=len(eligible), min_sample=MIN_SAMPLE, channel=(channel or "full"),
+        distribution={**backend, "dangling_entities": len(dangling),
+                     "eligible_entities": len(eligible), "lookback_sentences": lookback},
         evidence=[{"entity": key, "first_sentence_index": first_seen[key]}
                  for key in sorted(dangling, key=lambda item: first_seen[item])[:25]])
 
 
-def _entity_transition_entropy(rows: dict[str, list[str]], tracked: list[str]) -> dict[str, Any]:
-    metric_id, name = _ENTITY_METRIC_NAMES[3]
+def _entity_transition_entropy(metric_id: str, name: str, rows: Mapping[str, Sequence[str]],
+                               tracked: Sequence[str], *, channel: str,
+                               backend: Mapping[str, Any]) -> dict[str, Any]:
     if not tracked:
         return finding(metric_id, name, None, "bits", family=FAMILY, sample_size=0,
-                      min_sample=MIN_SAMPLE,
+                      min_sample=MIN_SAMPLE, channel=(channel or "full"),
+                      distribution=dict(backend) if backend else None,
                       warning="no entity was mentioned in two or more sentences")
     counts = coh.transition_counts(rows)
     total_transitions = sum(counts.values())
     entropy = coh.entropy_of_counts(counts)
     return finding(
         metric_id, name, entropy, "bits", family=FAMILY, sample_size=total_transitions,
-        min_sample=MIN_SAMPLE, sample_size_sensitive=True,
-        distribution={"role_schema": coh.ROLE_SCHEMA_VERSION, "tracked_entities": len(tracked),
-                     "possible_transition_types": 16,
+        min_sample=MIN_SAMPLE, sample_size_sensitive=True, channel=(channel or "full"),
+        distribution={**backend, "role_schema": coh.ROLE_SCHEMA_VERSION,
+                     "tracked_entities": len(tracked), "possible_transition_types": 16,
                      "max_possible_bits": math.log2(min(16, len(counts))) if counts else 0.0},
         evidence=[{"from": a, "to": b, "count": count}
                  for (a, b), count in sorted(counts.items(), key=lambda item: -item[1])[:25]],
         warning=None if total_transitions else "no adjacent-sentence transition to measure")
 
 
-def _entity_graph(rows: dict[str, list[str]], tracked: list[str], window: int,
-                  min_mentions: int, freq: dict[str, int]) -> dict[str, Any]:
-    metric_id, name = _ENTITY_METRIC_NAMES[4]
+def _entity_graph(metric_id: str, name: str, rows: Mapping[str, Sequence[str]],
+                  tracked: Sequence[str], window: int, min_mentions: int,
+                  freq: Mapping[str, int], backend: Mapping[str, Any]) -> dict[str, Any]:
     module, reason = require("networkx")
     if module is None:
         return unavailable(metric_id, name, reason, family=FAMILY)
@@ -576,6 +731,7 @@ def _entity_graph(rows: dict[str, list[str]], tracked: list[str], window: int,
     if len(graph_tracked) < MIN_SAMPLE_GRAPH_NODES:
         return finding(metric_id, name, None, "ratio", family=FAMILY,
                       sample_size=len(graph_tracked), min_sample=MIN_SAMPLE_GRAPH_NODES,
+                      distribution=dict(backend) if backend else None,
                       warning=f"needs at least {MIN_SAMPLE_GRAPH_NODES} entities mentioned "
                               f"{min_mentions}+ times each; found {len(graph_tracked)}")
     sub_rows = {key: rows[key] for key in graph_tracked}
@@ -584,43 +740,130 @@ def _entity_graph(rows: dict[str, list[str]], tracked: list[str], window: int,
     return finding(
         metric_id, name, stats["density"], "ratio", family=FAMILY, sample_size=stats["nodes"],
         min_sample=MIN_SAMPLE_GRAPH_NODES,
-        distribution={**stats, "co_occurrence_window_sentences": window,
+        distribution={**backend, **stats, "co_occurrence_window_sentences": window,
                      "min_mentions_to_track": min_mentions,
                      "networkx_version": getattr(module, "__version__", None)},
         warning=None if stats["edges"] else "no two entities ever co-occurred within the window")
 
 
+def _grid_findings(suffix: str, per_sentence: Sequence[Mapping[str, str]], total_sentences: int,
+                   lookback: int, max_tracked: int, *, channel: str,
+                   backend: Mapping[str, Any], no_mentions_reason: str) -> list[dict[str, Any]]:
+    """The four role-sequence metrics (given/new, reintroduction, dangling,
+    transition entropy) for one (channel, backend) combination; the shared
+    body behind every surface, per-channel and coreference entity finding."""
+
+    ids = _grid_ids(suffix)
+    freq = coh.entity_frequency(per_sentence)
+    tracked = [key for key, _ in sorted(freq.items(), key=lambda item: -item[1])[:max_tracked]]
+    rows = coh.grid_rows(per_sentence, tracked)
+    return [
+        _entity_given_new(*ids[0], per_sentence, total_sentences, channel=channel,
+                          backend=backend, no_mentions_reason=no_mentions_reason),
+        _entity_reintroduction(*ids[1], per_sentence, channel=channel, backend=backend),
+        _entity_dangling(*ids[2], per_sentence, total_sentences, lookback, channel=channel,
+                         backend=backend),
+        _entity_transition_entropy(*ids[3], rows, tracked, channel=channel, backend=backend),
+    ]
+
+
+_SURFACE_BACKEND = {"backend": "surface_lemma",
+                    "entity_identity": "noun-chunk root lemma, case-folded "
+                                       "(surface-based, not coreference)"}
+_SURFACE_NO_MENTIONS = "no entity mentions found (no noun chunk was headed by a noun or proper noun)"
+
+
 def _entity(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    all_ids = [pair for suffix in ("", "narration", "dialogue") for pair in _grid_ids(suffix)]
+    all_ids.append(_graph_ids(""))
     reason = analysis.nlp_unavailable
     if reason:
-        return [unavailable(metric_id, name, reason, family=FAMILY)
-               for metric_id, name in _ENTITY_METRIC_NAMES]
+        return [unavailable(metric_id, name, reason, family=FAMILY) for metric_id, name in all_ids]
 
     lookback = int(option(config, "entity_lookback_sentences", 10))
     max_tracked = int(option(config, "entity_max_tracked", 150))
     graph_window = int(option(config, "entity_graph_window_sentences", 3))
     min_mentions_for_graph = int(option(config, "entity_min_mentions_for_graph", 2))
 
-    per_sentence, _ = analysis.memo(
+    per_sentence, channels = analysis.memo(
         "coherence_entity_mentions",
-        lambda: coh.entity_mentions_by_sentence(analysis.spacy_sents()))
+        lambda: coh.entity_mentions_by_sentence(analysis.spacy_sents_by_channel()))
     total_sentences = len(per_sentence)
     if total_sentences == 0:
         return [finding(metric_id, name, None, None, family=FAMILY, sample_size=0,
                        min_sample=MIN_SAMPLE, warning="the shared parse produced no sentences")
-               for metric_id, name in _ENTITY_METRIC_NAMES]
+               for metric_id, name in all_ids]
+
+    out = list(_grid_findings("", per_sentence, total_sentences, lookback, max_tracked,
+                              channel="full", backend=_SURFACE_BACKEND,
+                              no_mentions_reason=_SURFACE_NO_MENTIONS))
+
+    for channel_name in ("narration", "dialogue"):
+        indices = coh.channel_indices(channels, channel_name)
+        channel_rows = coh.project_rows(per_sentence, indices)
+        out.extend(_grid_findings(channel_name, channel_rows, len(channel_rows), lookback,
+                                  max_tracked, channel=channel_name, backend=_SURFACE_BACKEND,
+                                  no_mentions_reason=_SURFACE_NO_MENTIONS))
 
     freq = coh.entity_frequency(per_sentence)
     tracked = [key for key, _ in sorted(freq.items(), key=lambda item: -item[1])[:max_tracked]]
     rows = coh.grid_rows(per_sentence, tracked)
+    graph_id, graph_name = _graph_ids("")
+    out.append(_entity_graph(graph_id, graph_name, rows, tracked, graph_window,
+                             min_mentions_for_graph, freq, _SURFACE_BACKEND))
+    return out
 
-    return [
-        _entity_given_new(per_sentence, total_sentences),
-        _entity_reintroduction(per_sentence),
-        _entity_dangling(per_sentence, total_sentences, lookback),
-        _entity_transition_entropy(rows, tracked),
-        _entity_graph(rows, tracked, graph_window, min_mentions_for_graph, freq),
-    ]
+
+def _coreference_entity(analysis: DocumentAnalysis, config: Mapping[str, Any]
+                        ) -> list[dict[str, Any]]:
+    """The ``coreference`` feature: the same four role-sequence metrics as
+    ``_entity``, real-coreference-backed via ``fastcoref``, plus its own
+    co-occurrence graph - all under distinct, ``_coref``-suffixed metric ids,
+    never replacing the surface ones.  Off by default; see the module
+    docstring and ``coh.resolve_coreference`` for why and how it is bounded.
+    """
+
+    ids = list(_grid_ids("coref"))
+    graph_id = _graph_ids("coref")
+    all_ids = ids + [graph_id]
+    reason = analysis.nlp_unavailable
+    if reason:
+        return [unavailable(metric_id, name, reason, family=FAMILY) for metric_id, name in all_ids]
+
+    model_name = option(config, "coreference_model", coh.DEFAULT_COREF_MODEL)
+    max_words = int(option(config, "coreference_max_words", 4000))
+    lookback = int(option(config, "entity_lookback_sentences", 10))
+    max_tracked = int(option(config, "entity_max_tracked", 150))
+    graph_window = int(option(config, "entity_graph_window_sentences", 3))
+    min_mentions_for_graph = int(option(config, "entity_min_mentions_for_graph", 2))
+
+    per_sentence, _channels, settings, note = analysis.memo(
+        "coherence_coref_chains",
+        lambda: coh.resolve_coreference(analysis, model_name, max_words))
+    if not per_sentence:
+        return [unavailable(metric_id, name, note or "coreference produced no result",
+                           family=FAMILY) for metric_id, name in all_ids]
+
+    total_sentences = len(per_sentence)
+    out = list(_grid_findings("coref", per_sentence, total_sentences, lookback, max_tracked,
+                              channel="full", backend=settings,
+                              no_mentions_reason="fastcoref found no chain of two or more "
+                                                 "mentions in the window"))
+    for item in out:
+        # The window note belongs on every coreference finding, exactly like
+        # semantic_adjacent's backend_note is on every semantic finding, so a
+        # reader never has to cross-reference which metric explains the cap.
+        item["warning"] = note if not item["warning"] else f"{note}; {item['warning']}"
+
+    freq = coh.entity_frequency(per_sentence)
+    tracked = [key for key, _ in sorted(freq.items(), key=lambda item: -item[1])[:max_tracked]]
+    rows = coh.grid_rows(per_sentence, tracked)
+    graph_finding = _entity_graph(graph_id[0], graph_id[1], rows, tracked, graph_window,
+                                  min_mentions_for_graph, freq, settings)
+    if not graph_finding["warning"]:
+        graph_finding["warning"] = note
+    out.append(graph_finding)
+    return out
 
 
 # ----------------------------------------------------------- permutation group

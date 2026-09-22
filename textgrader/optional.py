@@ -33,6 +33,17 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "ruptures": ("ruptures", "pip install ruptures"),
     "textdescriptives": ("textdescriptives", "pip install textdescriptives"),
     "networkx": ("networkx", "pip install networkx"),
+    # Neural coreference resolution for coherence_suite's optional
+    # "coreference" feature (off by default: see that module's docstring).
+    # Pulls in torch and a transformer encoder, so it is never imported
+    # unless that feature flag is explicitly on.
+    "fastcoref": ("fastcoref", "pip install fastcoref"),
+    # WordNet synonymy/hypernymy for coherence_suite's optional
+    # "lexical_wordnet" feature. The package alone is not enough - the
+    # 'wordnet' corpus itself must also be downloaded
+    # (python -m nltk.downloader wordnet); coherence.py checks for that
+    # separately and reports it as its own unavailable reason.
+    "nltk": ("nltk", "pip install nltk && python -m nltk.downloader wordnet"),
     # Compression channels for textgrader.metrics.randomness_suite. Every one
     # of these is optional: the stdlib zlib/gzip/bz2/lzma channels cover the
     # suite's acceptance criteria on their own, and each of these degrades to

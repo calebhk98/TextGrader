@@ -227,10 +227,11 @@ REGISTRY: dict[str, MetricSpec] = dict([
 
     # ---------------------------------------------------------- experimental
     _spec("coherence_suite", "coherence_suite", "discourse", "parse",
-          requires=("spacy", "sentence_transformers", "networkx"),
+          requires=("spacy", "sentence_transformers", "networkx", "fastcoref", "nltk"),
           defaults={
-              "features": {"lexical": True, "semantic": True, "entity": True,
-                          "connectives": True, "order_permutation": True},
+              "features": {"lexical": True, "lexical_wordnet": False, "semantic": True,
+                          "entity": True, "coreference": False, "connectives": True,
+                          "order_permutation": True},
               "min_word_len": 3,
               "chain_gap": 3,
               "chain_min_length": 2,
@@ -240,6 +241,8 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "entity_max_tracked": 150,
               "entity_graph_window_sentences": 3,
               "entity_min_mentions_for_graph": 2,
+              "coreference_model": "biu-nlp/f-coref",
+              "coreference_max_words": 4000,
               "connective_max_reported": 25,
               "permutations": 50,
               "seed": 0,
@@ -248,10 +251,13 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "order_max_paragraphs_sampled": 30,
               "order_max_paragraphs_for_doc": 60,
           },
-          summary="Experimental discourse coherence/cohesion: lexical and semantic adjacency, "
-                  "a surface-based entity grid and graph, connective-family rates, and "
+          summary="Experimental discourse coherence/cohesion: lexical and WordNet-aware "
+                  "semantic adjacency, a surface-based entity grid and graph (with narration/"
+                  "dialogue channel splits) plus an optional real-coreference (fastcoref) "
+                  "backend reported side by side with it, connective-family rates, and "
                   "sentence/paragraph order-permutation baselines. Off by default; each group "
-                  "toggles independently under 'features'."),
+                  "toggles independently under 'features', and the coreference/WordNet groups "
+                  "stay off even when the rest of the suite is enabled."),
     _spec("logic_suite", "logic_suite", "discourse", "parse", ("spacy",),
           defaults={
               "features": {
