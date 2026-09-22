@@ -279,6 +279,32 @@
       "window_words": 2500,
       "penalty": 3.0
     },
+    "coherence_suite": {
+      "enabled": false,
+      "features": {
+        "lexical": true,
+        "semantic": true,
+        "entity": true,
+        "connectives": true,
+        "order_permutation": true
+      },
+      "min_word_len": 3,
+      "chain_gap": 3,
+      "chain_min_length": 2,
+      "semantic_model": "all-MiniLM-L6-v2",
+      "semantic_low_tail_threshold": 0.15,
+      "entity_lookback_sentences": 10,
+      "entity_max_tracked": 150,
+      "entity_graph_window_sentences": 3,
+      "entity_min_mentions_for_graph": 2,
+      "connective_max_reported": 25,
+      "permutations": 50,
+      "seed": 0,
+      "order_min_sentences_per_paragraph": 4,
+      "order_max_sentences_per_paragraph": 40,
+      "order_max_paragraphs_sampled": 30,
+      "order_max_paragraphs_for_doc": 60
+    },
     "absolutes": false,
     "banned_phrases": false,
     "check_edits": false,

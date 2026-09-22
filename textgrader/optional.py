@@ -32,6 +32,7 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "sklearn": ("sklearn", "pip install scikit-learn"),
     "ruptures": ("ruptures", "pip install ruptures"),
     "textdescriptives": ("textdescriptives", "pip install textdescriptives"),
+    "networkx": ("networkx", "pip install networkx"),
 }
 
 _lock = threading.Lock()

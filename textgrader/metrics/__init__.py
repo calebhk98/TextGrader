@@ -224,6 +224,34 @@ REGISTRY: dict[str, MetricSpec] = dict([
     _spec("change_points", "drift_change_points", "book_drift", "moderate",
           requires=("ruptures",), defaults={"window_words": 2500, "penalty": 3.0},
           summary="Where the style changes abruptly."),
+
+    # ---------------------------------------------------------- experimental
+    _spec("coherence_suite", "coherence_suite", "discourse", "parse",
+          requires=("spacy", "sentence_transformers", "networkx"),
+          defaults={
+              "features": {"lexical": True, "semantic": True, "entity": True,
+                          "connectives": True, "order_permutation": True},
+              "min_word_len": 3,
+              "chain_gap": 3,
+              "chain_min_length": 2,
+              "semantic_model": "all-MiniLM-L6-v2",
+              "semantic_low_tail_threshold": 0.15,
+              "entity_lookback_sentences": 10,
+              "entity_max_tracked": 150,
+              "entity_graph_window_sentences": 3,
+              "entity_min_mentions_for_graph": 2,
+              "connective_max_reported": 25,
+              "permutations": 50,
+              "seed": 0,
+              "order_min_sentences_per_paragraph": 4,
+              "order_max_sentences_per_paragraph": 40,
+              "order_max_paragraphs_sampled": 30,
+              "order_max_paragraphs_for_doc": 60,
+          },
+          summary="Experimental discourse coherence/cohesion: lexical and semantic adjacency, "
+                  "a surface-based entity grid and graph, connective-family rates, and "
+                  "sentence/paragraph order-permutation baselines. Off by default; each group "
+                  "toggles independently under 'features'."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

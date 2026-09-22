@@ -45,6 +45,12 @@ ruptures>=1.1.9
 # Multivariate style distance and robust covariance.
 scikit-learn>=1.3
 
+# Entity co-occurrence graphs (density, components, clustering) for the
+# experimental discourse-coherence suite. Everything else that suite measures
+# is either dependency-free or already covered above; this is the one graph
+# statistic no other metric needed.
+networkx>=3.0
+
 # Tabular convenience for corpus work.
 pandas>=2.0
 
