@@ -74,12 +74,18 @@ to *off* regardless of their own cost (see "Gating"):
 ``propositions``/``nli_entailment`` rather than adding metrics of its own)
     Resolves a pronoun subject ("she") to a named antecedent ("Alice") over
     the first ``coreference_max_chars`` characters, so it can enter the same
-    subject+predicate buckets a directly-named subject would. Off by default
-    both because it is another neural model on top of the spaCy parse this
-    module already pays for, and because -- found by actually trying it, not
-    assumed -- the installed ``fastcoref`` release does not load cleanly
-    against the installed ``transformers`` release in this environment; see
-    ``textgrader/propositions.py`` for the exact failure and how it degrades.
+    subject+predicate buckets a directly-named subject would. ``fastcoref``
+    now loads and predicts cleanly here, through
+    :func:`textgrader.optional.shim_fastcoref_transformers`, and has been
+    exercised against the real model, not only a fake one (see
+    ``tests/test_logic_suite.py``'s
+    ``test_coreference_resolution_against_a_real_fastcoref_model``) -- this is
+    no longer off by default because it is broken. It stays off by default
+    because it is another neural model on top of the spaCy parse this module
+    already pays for, its resolution is only sampled over the first
+    ``coreference_max_chars`` characters rather than the whole book, and every
+    resolution is the model's own judgement, never a verified reading; see
+    ``textgrader/propositions.py`` for exactly how it resolves and degrades.
 
 ``lexical_opposition`` (``nltk`` + downloaded WordNet corpus data, off by
 default)
@@ -149,6 +155,25 @@ same cores -- a real property of shared hardware, not of this code -- so
 timing this channel is only meaningful on an otherwise-quiet machine.
 Proposition extraction and the heuristic bucket scans stay ``parse``-class
 and are entirely unaffected by whether this group is on.
+
+No corpus-reference channel
+----------------------------
+
+This module deliberately does not define ``profile_vector`` (the hook
+``textgrader.corpus.build_profile`` looks for to cache a per-book feature
+vector under ``feature_profiles``). Every scalar this suite reports is
+already captured the ordinary way, one number per book, by whatever calls
+``measure`` during profiling -- a distribution over reference books is not
+missing, just not this module's job to build twice. What ``profile_vector``
+is *for* is a vector too rich for a single scalar (a frequency table, an
+embedding); nothing here is that shape, and this suite's numbers are
+candidate rates and model-label shares that this module is emphatic, in
+every finding's own warning, are not meant to imply a normative "acceptable
+contradiction rate" a manuscript should be graded against -- building a
+corpus-comparison channel on top of them would cut directly against that.
+This suite's ``cost`` also stays ``"parse"`` specifically so it is excluded
+from default corpus profiling (see "Gating" below); a ``profile_vector`` here
+would be built, at real cost, for reference books nobody asked to profile.
 
 Deferred
 --------

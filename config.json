@@ -408,6 +408,12 @@
     "voice_separation": false,
     "logic_suite": {
       "enabled": false,
+      "_requires": {
+        "nli_entailment": "needs `transformers` (pip install transformers torch) plus a downloaded model checkpoint (nli_model, cross-encoder/nli-deberta-v3-small by default, fetched from Hugging Face on first use). This is the most expensive channel in this suite: loading the pipeline costs about 2.5s and scoring costs roughly 30ms/pair on an otherwise-idle CPU core, before nli_max_pairs even grows large. Without transformers or a reachable checkpoint, discourse.logic_nli_label_distribution and discourse.logic_nli_heuristic_agreement report 'unavailable' with the reason; no other feature in this suite is affected, and no model is ever loaded unless this key is explicitly true.",
+        "coreference_resolution": "needs `fastcoref` (pip install fastcoref) plus its packaged model (biu-nlp/f-coref, fetched from Hugging Face on first use), loaded through textgrader.optional.shim_fastcoref_transformers to stay compatible with transformers 5.x. Without fastcoref, or if it fails to load, every pronoun-subject proposition is simply excluded from cross-sentence matching -- exactly the same result as leaving this feature off, just with a reason recorded instead of silence. This is a modifier, not a metric group of its own: it changes what feeds `propositions`, `nli_entailment`, `lexical_opposition` and `temporal_ordering` rather than adding metric ids.",
+        "lexical_opposition": "needs `nltk` (pip install nltk) AND its WordNet corpus data downloaded separately -- the package alone is not enough. Run python -c \"import nltk; nltk.download('wordnet')\" once. Without the corpus data, discourse.logic_wordnet_antonym_candidates and discourse.logic_wordnet_hypernym_downgrade_rate report 'unavailable' with that exact command in the reason.",
+        "temporal_ordering": "needs `python-dateutil` (pip install python-dateutil). Without it, discourse.logic_temporal_order_candidates reports 'unavailable'; the 'temporal' subtype inside discourse.logic_entity_attribute_conflict_candidates (features.propositions) is unaffected either way, since it only notices two differing years/dates, never orders them."
+      },
       "features": {
         "negation_and_quantifiers": true,
         "connective_relations": true,
