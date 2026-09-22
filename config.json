@@ -469,6 +469,13 @@
     },
     "stylometry_suite": {
       "enabled": false,
+      "_embedding_style_requires": "sentence-transformers plus a one-time model download (~90MB for the default all-MiniLM-L6-v2); without it, embedding_style/embedding_reference findings and the impostors_representation='embedding' branch degrade to unavailable() with that reason. Never loads on its own -- see the module docstring's 'The critical gating rule'.",
+      "_embedding_reference_requires": "a corpus profile built with THIS SAME suite's features.embedding_style also enabled at profiling time (rebuild it with textgrader.corpus so feature_profiles['stylometry_suite'] holds per-book embedding vectors), plus sentence-transformers available at grading time to embed the manuscript the same way. Enabling embedding_reference alone, without rebuilding the profile, degrades to unavailable().",
+      "_ncd_against_corpus_requires": "ncd_corpus_dirs pointed at one or more directories of readable reference .txt/.md files, present on disk at GRADING time (not just when the corpus profile was built -- this measurement reads the folder directly, it is never served from the cached profile). Without a reachable directory this degrades to unavailable() naming what was missing.",
+      "_impostors_requires": "a corpus profile with author metadata (metadata.author on at least impostors_min_authors+1 books). impostors_representation='embedding' additionally needs the same profile rebuilt with features.embedding_style enabled (see _embedding_reference_requires).",
+      "_pos_dependency_requires": "spaCy (en_core_web_sm) for the shared parse this feature forces -- tens of seconds on a novel-length manuscript; off by default for cost, not because it needs an unusual package.",
+      "_lexicalrichness_crosscheck_requires": "the lexicalrichness package; without it this degrades to unavailable() and every other group in the suite is unaffected.",
+      "_corpus_reference_dependent_features": "corpus_reference, word_frequency_distance, author_language_model, corpus_language_model and impostors all read the corpus_profile configured at the project level; without one configured (or reachable), each degrades to unavailable() rather than failing the run.",
       "features": {
         "character_ngrams": true,
         "byte_ngrams": true,
@@ -490,7 +497,9 @@
         "word_frequency_distance": true,
         "lexicalrichness_crosscheck": true,
         "embedding_style": false,
-        "impostors": false
+        "impostors": false,
+        "embedding_reference": false,
+        "ncd_against_corpus": false
       },
       "char_ngram_orders": [
         2,
@@ -541,7 +550,11 @@
       "impostors_iterations": 25,
       "impostors_feature_fraction": 0.5,
       "impostors_min_authors": 2,
-      "impostors_target_author": null
+      "impostors_target_author": null,
+      "impostors_representation": "function_words",
+      "ncd_corpus_dirs": [],
+      "ncd_max_reference_documents": 10,
+      "ncd_max_bytes": 100000
     }
   },
   "allow_external_metric_commands": false,

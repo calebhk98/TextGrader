@@ -51,7 +51,14 @@ Corpus-reference measurements
     (``impostors``), per-author unigram cross-entropy
     (``author_language_model``), and a word-frequency distance family against
     the corpus's pooled vocabulary (``word_frequency_distance``). Every one of
-    these is documented in its own section below.
+    these is documented in its own section below. A further pass, once
+    :mod:`textgrader.corpus` grew ``profile_vector`` (a per-book cache slot
+    for anything richer than a scalar), added the embedding analogue of this
+    same nearest/second-nearest/margin/centroid/out-of-distribution family
+    (``embedding_reference``) and a true, on-disk Normalized Compression
+    Distance against real reference documents (``ncd_against_corpus``) --
+    see "Per-book embedding vectors" and "True NCD against reference
+    documents" below.
 
 Feature representations are cached on ``analysis._shared`` via
 :meth:`DocumentAnalysis.memo`, because several distance and entropy
@@ -73,11 +80,12 @@ environment, but the underlying arithmetic (cosine/Manhattan/Euclidean/
 Jensen-Shannon distance, ordinary least squares on ~20-1000 points) is simple
 enough that adding a hard dependency would buy nothing except a new way for
 ``TEXTGRADER_DISABLE_OPTIONAL=all`` to have something to disable. spaCy (the
-``pos_dependency`` feature group) and now sentence-transformers (the
-``embedding_style`` group) and lexicalrichness (the
-``lexicalrichness_crosscheck`` group) are the exceptions, and each defaults to
-``False``/gracefully-degrading for a different reason -- see each group's own
-section below. This suite is registered at ``cost="moderate"`` rather than
+``pos_dependency`` feature group), sentence-transformers (``embedding_style``,
+``embedding_reference``, and the ``embedding`` ``impostors_representation``),
+and lexicalrichness (the ``lexicalrichness_crosscheck`` group) are the
+exceptions, and each defaults to ``False``/``"function_words"``/gracefully-
+degrading for a different reason -- see each group's own section below. This
+suite is registered at ``cost="moderate"`` rather than
 ``"parse"`` or ``"model"``, and ``REQUIRES`` deliberately does **not** list
 ``sentence_transformers`` (see ``embedding_style``, below, for why): both
 choices keep the corpus builder profiling this suite's cheap channels by
@@ -91,14 +99,15 @@ Sentence-embedding style representation (``embedding_style``, off by default)
     cosine, Euclidean, Manhattan -- Jensen-Shannon is not computed here
     because an embedding is not a probability distribution), the median and
     largest section-to-section embedding shift, and each section's distance
-    from the document's own mean embedding. This is the "biggest new
-    channel" this pass adds, and it is deliberately *within-document*: a
-    corpus profile does not retain raw book text or per-book embedding
-    vectors (see :mod:`textgrader.corpus`'s docstring on portability, and the
-    note in "Still deferred" below), so there is nothing to embed on the
-    corpus side to compare against directly. It still becomes
-    corpus-comparable the same way every other scalar finding in this suite
-    does: :mod:`textgrader.corpus` folds every scalar finding value into
+    from the document's own mean embedding. This is deliberately
+    *within-document*: opening-vs-closing drift inside ONE manuscript is a
+    different question from "how far is this manuscript from a specific
+    reference book", which ``embedding_reference`` (below) now answers
+    separately, using a different cached representation
+    (:func:`profile_vector`) than this function reads. It still becomes
+    corpus-comparable the way every other scalar finding in this suite does,
+    independently of ``embedding_reference``: :mod:`textgrader.corpus` folds
+    every scalar finding value into
     ``profile.distributions`` automatically for any suite it profiles, so a
     corpus rebuilt with ``metrics.stylometry_suite.features.embedding_style``
     turned on in *its own* config populates a real reference distribution for
@@ -129,7 +138,16 @@ Impostors-style verification (``impostors``, off by default)
     author labels), with no retraining and no raw text. Every finding says so
     in its warning: this is an approximation, not the citable technique, and
     should be read as one more weak signal among the suite's many, not a
-    verdict.
+    verdict. That judgement has not changed with :func:`profile_vector`'s
+    arrival: ``impostors_representation: "embedding"``
+    (:func:`_impostors_findings_embedding`) swaps in the richer per-book
+    sentence-embedding centroid instead of function-word rates, and
+    resamples WHICH impostor authors are drawn each iteration instead of a
+    function-word subset (a dense embedding has no interpretable "subset of
+    features" to drop the way a word list does), but it remains the same
+    bounded distance comparison over cached data, not a refitted classifier,
+    and carries its own version of the same caveat. A richer representation
+    is not a more citable method.
 
 Per-author language model (``author_language_model``, on by default)
     :func:`_author_language_model_findings` scores this document's
@@ -173,13 +191,17 @@ The critical gating rule
     builder's default profiling pass -- a real regression to the "cheap
     unless asked" property the previous pass built and documented (see the
     cost/``REQUIRES`` paragraph above). The correct, finer-grained guard is
-    already in this module: ``embedding_style`` defaults to ``False`` in
-    ``DEFAULT_FEATURES``, and :func:`_embedding_style_findings` is the *only*
-    code path in this file that imports ``sentence_transformers`` (via
-    :func:`textgrader.metrics.semantic_adjacent.embed_texts`, reused rather
-    than duplicated), and only calls it when that flag is explicitly on.
-    ``tests/test_stylometry_suite.py`` asserts this directly: measuring with
-    the suite's default config never populates
+    already in this module: every code path that can reach
+    ``sentence_transformers`` -- :func:`_embedding_style_findings`,
+    :func:`profile_vector`/:func:`_embedding_reference_findings` (via
+    :func:`_document_style_embedding_vector`), and the ``embedding`` branch of
+    :func:`_impostors_findings` -- funnels through
+    :func:`textgrader.metrics.semantic_adjacent.embed_texts` (reused rather
+    than duplicated) and is reached only when its OWN feature flag
+    (``embedding_style``, ``embedding_reference``, or
+    ``impostors_representation: "embedding"``) is explicitly on; every one of
+    those defaults to off/``"function_words"``. ``tests/test_stylometry_suite.py``
+    asserts this directly: measuring with the suite's default config never populates
     ``semantic_adjacent``'s model cache.
 
 Corpus schema: the per-author frequency table
@@ -194,6 +216,79 @@ Corpus schema: the per-author frequency table
     neither key at all) degrades to the same "no per-author table" warning
     rather than raising.
 
+Per-book embedding vectors and the embedding corpus-reference distances
+    :mod:`textgrader.corpus` now supports ``profile_vector(analysis, config)``:
+    a metric module that defines it gets it called once per corpus book, and
+    a non-empty result is cached under ``feature_profiles[<metric name>]`` --
+    this suite's is ``feature_profiles['stylometry_suite']`` -- alongside the
+    always-present ``feature_profiles['function_words']``. This module's
+    :func:`profile_vector` returns this document's sentence-embedding
+    centroid (:func:`_document_style_embedding_vector`: the mean of its own
+    section embeddings, or the whole text embedded as one chunk when there
+    are too few sections), encoded as ``{"d0": ..., "d1": ..., ...}`` because
+    a ``feature_profiles`` row is a flat ``{str: float}`` mapping;
+    :func:`_dense_from_row` decodes it back. This is what closes the gap the
+    previous pass's "Still deferred" section named: a true nearest/second-
+    nearest/margin/centroid/out-of-distribution distance against *specific
+    reference books' embeddings*, computed by :func:`_embedding_reference_findings`
+    (``embedding_reference``, off by default) the same way
+    :func:`_corpus_reference_findings` computes it for function words.
+
+    **How to get embedding vectors into a profile.** Two separate opt-ins are
+    involved, at two separate times, and both are required:
+
+    1. *At profiling time* (building or rebuilding the corpus), enable
+       ``features.embedding_style`` in the ``metrics.stylometry_suite``
+       config passed to :func:`textgrader.corpus.build_profile` (directly, or
+       via ``build_corpus.py --config``). ``build_profile``'s
+       ``metric_selection`` now follows config (``"enabled"``/``"auto"``), so
+       this suite must also be *enabled* for that config's build to precompute
+       it at all -- profiling this suite with this feature on is a cost a
+       user opts into per corpus build, not a byproduct of the suite existing.
+       Rebuilding calls ``profile_vector`` for every book, downloading
+       ``sentence-transformers`` if it is not already cached and running it
+       over the whole corpus, which is exactly why this is not the default.
+    2. *At grading time*, enable ``features.embedding_reference`` (and, if the
+       corpus was built with a non-default ``embedding_model``, mirror that
+       setting) so :func:`_embedding_reference_findings` reads
+       ``feature_profiles['stylometry_suite']`` and embeds the manuscript the
+       same way to compare against it.
+
+    Skipping step 1 leaves ``feature_profiles['stylometry_suite']`` empty (a
+    profile built before this pass, or built with ``embedding_style`` off,
+    has no such key at all) and ``embedding_reference`` degrades to
+    "unavailable", naming exactly that. Skipping step 2 with step 1 done
+    wastes the cached vectors: they sit in the profile unread. A profile
+    built with a per-book embedding failure for even one book has a
+    ``feature_profiles['stylometry_suite']`` shorter than ``profile['books']``
+    (``build_profile`` only appends a row when :func:`profile_vector` returns
+    one); :func:`_embedding_reference_findings` and the ``embedding``
+    ``impostors_representation`` branch both check that the two lengths match
+    before trusting index-for-index alignment, and degrade to "unavailable"
+    rather than risk pairing a manuscript against the wrong book.
+
+True NCD against reference documents
+    :func:`_ncd_against_corpus_findings` (``ncd_against_corpus``, off by
+    default) is the one measurement in this suite that is NOT served from a
+    cached profile: Normalized Compression Distance needs C(x), C(y) *and*
+    C(x+y) -- the raw bytes of *both* texts in hand at the same moment -- and
+    a corpus profile deliberately retains no book text (see
+    :mod:`textgrader.corpus`'s module docstring on portability), so there is
+    nothing to cache this from. Instead it reads real reference files off
+    disk at grading time, from directories named in ``ncd_corpus_dirs``
+    (mirroring the project-level ``corpus_dirs`` config's shape, since a
+    metric only ever sees its own options, not the project config, so it
+    cannot simply reuse that key), bounded by ``ncd_max_reference_documents``
+    and ``ncd_max_bytes`` (per document) so the cost of this one filesystem-
+    reading measurement cannot grow with however large the configured
+    directory happens to be. When the configured directories are missing,
+    empty of ``.txt``/``.md`` files, or not configured at all, every finding
+    says exactly which of those is true rather than a bare "unavailable".
+    This directly answers the previous pass's deferred "NCD against specific
+    reference documents/authors" -- honestly, by reading real text at
+    grading time, rather than by approximating it from anything a profile
+    caches.
+
 Still deferred (named here rather than faked):
 
 * **pystylometry, PyDelta, MOWEN, JGAAP, stylo (R), stylometry-cli, fastText,
@@ -203,31 +298,22 @@ Still deferred (named here rather than faked):
   reimplementation of any of them well enough to trust its numbers is a
   larger project than any pass can responsibly deliver. Their standard-
   library-reachable *ideas* are kept (Delta-style distances, NCD, n-gram
-  cross-entropy, growth-curve fits, and now an embedding representation and
-  a distance-based impostors approximation); their specific implementations,
-  and KenLM's actual language-model machinery, are not.
-* **NCD against specific reference documents/authors.** Still needs the *raw
-  text* of the reference side, and corpus profiles deliberately do not
-  retain raw book text (see :mod:`textgrader.corpus`'s module docstring on
-  portability). NCD remains an *internal* measurement, between this
-  document's opening and closing text.
-* **Per-book embedding vectors stored in the corpus profile
-  (``feature_profiles['embedding']``), enabling a true nearest/centroid
-  *embedding* distance against specific reference books.** This task's file
-  list authorizes editing :mod:`textgrader.corpus` for the per-author
-  frequency table only; adding a second, vector-valued ``feature_profiles``
-  entry (parallel to ``feature_profiles['function_words']``) the way
-  ``embedding_style`` would need is a further, structural corpus-schema
-  change deliberately left for a future pass rather than smuggled in under a
-  narrower authorization. ``embedding_style`` answers a real question
-  without it (see above); it does not answer the specific "nearest reference
-  book by embedding" question the way ``corpus_reference`` answers it for
-  function words.
+  cross-entropy, growth-curve fits, an embedding representation, a
+  distance-based impostors approximation, and now real NCD against reference
+  documents); their specific implementations, and KenLM's actual
+  language-model machinery, are not.
 * **Full impostors/unmasking with a real classifier and a large,
-  independently-sampled impostor pool.** ``impostors`` (above) is a bounded
-  approximation over the corpus profile's own aligned data; it does not
-  retrain a classifier and does not carry the original technique's
-  statistical guarantees.
+  independently-sampled impostor pool.** ``impostors`` (above, in either
+  representation) is a bounded approximation over the corpus profile's own
+  aligned data; it does not retrain a classifier and does not carry the
+  original technique's statistical guarantees. ``profile_vector`` made a
+  richer *representation* available (per-book embeddings, not just
+  function-word rates); it did not make the *technique* any more citable,
+  and neither representation claims otherwise.
+* **A real R-`stylo`/JGAAP/MOWEN backend.** Explicitly out of scope for this
+  pass: each requires an R or JVM runtime this project does not shell out
+  to, and that choice is being made separately from this suite's own work
+  (see this pass's task description).
 * **Byte n-grams beyond order 2, POS n-grams beyond order 4, more than one
   dependency n-gram order at once.** Available as ``byte_ngram_orders``,
   ``pos_ngram_orders`` and ``dependency_ngram_order`` options for a user who
@@ -244,6 +330,7 @@ import statistics
 import warnings
 import zlib
 from collections import Counter
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .. import stats as stats_module
@@ -307,13 +394,26 @@ DEFAULT_FEATURES: dict[str, bool] = {
     # missing or disabled.
     "lexicalrichness_crosscheck": True,
     # Off by default: loads a sentence-transformers model (see the module
-    # docstring's "The critical gating rule" -- this is the ONLY feature flag
-    # in this suite that gates a model load, and it must stay off by default).
+    # docstring's "The critical gating rule"). The two other model-gating
+    # flags below (embedding_reference, and impostors_representation via a
+    # separate option) must stay off/"function_words" by default too, for
+    # the same reason.
     "embedding_style": False,
     # Off by default: a heavier, more specialized analysis than the rest of
     # this suite's cheap channels, and only meaningful with author-labelled
     # corpus data (see the module docstring's "Impostors-style verification").
     "impostors": False,
+    # Off by default: needs a corpus profile built with THIS feature also
+    # enabled at profiling time (so feature_profiles['stylometry_suite']
+    # holds per-book embedding vectors), plus sentence-transformers available
+    # at grading time to embed the manuscript the same way. See the module
+    # docstring's "How to get embedding vectors into a profile".
+    "embedding_reference": False,
+    # Off by default: unlike every other measurement in this suite, this one
+    # reads the corpus FOLDER (not the cached profile) at grading time -- see
+    # the module docstring's "True NCD against reference documents". Needs
+    # ncd_corpus_dirs pointed at real reference text.
+    "ncd_against_corpus": False,
 }
 
 DEFAULT_CHAR_NGRAM_ORDERS = (2, 3, 4, 5, 6)
@@ -362,6 +462,14 @@ DEFAULT_IMPOSTORS_K = 10
 DEFAULT_IMPOSTORS_ITERATIONS = 25
 DEFAULT_IMPOSTORS_FEATURE_FRACTION = 0.5
 DEFAULT_IMPOSTORS_MIN_AUTHORS = 2
+#: "function_words" (default, unchanged from the previous pass) samples random
+#: FEATURE subsets (function words) per iteration. "embedding" instead uses the
+#: richer per-book embedding centroid (see profile_vector) and, because an
+#: embedding has no meaningful "subset of features" the way a function-word
+#: list does, resamples WHICH impostor authors are drawn per iteration instead.
+#: Both remain the same bounded, non-classifier approximation; see the module
+#: docstring's "Impostors-style verification".
+DEFAULT_IMPOSTORS_REPRESENTATION = "function_words"
 
 # Lexical-richness measures are unstable on short samples; every finding in
 # that group uses this floor rather than the module's general MIN_SAMPLE.
@@ -369,6 +477,15 @@ MIN_SAMPLE_LEXICAL = 1000
 # A section-to-section comparison needs several sections to mean anything;
 # matches the threshold the sibling book-drift modules use for the same reason.
 MIN_SAMPLE_SECTIONS = 4
+
+# ncd_against_corpus: this measurement reads real reference documents from
+# disk at GRADING time (see the module docstring's "True NCD against
+# reference documents") rather than a cached profile, so its cost is bounded
+# by these two caps rather than by however large the configured corpus
+# directory happens to be: at most this many reference files, at most this
+# many bytes read from (and compressed against) each one.
+DEFAULT_NCD_MAX_REFERENCE_DOCUMENTS = 10
+DEFAULT_NCD_MAX_BYTES = 100_000
 
 
 def _feature(config: Mapping[str, Any] | None, name: str, default: bool) -> bool:
@@ -540,6 +657,15 @@ def _dense_distance(name: str, a: Sequence[float], b: Sequence[float]) -> float 
     if name == "manhattan":
         return sum(abs(float(x) - float(y)) for x, y in zip(a, b))
     return None
+
+
+def _dense_from_row(row: Mapping[str, float]) -> list[float]:
+    """Decode one ``feature_profiles['stylometry_suite']`` row (``{"d0": ...,
+    "d1": ..., ...}``, as :func:`profile_vector` encodes it) back into an
+    ordered dense vector, sorted by dimension index rather than by key string
+    (``"d10"`` must sort after ``"d9"``, not between ``"d1"`` and ``"d2"``)."""
+
+    return [float(row[key]) for key in sorted(row, key=lambda k: int(k[1:]))]
 
 
 # --------------------------------------------------------- shared, cached views
@@ -1674,9 +1800,36 @@ _IMPOSTORS_CAVEAT = (
     "technique's statistical guarantees (see the module docstring's 'Impostors-style "
     "verification')")
 
+_IMPOSTORS_EMBEDDING_CAVEAT = (
+    "distance-based approximation of the impostors technique using per-book sentence-embedding "
+    "centroids (impostors_representation='embedding') instead of function-word rates: there is "
+    "no meaningful 'subset of features' to sample from a dense embedding the way there is from "
+    "the function-word list, so each iteration instead resamples WHICH impostor authors are "
+    "drawn, then checks whether this document sits closer to the candidate author's embedding "
+    "centroid than to every sampled impostor's; it does not retrain a classifier and does not "
+    "carry the original technique's statistical guarantees (see the module docstring's "
+    "'Impostors-style verification')")
+
 
 def _impostors_findings(analysis: DocumentAnalysis, config, profile) -> list[dict[str, Any]]:
-    """A bounded, distance-based approximation of impostors verification.
+    """Dispatches to the ``impostors_representation`` option: ``"function_words"``
+    (the default, unchanged from the previous pass) or ``"embedding"`` (uses
+    the richer per-book vector :func:`profile_vector` now caches). Both
+    remain the same kind of bounded, non-classifier approximation -- see
+    each branch's own caveat constant -- so this option changes which
+    representation the approximation compares, not whether it IS one.
+    """
+
+    representation = str(option(config, "impostors_representation",
+                                DEFAULT_IMPOSTORS_REPRESENTATION)).lower()
+    if representation == "embedding":
+        return _impostors_findings_embedding(analysis, config, profile)
+    return _impostors_findings_words(analysis, config, profile)
+
+
+def _impostors_findings_words(analysis: DocumentAnalysis, config, profile) -> list[dict[str, Any]]:
+    """A bounded, distance-based approximation of impostors verification,
+    over function-word rates (the default representation).
 
     See the module docstring's "Impostors-style verification" section for the
     algorithm and for why this is an approximation rather than the literature's
@@ -1790,7 +1943,8 @@ def _impostors_findings(analysis: DocumentAnalysis, config, profile) -> list[dic
     variance = statistics.pvariance(scores) if len(scores) > 1 else 0.0
     common = {"candidate_author": target_author, "impostor_authors": sorted(impostor_rows),
              "k": len(impostor_rows), "iterations": len(scores),
-             "feature_subset_size": subset_size, "distance_family": primary, "seed": seed}
+             "feature_subset_size": subset_size, "distance_family": primary, "seed": seed,
+             "representation": "function_words"}
     evidence = [{"iteration": index, "score": score} for index, score in enumerate(scores)][:25]
     return [
         finding(ids[0][0], ids[0][1], mean_score, "share", family=FAMILY,
@@ -1802,7 +1956,219 @@ def _impostors_findings(analysis: DocumentAnalysis, config, profile) -> list[dic
     ]
 
 
+def _impostors_findings_embedding(analysis: DocumentAnalysis, config, profile) -> list[dict[str, Any]]:
+    """The ``impostors_representation="embedding"`` branch: the same
+    candidate-vs-impostors distance comparison as
+    :func:`_impostors_findings_words`, but over per-book sentence-embedding
+    centroids (:func:`profile_vector`) instead of function-word rates, and
+    resampling the impostor set rather than a feature subset each iteration
+    (see :data:`_IMPOSTORS_EMBEDDING_CAVEAT` for why). Needs a corpus profile
+    built with ``features.embedding_style`` enabled at profiling time, same
+    as :func:`_embedding_reference_findings`.
+    """
+
+    ids = (
+        (f"{PREFIX}impostors_verification_score",
+         "Impostors verification score (mean share of sampled impostor authors this document "
+         "sits closer to the candidate author than to, across impostor-set resamples, using "
+         "sentence-embedding centroids)"),
+        (f"{PREFIX}impostors_score_variance",
+         "Variance of the impostors verification score across impostor-set resamples"),
+    )
+    units = ("share", "share^2")
+
+    def _unavailable(warning: str, size: int) -> list[dict[str, Any]]:
+        combined = f"{warning}; {_IMPOSTORS_EMBEDDING_CAVEAT}"
+        return [finding(mid, name, None, unit, family=FAMILY, sample_size=size, min_sample=1,
+                        warning=combined) for (mid, name), unit in zip(ids, units)]
+
+    raw_rows = ((profile or {}).get("feature_profiles") or {}).get("stylometry_suite")
+    books = (profile or {}).get("books")
+    if not profile or not raw_rows or not books or len(raw_rows) != len(books):
+        return _unavailable("no corpus profile with per-book embedding vectors configured "
+                            "(rebuild the profile with features.embedding_style enabled)", 0)
+    authors = [((books[i].get("metadata") or {}).get("author")) for i in range(len(books))]
+    author_counts = Counter(author for author in authors if author)
+    if not author_counts:
+        return _unavailable("no author metadata in this corpus profile's book manifest",
+                            len(raw_rows))
+
+    rows = [_dense_from_row(row) for row in raw_rows]
+    dims = {len(row) for row in rows}
+    if len(dims) != 1:
+        return _unavailable("the corpus profile's cached embedding vectors do not all share the "
+                            "same dimensionality", len(rows))
+    dimension = dims.pop()
+
+    doc_vector, reason = _document_style_embedding_vector(analysis, config)
+    if doc_vector is None:
+        return _unavailable(reason or "could not embed this document", len(rows))
+    if len(doc_vector) != dimension:
+        return _unavailable("this document's embedding dimensionality does not match the "
+                            "corpus profile's", len(rows))
+
+    primary = str(option(config, "embedding_primary_distance", DEFAULT_EMBEDDING_PRIMARY_DISTANCE))
+    if primary not in EMBEDDING_DISTANCE_METRICS:
+        primary = DEFAULT_EMBEDDING_PRIMARY_DISTANCE
+    min_per_author = max(1, int(option(config, "min_documents_per_author",
+                                       DEFAULT_MIN_DOCUMENTS_PER_AUTHOR)))
+
+    target_author = option(config, "impostors_target_author", None)
+    if target_author and author_counts.get(target_author, 0) < min_per_author:
+        target_author = None
+    if not target_author:
+        distances = sorted(
+            ((authors[i], d) for i in range(len(rows)) if authors[i]
+             and (d := _dense_distance(primary, doc_vector, rows[i])) is not None),
+            key=lambda item: item[1])
+        if not distances:
+            return _unavailable("no author-labelled corpus row was comparable under the "
+                                "primary embedding distance", len(rows))
+        target_author = distances[0][0]
+    if author_counts.get(target_author, 0) < min_per_author:
+        return _unavailable(f"candidate author {target_author!r} has fewer than "
+                            f"{min_per_author} corpus document(s) to build a centroid from",
+                            author_counts.get(target_author, 0))
+
+    other_authors = sorted(author for author in author_counts if author != target_author)
+    min_impostors = max(1, int(option(config, "impostors_min_authors",
+                                      DEFAULT_IMPOSTORS_MIN_AUTHORS)))
+    if len(other_authors) < min_impostors:
+        return _unavailable(f"need at least {min_impostors} other reference author(s) to sample "
+                            f"impostors from; this corpus has {len(other_authors)}", len(rows))
+
+    seed = int(option(config, "seed", DEFAULT_SEED))
+    rng = random.Random(seed)
+    k = max(1, int(option(config, "impostors_k", DEFAULT_IMPOSTORS_K)))
+    m = max(1, int(option(config, "impostors_iterations", DEFAULT_IMPOSTORS_ITERATIONS)))
+
+    target_rows = [rows[i] for i in range(len(rows)) if authors[i] == target_author]
+    author_rows = {author: [rows[i] for i in range(len(rows)) if authors[i] == author]
+                  for author in other_authors}
+
+    def _centroid(rows_subset: Sequence[Sequence[float]]) -> list[float]:
+        dim = len(rows_subset[0])
+        return [statistics.fmean(row[d] for row in rows_subset) for d in range(dim)]
+
+    target_centroid = _centroid(target_rows)
+    d_target = _dense_distance(primary, doc_vector, target_centroid)
+    if d_target is None:
+        return _unavailable("this document's embedding was not comparable to the candidate "
+                            "author's centroid", len(rows))
+
+    scores: list[float] = []
+    for _ in range(m):
+        impostor_authors = (other_authors if len(other_authors) <= k
+                           else rng.sample(other_authors, k))
+        wins = counted = 0
+        for author in impostor_authors:
+            impostor_book_rows = author_rows.get(author) or []
+            if not impostor_book_rows:
+                continue
+            d_impostor = _dense_distance(primary, doc_vector, _centroid(impostor_book_rows))
+            if d_impostor is None:
+                continue
+            counted += 1
+            if d_target < d_impostor:
+                wins += 1
+        if counted:
+            scores.append(wins / counted)
+
+    if not scores:
+        return _unavailable("no impostor-set resample produced a comparable embedding distance",
+                            len(rows))
+
+    mean_score = statistics.fmean(scores)
+    variance = statistics.pvariance(scores) if len(scores) > 1 else 0.0
+    common = {"candidate_author": target_author, "impostor_author_pool": other_authors,
+             "k": min(k, len(other_authors)), "iterations": len(scores),
+             "distance_family": primary, "seed": seed, "representation": "embedding",
+             "embedding_dimension": dimension}
+    evidence = [{"iteration": index, "score": score} for index, score in enumerate(scores)][:25]
+    return [
+        finding(ids[0][0], ids[0][1], mean_score, "share", family=FAMILY,
+                sample_size=len(target_rows), min_sample=min_per_author,
+                distribution=common, evidence=evidence, warning=_IMPOSTORS_EMBEDDING_CAVEAT),
+        finding(ids[1][0], ids[1][1], variance, "share^2", family=FAMILY,
+                sample_size=len(scores), min_sample=2, distribution=common,
+                warning=_IMPOSTORS_EMBEDDING_CAVEAT),
+    ]
+
+
 # --------------------------------------------- L. sentence-embedding representation
+
+def _document_style_embedding_vector(
+        analysis: DocumentAnalysis, config: Mapping[str, Any] | None) -> tuple[list[float] | None, str | None]:
+    """The document-level sentence-embedding centroid: the mean of this
+    document's own section embeddings (the same ``get_sections`` split
+    ``embedding_style``/``section_stability`` use), or the whole text
+    embedded as a single chunk when there are too few sections to split.
+
+    This ONE representation is shared by three call sites that must agree on
+    what "this document's embedding" means for their numbers to be
+    comparable at all: :func:`profile_vector` (the per-book vector
+    :mod:`textgrader.corpus` caches), :func:`_embedding_reference_findings`
+    (comparing a manuscript's vector against those cached ones), and the
+    ``embedding`` branch of :func:`_impostors_findings`. Using the SAME
+    method on the corpus side and the grading side -- rather than, say, the
+    profile caching a whole-book embedding while grading computed a
+    section-mean -- is what makes those distances mean anything; see the
+    module docstring's "How to get embedding vectors into a profile".
+    """
+
+    model_name = str(option(config, "embedding_model", DEFAULT_EMBEDDING_MODEL))
+    window_words = int(option(config, "section_window_words", DEFAULT_SECTION_WINDOW_WORDS))
+    sections, _ = get_sections(analysis, window_words)
+    texts = [view.text for _, view in sections if view.text.strip()]
+    if len(texts) < 2:
+        texts = [analysis.text] if analysis.text.strip() else []
+    if not texts:
+        return None, "document has no text to embed"
+    vectors, reason = _embed_texts(texts, model_name)
+    if vectors is None:
+        return None, reason
+    mean_vector = [float(statistics.fmean(dim)) for dim in zip(*vectors)]
+    return mean_vector, None
+
+
+def profile_vector(analysis: DocumentAnalysis, config: Mapping[str, Any] | None) -> dict[str, float] | None:
+    """The per-corpus-book vector :mod:`textgrader.corpus` caches under
+    ``feature_profiles['stylometry_suite']``: this document's sentence-
+    embedding centroid (:func:`_document_style_embedding_vector`), encoded as
+    ``{"d0": ..., "d1": ..., ...}`` because only a flat ``{str: float}`` row
+    fits a ``feature_profiles`` entry (see ``build_profile``'s docstring).
+    :func:`_dense_from_row` decodes it back into an ordered vector.
+
+    Returns ``None`` -- nothing cached for this book -- unless
+    ``features.embedding_style`` is enabled in the SAME metric config the
+    corpus is being built with. Profiling now follows config (see
+    ``build_profile``'s ``metric_selection`` docstring), so caching an
+    embedding for every corpus book, which downloads and runs a model over
+    each one, is something a user opts into explicitly rather than a side
+    effect of turning this suite on; see the module docstring's "How to get
+    embedding vectors into a profile" for the exact steps.
+
+    A book this returns ``None`` for (the model unavailable, or nothing to
+    embed) is simply absent from ``feature_profiles['stylometry_suite']``
+    rather than padded with a placeholder -- ``textgrader.corpus`` only
+    appends a row when one comes back. Every reader of that list here
+    (:func:`_embedding_reference_findings`, the ``embedding`` branch of
+    :func:`_impostors_findings`) therefore checks the row count against
+    ``len(profile['books'])`` before trusting index-for-index alignment, the
+    same guard :func:`_corpus_reference_findings` already uses for
+    ``feature_profiles['function_words']`` (which IS always 1:1 with
+    ``books``, being appended unconditionally rather than through this
+    mechanism) -- and degrades to "unavailable" rather than risk comparing a
+    manuscript against the wrong book's centroid.
+    """
+
+    if not _feature(config, "embedding_style", False):
+        return None
+    vector, _ = _document_style_embedding_vector(analysis, config)
+    if not vector:
+        return None
+    return {f"d{i}": value for i, value in enumerate(vector)}
+
 
 def _embedding_style_findings(analysis: DocumentAnalysis, config) -> list[dict[str, Any]]:
     """Sentence-embedding based section-to-section style drift within this document.
@@ -1810,9 +2176,11 @@ def _embedding_style_findings(analysis: DocumentAnalysis, config) -> list[dict[s
     See the module docstring's "Sentence-embedding style representation"
     section for what this does and does not compare against, and "The
     critical gating rule" for why loading the model is strictly conditioned
-    on ``features.embedding_style`` (this function's only caller) being
-    explicitly on: this is the only code path anywhere in this suite that
-    can trigger a ``sentence_transformers`` import.
+    on a feature flag being explicitly on. ``embedding_style`` gates this
+    function; ``embedding_reference`` and ``impostors_representation:
+    "embedding"`` (below) are the only other code paths in this suite that
+    can trigger a ``sentence_transformers`` import, and each is independently
+    off by default for the same reason.
     """
 
     model_name = str(option(config, "embedding_model", DEFAULT_EMBEDDING_MODEL))
@@ -1962,6 +2330,329 @@ def _lexicalrichness_crosscheck_findings(analysis: DocumentAnalysis) -> list[dic
     return out
 
 
+# --------------------------------------------- N. embedding corpus-reference distances
+
+EMBEDDING_REFERENCE_METRICS: tuple[tuple[str, str], ...] = (
+    *((f"{PREFIX}embedding_nearest_document_distance_{name}",
+       f"Nearest reference book by sentence-embedding distance ({name})")
+      for name in EMBEDDING_DISTANCE_METRICS),
+    (f"{PREFIX}embedding_second_nearest_document_distance",
+     "Second-nearest reference book, sentence-embedding distance"),
+    (f"{PREFIX}embedding_nearest_margin",
+     "Margin between the nearest and second-nearest reference book, sentence-embedding distance"),
+    (f"{PREFIX}embedding_corpus_centroid_distance",
+     "Distance to the corpus's sentence-embedding centroid"),
+    (f"{PREFIX}embedding_out_of_distribution_distance",
+     "How far this document's nearest embedding match is, relative to how far corpus documents "
+     "usually are from theirs"),
+)
+_EMBEDDING_REFERENCE_NAMES = dict(EMBEDDING_REFERENCE_METRICS)
+_EMBEDDING_REFERENCE_UNITS: dict[str, str] = {
+    f"{PREFIX}embedding_nearest_document_distance_{name}": name for name in EMBEDDING_DISTANCE_METRICS
+} | {
+    f"{PREFIX}embedding_second_nearest_document_distance": "distance",
+    f"{PREFIX}embedding_nearest_margin": "distance",
+    f"{PREFIX}embedding_corpus_centroid_distance": "distance",
+    f"{PREFIX}embedding_out_of_distribution_distance": "robust z",
+}
+
+
+def _embedding_reference_unavailable(warning: str, sample_size: int, min_docs: int) -> list[dict[str, Any]]:
+    return [finding(metric_id, name, None, _EMBEDDING_REFERENCE_UNITS.get(metric_id), family=FAMILY,
+                    sample_size=sample_size, min_sample=min_docs, warning=warning)
+            for metric_id, name in EMBEDDING_REFERENCE_METRICS]
+
+
+def _embedding_own_nearest_neighbor_distances(rows: Sequence[Sequence[float]], primary: str,
+                                              cap: int = 300) -> list[float]:
+    """The embedding analogue of :func:`_own_nearest_neighbor_distances`: each
+    reference book's distance to ITS OWN nearest neighbour among the other
+    cached embedding centroids, used as the reference distribution for the
+    out-of-distribution finding below."""
+
+    m = len(rows)
+    if m < 2:
+        return []
+    indices = list(range(m)) if m <= cap else [int(i * m / cap) for i in range(cap)]
+    out = []
+    for i in indices:
+        best = None
+        for j in range(m):
+            if j == i:
+                continue
+            d = _dense_distance(primary, rows[i], rows[j])
+            if d is not None and (best is None or d < best):
+                best = d
+        if best is not None:
+            out.append(best)
+    return out
+
+
+def _embedding_reference_findings(analysis: DocumentAnalysis, config, profile) -> list[dict[str, Any]]:
+    """The embedding analogue of :func:`_corpus_reference_findings`: nearest,
+    second-nearest, margin, corpus-centroid and out-of-distribution distance,
+    but against per-book sentence-embedding centroids
+    (``feature_profiles['stylometry_suite']``, see :func:`profile_vector`)
+    instead of function-word rates. This is the corpus-reference embedding
+    distance the module docstring's earlier pass listed as deferred for lack
+    of a place to cache per-book vectors; :func:`profile_vector` is that
+    place.
+
+    Needs a corpus profile built with ``features.embedding_style`` ALSO
+    enabled at profiling time -- a stronger requirement than
+    ``corpus_reference``'s (every profile always carries function-word
+    vectors; not every profile carries embedding ones) -- see the module
+    docstring's "How to get embedding vectors into a profile". Degrades the
+    same way ``corpus_reference`` does when that requirement is not met, and
+    a second time if this document itself cannot be embedded (no
+    ``sentence-transformers``, or the two sides used different embedding
+    models).
+    """
+
+    min_docs = max(2, int(option(config, "min_corpus_documents", DEFAULT_MIN_CORPUS_DOCUMENTS)))
+    outlier_threshold = float(option(config, "outlier_threshold", DEFAULT_OUTLIER_THRESHOLD))
+    sample_size = analysis.word_count
+    raw_rows = ((profile or {}).get("feature_profiles") or {}).get("stylometry_suite")
+    books = (profile or {}).get("books")
+    if not profile or not raw_rows or not books or len(raw_rows) != len(books):
+        return _embedding_reference_unavailable(
+            "no corpus profile with per-book embedding vectors configured (rebuild the profile "
+            "with metrics.stylometry_suite.features.embedding_style enabled -- see "
+            "'embedding_reference' in config.json)", sample_size, min_docs)
+    if len(raw_rows) < min_docs:
+        return _embedding_reference_unavailable(
+            f"corpus has only {len(raw_rows)} embedded document(s); need at least {min_docs} "
+            f"(set corpus_reference.min_corpus_documents to lower the floor)",
+            sample_size, min_docs)
+
+    rows = [_dense_from_row(row) for row in raw_rows]
+    dims = {len(row) for row in rows}
+    if len(dims) != 1:
+        return _embedding_reference_unavailable(
+            "the corpus profile's cached embedding vectors do not all share the same "
+            "dimensionality (built across different embedding_model settings?); rebuild the "
+            "profile with one model", sample_size, min_docs)
+    dimension = dims.pop()
+
+    doc_vector, reason = _document_style_embedding_vector(analysis, config)
+    if doc_vector is None:
+        return _embedding_reference_unavailable(reason or "could not embed this document",
+                                                sample_size, min_docs)
+    if len(doc_vector) != dimension:
+        return _embedding_reference_unavailable(
+            "this document's embedding dimensionality does not match the corpus profile's "
+            "(a different embedding_model setting?)", sample_size, min_docs)
+
+    primary = str(option(config, "embedding_primary_distance", DEFAULT_EMBEDDING_PRIMARY_DISTANCE))
+    if primary not in EMBEDDING_DISTANCE_METRICS:
+        primary = DEFAULT_EMBEDDING_PRIMARY_DISTANCE
+    m = len(rows)
+    out: list[dict[str, Any]] = []
+
+    for name in EMBEDDING_DISTANCE_METRICS:
+        metric_id = f"{PREFIX}embedding_nearest_document_distance_{name}"
+        display_name = _EMBEDDING_REFERENCE_NAMES[metric_id]
+        distances = [(i, d) for i, row in enumerate(rows)
+                    if (d := _dense_distance(name, doc_vector, row)) is not None]
+        if not distances:
+            out.append(finding(metric_id, display_name, None, name, family=FAMILY,
+                               sample_size=m, min_sample=min_docs,
+                               warning="no corpus row produced a comparable embedding vector"))
+            continue
+        distances.sort(key=lambda item: item[1])
+        nearest_i, nearest_d = distances[0]
+        out.append(finding(metric_id, display_name, nearest_d, name, family=FAMILY,
+                           sample_size=m, min_sample=min_docs,
+                           distribution={"distance_family": name, "corpus_size": m,
+                                        "embedding_dimension": dimension},
+                           evidence=[{"source_id": books[nearest_i].get("source_id"),
+                                     "distance": nearest_d}]))
+
+    primary_distances = [(i, d) for i, row in enumerate(rows)
+                        if (d := _dense_distance(primary, doc_vector, row)) is not None]
+    if not primary_distances:
+        remaining = [pair for pair in EMBEDDING_REFERENCE_METRICS
+                    if pair[0] not in {f"{PREFIX}embedding_nearest_document_distance_{n}"
+                                       for n in EMBEDDING_DISTANCE_METRICS}]
+        out.extend(finding(mid, name, None, _EMBEDDING_REFERENCE_UNITS.get(mid), family=FAMILY,
+                           sample_size=m, min_sample=min_docs,
+                           warning=f"no corpus row was comparable under the primary embedding "
+                                   f"distance ({primary})")
+                   for mid, name in remaining)
+        return out
+    primary_distances.sort(key=lambda item: item[1])
+    nearest_i, nearest_d = primary_distances[0]
+    second_pair = primary_distances[1] if len(primary_distances) > 1 else None
+
+    out.append(finding(f"{PREFIX}embedding_second_nearest_document_distance",
+        _EMBEDDING_REFERENCE_NAMES[f"{PREFIX}embedding_second_nearest_document_distance"],
+        second_pair[1] if second_pair else None, primary, family=FAMILY, sample_size=m,
+        min_sample=min_docs, distribution={"distance_family": primary, "embedding_dimension": dimension},
+        warning=None if second_pair else "corpus has only one comparable embedded document",
+        evidence=[{"source_id": books[second_pair[0]].get("source_id")}] if second_pair else None))
+    out.append(finding(f"{PREFIX}embedding_nearest_margin",
+        _EMBEDDING_REFERENCE_NAMES[f"{PREFIX}embedding_nearest_margin"],
+        (second_pair[1] - nearest_d) if second_pair else None, primary, family=FAMILY,
+        sample_size=m, min_sample=min_docs,
+        distribution={"distance_family": primary, "embedding_dimension": dimension},
+        warning=None if second_pair else "corpus has only one comparable embedded document"))
+
+    centroid = [statistics.fmean(row[d] for row in rows) for d in range(dimension)]
+    centroid_distance = _dense_distance(primary, doc_vector, centroid)
+    out.append(finding(f"{PREFIX}embedding_corpus_centroid_distance",
+        _EMBEDDING_REFERENCE_NAMES[f"{PREFIX}embedding_corpus_centroid_distance"],
+        centroid_distance, primary, family=FAMILY, sample_size=m, min_sample=min_docs,
+        distribution={"distance_family": primary, "embedding_dimension": dimension}))
+
+    own_nearest = _embedding_own_nearest_neighbor_distances(rows, primary)
+    ood = (stats_module.compare(nearest_d, own_nearest, threshold=outlier_threshold)
+          if own_nearest else None)
+    out.append(finding(f"{PREFIX}embedding_out_of_distribution_distance",
+        _EMBEDDING_REFERENCE_NAMES[f"{PREFIX}embedding_out_of_distribution_distance"],
+        ood.robust_distance if ood else None, "robust z", family=FAMILY, sample_size=m,
+        min_sample=min_docs,
+        distribution={"distance_family": primary, "method": ood.method if ood else None,
+                     "reference_documents": len(own_nearest), "threshold": outlier_threshold,
+                     "embedding_dimension": dimension,
+                     "beyond_threshold": (abs(ood.robust_distance) > outlier_threshold
+                                         if ood and ood.robust_distance is not None else None)},
+        warning=None if own_nearest else "corpus is too small to build a nearest-neighbour baseline"))
+    return out
+
+
+# ------------------------------------------------- O. NCD against reference documents
+
+def _ncd_reference_texts(corpus_dirs: Sequence[str], max_documents: int,
+                         max_bytes: int) -> tuple[list[tuple[str, bytes]], str | None, int]:
+    """Up to ``max_documents`` reference texts, each truncated to
+    ``max_bytes``, read fresh from ``corpus_dirs`` at GRADING time.
+
+    This is the one measurement in this suite that reads the corpus folder
+    directly rather than a cached profile, because NCD needs C(x), C(y) AND
+    C(x+y): both raw texts have to exist in memory together at the moment of
+    comparison, which a profile -- which keeps no book text, see
+    :mod:`textgrader.corpus`'s module docstring on portability -- cannot
+    serve. Returns ``(rows, None, available)`` on success or ``([], reason,
+    available)`` when nothing could be read, with ``reason`` naming exactly
+    what was missing (no directories configured, a configured directory not
+    present on disk, or one with no ``.txt``/``.md`` files in it) rather than
+    a bare "corpus unavailable", and ``available`` the number of candidate
+    files discovered BEFORE ``max_documents`` was applied -- so a caller can
+    tell "this directory only has 3 reference files" from "this directory has
+    300 but only 10 were sampled".
+    """
+
+    if not corpus_dirs:
+        return [], ("no corpus directory configured for NCD-against-corpus (set "
+                    "metrics.stylometry_suite.ncd_corpus_dirs to one or more directories of "
+                    "reference .txt/.md files)"), 0
+    found: list[tuple[str, Path]] = []
+    missing: list[str] = []
+    for raw_dir in corpus_dirs:
+        directory = Path(str(raw_dir)).expanduser()
+        if not directory.is_dir():
+            missing.append(str(raw_dir))
+            continue
+        for pattern in ("*.txt", "*.md"):
+            for path in directory.rglob(pattern):
+                if path.is_file():
+                    found.append((path.relative_to(directory).as_posix(), path))
+    if not found:
+        if missing and len(missing) == len(corpus_dirs):
+            return [], f"none of the configured ncd_corpus_dirs exist on disk: {', '.join(missing)}", 0
+        return [], ("the configured ncd_corpus_dirs exist but contain no .txt/.md reference "
+                    "files" + (f" (also missing: {', '.join(missing)})" if missing else "")), 0
+    found.sort(key=lambda item: item[0])
+    available = len(found)
+    rows: list[tuple[str, bytes]] = []
+    for name, path in found[:max_documents]:
+        try:
+            data = path.read_bytes()[:max_bytes]
+        except OSError:
+            continue
+        if data:
+            rows.append((name, data))
+    if not rows:
+        return [], "reference documents were found but none could be read", available
+    return rows, None, available
+
+
+def _ncd_against_corpus_findings(analysis: DocumentAnalysis, config) -> list[dict[str, Any]]:
+    """True Normalized Compression Distance against real reference documents,
+    read from disk (see :func:`_ncd_reference_texts`) rather than approximated
+    from anything a corpus profile caches -- ``NCD(x, y) = (C(x+y) -
+    min(C(x), C(y))) / max(C(x), C(y))`` needs the raw bytes of BOTH sides at
+    once, which is exactly what a profile is built not to retain (see the
+    module docstring's "True NCD against reference documents").
+
+    Off by default (``features.ncd_against_corpus``) and gated a second time
+    by needing ``ncd_corpus_dirs`` actually configured and reachable, because
+    unlike every other measurement in this suite it touches the filesystem at
+    grading time. Every finding records the algorithm, the byte caps and how
+    many reference documents were actually compared in its ``distribution``,
+    so a reader can tell a real "nothing looked similar" from "only three
+    reference documents were readable".
+    """
+
+    ids = (
+        (f"{PREFIX}ncd_nearest_reference",
+         "Normalized Compression Distance to the nearest reference document"),
+        (f"{PREFIX}ncd_reference_mean",
+         "Mean Normalized Compression Distance across sampled reference documents"),
+    )
+
+    def _unavailable(warning: str, size: int) -> list[dict[str, Any]]:
+        return [finding(mid, name, None, "NCD", family=FAMILY, sample_size=size, min_sample=200,
+                        warning=warning) for mid, name in ids]
+
+    if analysis.word_count < 200:
+        return _unavailable(f"only {analysis.word_count} words; need at least 200 to measure "
+                            "compressibility", analysis.word_count)
+
+    algorithm = str(option(config, "compression_algorithm", DEFAULT_COMPRESSION_ALGORITHM))
+    if algorithm not in ("zlib", "lzma"):
+        algorithm = DEFAULT_COMPRESSION_ALGORITHM
+    max_documents = max(1, int(option(config, "ncd_max_reference_documents",
+                                      DEFAULT_NCD_MAX_REFERENCE_DOCUMENTS)))
+    max_bytes = max(1000, int(option(config, "ncd_max_bytes", DEFAULT_NCD_MAX_BYTES)))
+    raw_dirs = option(config, "ncd_corpus_dirs", [])
+    corpus_dirs = list(raw_dirs) if isinstance(raw_dirs, (list, tuple)) else ([raw_dirs] if raw_dirs else [])
+
+    references, reason, available = _ncd_reference_texts(corpus_dirs, max_documents, max_bytes)
+    if not references:
+        return _unavailable(reason, analysis.word_count)
+
+    doc_bytes = analysis.text.encode("utf-8")[:max_bytes]
+    c_doc = len(_compress(doc_bytes, algorithm))
+    distances: list[tuple[str, float]] = []
+    for name, ref_bytes in references:
+        c_ref = len(_compress(ref_bytes, algorithm))
+        c_joint = len(_compress(doc_bytes + ref_bytes, algorithm))
+        denominator = max(c_doc, c_ref)
+        if denominator:
+            distances.append((name, (c_joint - min(c_doc, c_ref)) / denominator))
+    if not distances:
+        return _unavailable("no reference document produced a comparable compressed size",
+                            analysis.word_count)
+
+    distances.sort(key=lambda item: item[1])
+    nearest_name, nearest_ncd = distances[0]
+    mean_ncd = statistics.fmean(d for _, d in distances)
+    common = {"algorithm": algorithm, "reference_documents_compared": len(distances),
+             "reference_documents_read": len(references), "reference_documents_available": available,
+             "max_reference_documents": max_documents,
+             "max_bytes_per_document": max_bytes, "document_bytes_compared": len(doc_bytes)}
+    evidence = [{"reference": name, "ncd": d} for name, d in distances[:25]]
+    return [
+        finding(ids[0][0], ids[0][1], nearest_ncd, "NCD", family=FAMILY,
+                sample_size=analysis.word_count, min_sample=200, distribution=common,
+                evidence=[{"reference": nearest_name, "ncd": nearest_ncd}]),
+        finding(ids[1][0], ids[1][1], mean_ncd, "NCD", family=FAMILY,
+                sample_size=analysis.word_count, min_sample=200, distribution=common,
+                evidence=evidence),
+    ]
+
+
 # ---------------------------------------------------------------------- measure
 
 def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
@@ -2011,5 +2702,9 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_impostors_findings(analysis, config, profile))
     if _feature(config, "embedding_style", False):
         out.extend(_embedding_style_findings(analysis, config))
+    if _feature(config, "embedding_reference", False):
+        out.extend(_embedding_reference_findings(analysis, config, profile))
+    if _feature(config, "ncd_against_corpus", False):
+        out.extend(_ncd_against_corpus_findings(analysis, config))
 
     return out

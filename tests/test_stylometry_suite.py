@@ -106,7 +106,8 @@ def test_every_default_option_is_mirrored_in_the_registry_and_config_json():
         "min_documents_per_author", "outlier_threshold", "seed",
         "word_frequency_vocab_cap", "embedding_model", "embedding_primary_distance",
         "impostors_k", "impostors_iterations", "impostors_feature_fraction",
-        "impostors_min_authors", "impostors_target_author",
+        "impostors_min_authors", "impostors_target_author", "impostors_representation",
+        "ncd_corpus_dirs", "ncd_max_reference_documents", "ncd_max_bytes",
     }
     assert set(spec.defaults["features"]) == set(m.DEFAULT_FEATURES)
     # sentence_transformers must never appear here: it would flip needs_model
@@ -525,3 +526,239 @@ def test_corpus_profile_carries_an_optional_per_author_frequency_table(tmp_path)
     unlabelled = build_profile([corpus_dir])
     assert unlabelled["author_word_frequency"] == {}
     assert unlabelled["author_word_frequency_total"] == {}
+
+
+# --------------------------------------------------------- newly-closed gaps (phase 3)
+#
+# profile_vector, the embedding corpus-reference distances, the richer
+# impostors representation, and true on-disk NCD against reference documents.
+
+def _corpus_profile_with_embeddings(tmp_path, specs, dirname="corpus_embed"):
+    """Like ``_corpus_profile``, but ALSO enables ``features.embedding_style``
+    at PROFILING time, so ``feature_profiles['stylometry_suite']`` actually
+    gets populated -- the two-step opt-in the module docstring's "How to get
+    embedding vectors into a profile" describes."""
+
+    corpus_dir = tmp_path / dirname
+    corpus_dir.mkdir(exist_ok=True)
+    manifest = {"sources": {}}
+    for index, (seed, vocab, author) in enumerate(specs):
+        name = f"book{index}.txt"
+        (corpus_dir / name).write_text(_prose(vocab, seed, paragraphs=30), encoding="utf-8")
+        manifest["sources"][name] = {"author": author}
+    return build_profile([corpus_dir], manifest=manifest,
+                         metrics={"stylometry_suite": {
+                             "enabled": True, "features": {"embedding_style": True}}})
+
+
+def test_profile_vector_returns_none_when_embedding_style_is_disabled():
+    analysis = _analysis(_prose(STYLE_A_VOCAB, 600, paragraphs=10))
+    assert m.profile_vector(analysis, {}) is None
+    assert m.profile_vector(analysis, {"features": {"embedding_style": False}}) is None
+
+
+def test_dense_from_row_round_trips_profile_vectors_encoding():
+    vector = [0.1, -0.2, 3.5, 0.0, 12.0]
+    encoded = {f"d{i}": value for i, value in enumerate(vector)}
+    assert m._dense_from_row(encoded) == vector
+
+
+def test_default_metrics_config_never_lets_profile_building_load_a_model(tmp_path):
+    """embedding_style is off by default, so building a corpus profile with
+    the plain 'enabled: true' switch (as most of this file's other corpus
+    fixtures do) must never touch profile_vector's model cache either --
+    profiling now follows config, but that must not mean profiling silently
+    downloads a model nobody asked for."""
+
+    from textgrader.metrics import semantic_adjacent
+
+    semantic_adjacent._reset_model_cache()
+    _corpus_profile(tmp_path, [(601, STYLE_A_VOCAB, "alice"), (602, STYLE_B_VOCAB, "bob")])
+    assert semantic_adjacent._MODEL_CACHE == {}, "profile building loaded a model under default config"
+
+
+def test_profile_vector_caches_a_per_book_embedding_when_enabled_at_profiling_time(tmp_path):
+    module, reason = optional.require("sentence_transformers")
+    if module is None:
+        pytest.skip(f"sentence-transformers not usable in this environment: {reason}")
+
+    profile = _corpus_profile_with_embeddings(tmp_path, [
+        (610, STYLE_A_VOCAB, "alice"), (611, STYLE_A_VOCAB, "alice"),
+        (620, STYLE_B_VOCAB, "bob"), (621, STYLE_B_VOCAB, "bob"),
+    ])
+    rows = profile["feature_profiles"].get("stylometry_suite")
+    assert rows, "profile_vector produced no cached embedding vectors"
+    assert len(rows) == len(profile["books"])
+    dimensions = {len(row) for row in rows}
+    assert len(dimensions) == 1
+    assert next(iter(dimensions)) > 0
+
+
+def test_embedding_reference_off_by_default_and_degrades_without_a_profile():
+    off = _findings(_prose(STYLE_A_VOCAB, 630, paragraphs=30))
+    assert "style.stylometry_embedding_corpus_centroid_distance" not in off
+
+    on = _findings(_prose(STYLE_A_VOCAB, 630, paragraphs=30),
+                   config={"features": {"embedding_reference": True}})
+    item = on["style.stylometry_embedding_corpus_centroid_distance"]
+    assert item["value"] is None
+    assert item["warning"]
+
+
+def test_embedding_reference_degrades_when_the_profile_has_no_cached_embeddings(tmp_path):
+    """A profile built without features.embedding_style (the default) has no
+    'stylometry_suite' key in feature_profiles at all -- must degrade, not
+    raise, and this needs no sentence-transformers to check."""
+
+    profile = _corpus_profile(tmp_path, [(640, STYLE_A_VOCAB, "alice"),
+                                         (641, STYLE_A_VOCAB, "alice")])
+    assert "stylometry_suite" not in profile["feature_profiles"]
+    found = _findings(_prose(STYLE_A_VOCAB, 642, paragraphs=30),
+                      config={"features": {"embedding_reference": True}}, profile=profile)
+    item = found["style.stylometry_embedding_corpus_centroid_distance"]
+    assert item["value"] is None
+    assert "embedding" in item["warning"]
+
+
+def test_embedding_reference_uses_cached_vectors_for_a_real_nearest_reference_distance(tmp_path):
+    """The round trip this pass exists for: build a profile with per-book
+    embedding vectors cached, then grade a document against it and confirm
+    the nearest-reference distance is REAL -- close to same-topic reference
+    books, not a stub or a copy of the function-word answer."""
+
+    module, reason = optional.require("sentence_transformers")
+    if module is None:
+        pytest.skip(f"sentence-transformers not usable in this environment: {reason}")
+
+    profile = _corpus_profile_with_embeddings(tmp_path, [
+        (650, STYLE_A_VOCAB, "alice"), (651, STYLE_A_VOCAB, "alice"),
+        (652, STYLE_A_VOCAB, "alice"), (653, STYLE_A_VOCAB, "alice"),
+        (660, STYLE_B_VOCAB, "bob"), (661, STYLE_B_VOCAB, "bob"),
+        (662, STYLE_B_VOCAB, "bob"), (663, STYLE_B_VOCAB, "bob"),
+    ])
+    alice_ids = {book["source_id"] for book in profile["books"]
+                if (book.get("metadata") or {}).get("author") == "alice"}
+    assert alice_ids
+
+    query = _analysis(_prose(STYLE_A_VOCAB, 999, paragraphs=30))
+    found = {f["metric_id"]: f
+            for f in m.measure(query, config={"features": {"embedding_reference": True}},
+                               profile=profile)}
+
+    cosine = found["style.stylometry_embedding_nearest_document_distance_cosine"]
+    assert cosine["value"] is not None
+    assert cosine["value"] >= 0.0
+    # A real embedding distance, not a stand-in: the nearest reference book by
+    # CONTENT (sentence embeddings are heavily topic-sensitive) must be one of
+    # the same-vocabulary "alice" books, not a "bob" one.
+    assert cosine["evidence"][0]["source_id"] in alice_ids
+
+    margin = found["style.stylometry_embedding_nearest_margin"]
+    assert margin["value"] is not None
+    assert margin["value"] >= 0.0
+    centroid = found["style.stylometry_embedding_corpus_centroid_distance"]
+    assert centroid["value"] is not None
+    ood = found["style.stylometry_embedding_out_of_distribution_distance"]
+    assert ood["distribution"]["reference_documents"] > 0
+
+
+def test_impostors_embedding_representation_degrades_without_cached_embeddings(tmp_path):
+    profile = _corpus_profile(tmp_path, [
+        (670, STYLE_A_VOCAB, "alice"), (671, STYLE_A_VOCAB, "alice"),
+        (680, STYLE_B_VOCAB, "bob"), (681, STYLE_B_VOCAB, "bob"),
+    ])
+    found = _findings(_prose(STYLE_A_VOCAB, 690, paragraphs=30),
+                      config={"features": {"impostors": True},
+                              "impostors_representation": "embedding"},
+                      profile=profile)
+    item = found["style.stylometry_impostors_verification_score"]
+    assert item["value"] is None
+    assert "approximation" in item["warning"]
+
+
+def test_impostors_embedding_representation_scores_using_cached_vectors(tmp_path):
+    module, reason = optional.require("sentence_transformers")
+    if module is None:
+        pytest.skip(f"sentence-transformers not usable in this environment: {reason}")
+
+    profile = _corpus_profile_with_embeddings(tmp_path, [
+        (700, STYLE_A_VOCAB, "alice"), (701, STYLE_A_VOCAB, "alice"), (702, STYLE_A_VOCAB, "alice"),
+        (710, STYLE_B_VOCAB, "bob"), (711, STYLE_B_VOCAB, "bob"), (712, STYLE_B_VOCAB, "bob"),
+    ])
+    found = _findings(_prose(STYLE_A_VOCAB, 799, paragraphs=30),
+                      config={"features": {"impostors": True},
+                              "impostors_representation": "embedding",
+                              "impostors_iterations": 5, "impostors_k": 5,
+                              "impostors_min_authors": 1, "seed": 3},
+                      profile=profile)
+    score = found["style.stylometry_impostors_verification_score"]
+    variance = found["style.stylometry_impostors_score_variance"]
+    assert score["value"] is not None
+    assert 0.0 <= score["value"] <= 1.0
+    assert variance["value"] is not None
+    assert score["distribution"]["representation"] == "embedding"
+    assert score["distribution"]["candidate_author"] == "alice"
+    assert "approximation" in score["warning"]
+
+
+def test_ncd_against_corpus_off_by_default_and_names_the_missing_config():
+    off = _findings(_prose(STYLE_A_VOCAB, 800, paragraphs=60))
+    assert "style.stylometry_ncd_nearest_reference" not in off
+
+    on = _findings(_prose(STYLE_A_VOCAB, 800, paragraphs=60),
+                   config={"features": {"ncd_against_corpus": True}})
+    item = on["style.stylometry_ncd_nearest_reference"]
+    assert item["value"] is None
+    assert "ncd_corpus_dirs" in item["warning"]
+
+
+def test_ncd_against_corpus_reports_an_unreachable_directory_clearly(tmp_path):
+    missing_dir = tmp_path / "does_not_exist"
+    found = _findings(_prose(STYLE_A_VOCAB, 810, paragraphs=60),
+                      config={"features": {"ncd_against_corpus": True},
+                              "ncd_corpus_dirs": [str(missing_dir)]})
+    item = found["style.stylometry_ncd_nearest_reference"]
+    assert item["value"] is None
+    assert "exist" in item["warning"]
+
+
+def test_ncd_against_corpus_reads_real_reference_files_from_disk(tmp_path):
+    corpus_dir = tmp_path / "ncd_corpus"
+    corpus_dir.mkdir()
+    for i in range(3):
+        (corpus_dir / f"ref{i}.txt").write_text(_prose(STYLE_A_VOCAB, 820 + i, paragraphs=40),
+                                                encoding="utf-8")
+    (corpus_dir / "other.txt").write_text(_prose(STYLE_B_VOCAB, 830, paragraphs=40),
+                                          encoding="utf-8")
+
+    found = _findings(_prose(STYLE_A_VOCAB, 840, paragraphs=60),
+                      config={"features": {"ncd_against_corpus": True},
+                              "ncd_corpus_dirs": [str(corpus_dir)],
+                              "ncd_max_reference_documents": 4, "ncd_max_bytes": 20000})
+    nearest = found["style.stylometry_ncd_nearest_reference"]
+    mean_ncd = found["style.stylometry_ncd_reference_mean"]
+    assert nearest["value"] is not None
+    assert 0.0 <= nearest["value"] <= 1.5
+    assert mean_ncd["value"] is not None
+    assert 0.0 <= mean_ncd["value"] <= 1.5
+    assert nearest["distribution"]["reference_documents_compared"] == 4
+    assert nearest["distribution"]["algorithm"] == "zlib"
+    assert nearest["evidence"][0]["reference"].endswith(".txt")
+
+
+def test_ncd_against_corpus_caps_bytes_and_document_count(tmp_path):
+    corpus_dir = tmp_path / "ncd_corpus_capped"
+    corpus_dir.mkdir()
+    for i in range(6):
+        (corpus_dir / f"ref{i}.txt").write_text(_prose(STYLE_A_VOCAB, 850 + i, paragraphs=40),
+                                                encoding="utf-8")
+
+    found = _findings(_prose(STYLE_A_VOCAB, 860, paragraphs=60),
+                      config={"features": {"ncd_against_corpus": True},
+                              "ncd_corpus_dirs": [str(corpus_dir)],
+                              "ncd_max_reference_documents": 2, "ncd_max_bytes": 5000})
+    nearest = found["style.stylometry_ncd_nearest_reference"]
+    assert nearest["distribution"]["reference_documents_compared"] == 2
+    assert nearest["distribution"]["reference_documents_read"] == 2
+    assert nearest["distribution"]["reference_documents_available"] == 6
+    assert nearest["distribution"]["max_bytes_per_document"] == 5000
