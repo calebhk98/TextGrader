@@ -15,10 +15,11 @@ sentence-transformers>=2.2
 # channel reports "unavailable" with an install hint and its suite's other
 # measurements are unaffected.
 #
-# fastcoref as shipped was, at the time of writing, incompatible with recent
-# transformers releases; textgrader/coherence.py carries a narrow, documented
-# shim for that and coreference degrades rather than crashing when it is not
-# enough.
+# fastcoref as shipped does not do the tied-weight bookkeeping transformers 5.x
+# expects; textgrader.optional.shim_fastcoref_transformers supplies the missing
+# default, and both the coherence and logic suites load coreference through it,
+# so the two cannot disagree about whether it is available.  If that stops being
+# enough, coreference degrades to "unavailable" rather than crashing.
 transformers>=4.40
 torch>=2.0
 fastcoref>=2.1

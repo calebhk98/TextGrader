@@ -42,7 +42,7 @@ import random
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .metrics.semantic_adjacent import STOPWORDS
-from .optional import on_reset, require
+from .optional import on_reset, require, shim_fastcoref_transformers
 from .text import words as split_words
 
 ROLE_SCHEMA_VERSION = "sxo-v1"
@@ -389,29 +389,13 @@ on_reset(_reset_coref_model_cache)
 
 
 def _shim_transformers_tied_weights() -> None:
-    """Work around a version-skew crash between ``fastcoref`` and a newer
-    ``transformers``, without guessing at anything fastcoref itself computes.
-
-    ``fastcoref==2.1.6``'s model class does not go through the tied-weight
-    bookkeeping newer ``transformers`` releases expect every ``PreTrainedModel``
-    subclass to have set up before ``from_pretrained`` finishes, so loading can
-    raise ``AttributeError: ... has no attribute 'all_tied_weights_keys'``
-    before a single weight is loaded - confirmed against transformers 5.17 in
-    this environment.  The coref head fastcoref adds has no tied weights of
-    its own (it is a span classifier, not a model with an input/output
-    embedding to tie), so an empty mapping is the correct value here, not a
-    guess standing in for one: this only supplies the default the class
-    itself would have set if fastcoref's code called the newer init path, and
-    only when the attribute is missing in the first place, so an
-    already-compatible transformers install is never touched.
+    """Kept as a name other modules and docstrings already reference; the
+    implementation lives in :func:`textgrader.optional.shim_fastcoref_transformers`
+    so this suite and the logic suite cannot disagree about whether
+    coreference loads.
     """
 
-    try:
-        from transformers.modeling_utils import PreTrainedModel
-    except Exception:  # pragma: no cover - transformers itself unavailable
-        return
-    if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
-        PreTrainedModel.all_tied_weights_keys = {}
+    shim_fastcoref_transformers()
 
 
 def _load_coref_model(model_name: str) -> tuple[Any, str | None]:

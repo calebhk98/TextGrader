@@ -144,6 +144,35 @@ def require(name: str) -> tuple[Any, str | None]:
         return _cache[name]
 
 
+def shim_fastcoref_transformers() -> None:
+    """Supply the tied-weight default newer ``transformers`` expects, for
+    ``fastcoref``'s sake.
+
+    ``fastcoref==2.1.6``'s model class never runs the tied-weight bookkeeping
+    that ``transformers`` 5.x expects every ``PreTrainedModel`` subclass to
+    have completed, so ``from_pretrained`` can raise ``AttributeError: ... has
+    no attribute 'all_tied_weights_keys'`` before a single weight is read.
+    fastcoref's coref head is a span classifier with no input/output embedding
+    to tie, so an empty mapping is the correct value rather than a guess: this
+    only supplies the default the class would itself have set on the newer init
+    path, and only when the attribute is missing, so an already-compatible
+    ``transformers`` is never touched.  A model that initializes properly sets
+    the attribute per instance, which shadows this class-level default.
+
+    Both callers that load fastcoref -- the coherence suite and the logic
+    suite's proposition helper -- go through here, so the two cannot disagree
+    about whether coreference is available, which is exactly what happened
+    when each carried its own loader.
+    """
+
+    try:
+        from transformers.modeling_utils import PreTrainedModel
+    except Exception:  # pragma: no cover - transformers itself unavailable
+        return
+    if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
+        PreTrainedModel.all_tied_weights_keys = {}
+
+
 def have(name: str) -> bool:
     return require(name)[0] is not None
 

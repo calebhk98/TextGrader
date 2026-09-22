@@ -81,7 +81,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from .document import DocumentAnalysis
-from .optional import on_reset, require
+from .optional import on_reset, require, shim_fastcoref_transformers
 
 #: Occurrences of one (subject, predicate) pair beyond this are sampled down
 #: to the first this-many (in document order) before pairing.  A hard safety
@@ -609,13 +609,14 @@ def _load_coref_model() -> tuple[Any, str | None]:
         _COREF_MODEL_CACHE["model"] = (None, reason)
         return _COREF_MODEL_CACHE["model"]
     try:
+        shim_fastcoref_transformers()
         model = module.FCoref(device="cpu", enable_progress_bar=False)
         outcome: tuple[Any, str | None] = (model, None)
     except Exception as exc:  # pragma: no cover - model download/runtime/version failure
-        outcome = (None, f"fastcoref model unavailable ({type(exc).__name__}: {exc}); this "
-                         f"environment's fastcoref/transformers combination was found broken at "
-                         f"the time of writing (see requirements.txt) -- try a matched pair of "
-                         f"versions, e.g. pip install 'transformers<4.41' 'fastcoref==2.1.6'")
+        outcome = (None, f"fastcoref model unavailable ({type(exc).__name__}: {exc}); "
+                         f"install fastcoref and a compatible transformers, or see "
+                         f"textgrader.optional.shim_fastcoref_transformers, which covers "
+                         f"the tied-weight skew against transformers 5.x")
     _COREF_MODEL_CACHE["model"] = outcome
     return outcome
 
