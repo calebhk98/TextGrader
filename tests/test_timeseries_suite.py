@@ -516,6 +516,124 @@ def test_catch22_through_the_suite_reports_insufficient_data_below_its_minimum()
     assert findings[0]["min_sample"] == ts.DEFAULT_MIN_LENGTHS["catch22_acf_first_minimum"]
 
 
+# --------------------------------------------------------------------- catch24
+
+def test_catch24_alias_expands_to_all_24_stable_names():
+    expanded = ts._settings({"feature_groups": ["catch24"]})["feature_groups"]
+    assert len(expanded) == 24
+    assert set(expanded) == set(ts._CATCH22_FEATURE_NAMES) | set(ts._CATCH24_FEATURE_NAMES)
+    # catch22 (unqualified) must still expand to just the 22, unchanged.
+    assert len(ts._settings({"feature_groups": ["catch22"]})["feature_groups"]) == 22
+
+
+def test_catch24_raw_mean_matches_python_statistics_mean_on_a_ramp():
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    import statistics as stats_module
+    values = _ramp(60)
+    out = EXTENDED["catch24_raw_mean"](values, SETTINGS, _ctx("sentence_words", values))
+    assert out.value == pytest.approx(stats_module.fmean(values))
+
+
+def test_catch24_raw_variance_matches_python_statistics_variance_on_known_signals():
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    import statistics as stats_module
+    for values in (_ramp(60), _alternating(60), _noise(80)):
+        analysis = DocumentAnalysis.from_text("Cache scope for this signal only.")
+        out = EXTENDED["catch24_raw_variance"](
+            values, SETTINGS, _ctx("sentence_words", values, analysis=analysis))
+        assert out.value == pytest.approx(stats_module.variance(values), rel=1e-6)
+
+
+def test_catch24_raw_variance_is_zero_for_a_constant_series():
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    constant = _constant(40)
+    out = EXTENDED["catch24_raw_variance"](constant, SETTINGS, _ctx("sentence_words", constant))
+    assert out.value == pytest.approx(0.0, abs=1e-9)
+
+
+def test_catch24_shares_the_catch22_call_and_never_duplicates_it(monkeypatch):
+    # catch24's two extras read from the SAME memoized catch22_all(catch24=True)
+    # call catch22's own 22 features use -- one book's worth of catch22_* and
+    # catch24_* findings for one sequence must still be exactly one library call.
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    import pycatch22
+    calls = []
+    real = pycatch22.catch22_all
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs.get("catch24"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pycatch22, "catch22_all", counting)
+    analysis = DocumentAnalysis.from_text("Shared catch24 cache scope for this test only.")
+    values = _noise(80)
+    ctx = _ctx("sentence_words", values, analysis=analysis)
+    EXTENDED["catch22_acf_first_minimum"](values, SETTINGS, ctx)
+    EXTENDED["catch24_raw_mean"](values, SETTINGS, ctx)
+    EXTENDED["catch24_raw_variance"](values, SETTINGS, ctx)
+    assert calls == [True]  # exactly one call, and it asked for the catch24 extras
+
+
+def test_catch24_degrades_without_pycatch22(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "pycatch22")
+    optional.reset_cache()
+    try:
+        values = _noise(80)
+        out = EXTENDED["catch24_raw_mean"](values, SETTINGS, _ctx("sentence_words", values))
+        assert out.value is None
+        assert "pycatch22" in out.warning
+    finally:
+        optional.reset_cache()
+
+
+def test_catch24_needs_context_and_never_raises_standalone():
+    out = EXTENDED["catch24_raw_variance"](_noise(40), SETTINGS, None)
+    assert out.value is None
+    assert out.warning
+
+
+def test_catch24_findings_name_the_dispersion_sibling_they_are_expected_to_agree_with():
+    if not optional.have("pycatch22"):
+        pytest.skip("pycatch22 not installed in this environment")
+    values = _ramp(60)
+    mean_out = EXTENDED["catch24_raw_mean"](values, SETTINGS, _ctx("sentence_words", values))
+    assert "dispersion.mean" in mean_out.distribution["relationship_note"]
+    analysis = DocumentAnalysis.from_text("A separate cache scope for the variance check.")
+    var_out = EXTENDED["catch24_raw_variance"](
+        values, SETTINGS, _ctx("sentence_words", values, analysis=analysis))
+    assert "dispersion.std" in var_out.distribution["relationship_note"]
+
+
+def test_catch24_is_never_detrended_like_dispersion():
+    trending = _ramp(60)
+    assert "catch24_raw_mean" in ts._NEVER_DETREND
+    assert "catch24_raw_variance" in ts._NEVER_DETREND
+    analysis = _analysis(_long_text(paragraphs=60))
+    detrended = ts._measure_one(analysis, "sentence_words", "catch24_raw_mean",
+                                ts._settings({"detrend": True}))
+    assert detrended["distribution"]["detrended"] is False
+
+
+def test_catch24_raw_variance_reports_squared_sequence_unit():
+    assert ts.FEATURE_UNITS["catch24_raw_variance"] == "squared sequence unit"
+    assert ts.FEATURE_UNITS["catch24_raw_mean"] is None  # falls back to the sequence's own unit
+
+
+def test_catch24_through_the_suite_uses_its_own_lower_minimum_length():
+    # catch24's two extras are ordinary summary statistics, not nonlinear/
+    # scaling estimates, so they should not need catch22's own 30-point floor.
+    assert ts.DEFAULT_MIN_LENGTHS["catch24_raw_mean"] < ts.DEFAULT_MIN_LENGTHS["catch22_acf_first_minimum"]
+    analysis = _analysis(_long_text(paragraphs=3))
+    findings = ts.measure(analysis, config={
+        "sequences": ["sentence_words"], "feature_groups": ["catch24_raw_mean"]})
+    if findings[0]["sample_size"] >= ts.DEFAULT_MIN_LENGTHS["catch24_raw_mean"]:
+        assert findings[0]["value"] is not None
+
+
 # ------------------------------------------------------------------- wavelets
 
 def test_wavelet_entropy_orders_ramp_below_sine_below_noise():
@@ -622,6 +740,137 @@ def test_textdescriptives_check_degrades_without_textdescriptives(monkeypatch):
         optional.reset_cache()
 
 
+# ---------------------------------------------------------------------- tsfresh
+
+def test_tsfresh_minimal_preset_matches_known_statistics_exactly():
+    if not optional.have("tsfresh"):
+        pytest.skip("tsfresh not installed in this environment")
+    import statistics as stats_module
+    values = _ramp(60)
+    out = EXTENDED["tsfresh"](values, SETTINGS, _ctx("sentence_words", values))
+    reported = out.distribution["values"]
+    assert reported["mean"] == pytest.approx(stats_module.fmean(values))
+    assert reported["median"] == pytest.approx(stats_module.median(values))
+    assert reported["minimum"] == pytest.approx(min(values))
+    assert reported["maximum"] == pytest.approx(max(values))
+    assert reported["sum_values"] == pytest.approx(sum(values))
+    assert reported["variance"] == pytest.approx(stats_module.pvariance(values))
+    assert out.distribution["feature_set"] == "minimal"
+    assert out.value == pytest.approx(100.0)  # every minimal feature is finite on a clean ramp
+
+
+def test_tsfresh_reports_one_finding_regardless_of_preset_size():
+    if not optional.have("tsfresh"):
+        pytest.skip("tsfresh not installed in this environment")
+    for feature_set in ("minimal", "efficient", "comprehensive"):
+        analysis = DocumentAnalysis.from_text(f"Cache scope for {feature_set}.")
+        cfg = ts._settings({"tsfresh_feature_set": feature_set})
+        values = _noise(120)
+        out = EXTENDED["tsfresh"](values, cfg, _ctx("sentence_words", values, cfg=cfg, analysis=analysis))
+        assert out.distribution["feature_set"] == feature_set
+        assert out.value is not None
+        assert 0.0 <= out.value <= 100.0
+
+
+def test_tsfresh_max_features_caps_the_reported_subset_but_not_the_finite_share():
+    if not optional.have("tsfresh"):
+        pytest.skip("tsfresh not installed in this environment")
+    cfg = ts._settings({"tsfresh_feature_set": "efficient", "tsfresh_max_features": 5})
+    values = _noise(150)
+    out = EXTENDED["tsfresh"](values, cfg, _ctx("sentence_words", values, cfg=cfg))
+    assert out.distribution["reported_features"] == 5
+    assert out.distribution["requested_features"] > 5
+    assert out.distribution["truncated_feature_count"] == (
+        out.distribution["requested_features"] - 5)
+    # The headline is a data-quality signal over the FULL preset, not just the
+    # capped subset, so it must not silently become "5/5 = 100%".
+    assert out.distribution["finite_feature_count"] <= out.distribution["requested_features"]
+
+
+def test_tsfresh_never_exposes_a_positional_or_raw_dataframe_column_name():
+    if not optional.have("tsfresh"):
+        pytest.skip("tsfresh not installed in this environment")
+    values = _ramp(60)
+    out = EXTENDED["tsfresh"](values, SETTINGS, _ctx("sentence_words", values))
+    for name in out.distribution["values"]:
+        assert not name.isdigit(), f"{name} is a bare position, not a stable name"
+        assert not name.startswith("value__"), f"{name} exposes this module's own column prefix"
+        assert "__" not in name, f"{name} repeats tsfresh's own parameter-separator convention"
+
+
+def test_tsfresh_shares_one_extraction_call_across_repeated_reads(monkeypatch):
+    if not optional.have("tsfresh"):
+        pytest.skip("tsfresh not installed in this environment")
+    from tsfresh.feature_extraction import extract_features as real_extract
+    import textgrader.metrics.timeseries_suite as ts_module
+    calls = []
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "tsfresh.feature_extraction.extract_features", counting, raising=True)
+    analysis = DocumentAnalysis.from_text("Shared tsfresh cache scope for this test only.")
+    values = _noise(80)
+    ctx = _ctx("sentence_words", values, analysis=analysis)
+    ts_module._EXTENDED_FEATURES["tsfresh"](values, SETTINGS, ctx)
+    ts_module._EXTENDED_FEATURES["tsfresh"](values, SETTINGS, ctx)
+    assert len(calls) == 1
+
+
+def test_tsfresh_degrades_without_tsfresh(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "tsfresh")
+    optional.reset_cache()
+    try:
+        values = _noise(80)
+        out = EXTENDED["tsfresh"](values, SETTINGS, _ctx("sentence_words", values))
+        assert out.value is None
+        assert "tsfresh" in out.warning
+    finally:
+        optional.reset_cache()
+
+
+def test_tsfresh_needs_context_and_never_raises_standalone():
+    out = EXTENDED["tsfresh"](_noise(40), SETTINGS, None)
+    assert out.value is None
+    assert out.warning
+
+
+def test_tsfresh_off_by_default_and_never_fires_during_corpus_profiling(monkeypatch):
+    # Corpus profiling always runs a suite with MetricSpec.defaults; tsfresh
+    # must never be reachable through that path, only through an explicit
+    # feature_groups selection.
+    if optional.have("tsfresh"):
+        import tsfresh.feature_extraction as tsfresh_extraction
+        calls = []
+        monkeypatch.setattr(tsfresh_extraction, "extract_features",
+                            lambda *a, **k: calls.append(1) or (_ for _ in ()).throw(
+                                AssertionError("tsfresh must not run under default settings")))
+    analysis = _analysis(_long_text())
+    ts.measure(analysis, config={})  # exactly what corpus profiling would run
+    assert "tsfresh" not in ts.DEFAULT_FEATURE_GROUPS
+
+
+def test_tsfresh_through_the_suite_reports_insufficient_data_below_its_minimum():
+    analysis = _analysis("One short sentence. Another short one.")
+    findings = ts.measure(analysis, config={
+        "sequences": ["sentence_words"], "feature_groups": ["tsfresh"]})
+    assert findings[0]["value"] is None
+    assert "insufficient data" in findings[0]["warning"]
+    assert findings[0]["min_sample"] == ts.DEFAULT_MIN_LENGTHS["tsfresh"]
+
+
+def test_tsfresh_unknown_feature_set_reports_unavailable_not_a_crash():
+    if not optional.have("tsfresh"):
+        pytest.skip("tsfresh not installed in this environment")
+    values = _noise(80)
+    cfg = ts._settings({"tsfresh_feature_set": "not_a_real_preset"})
+    out = EXTENDED["tsfresh"](values, cfg, _ctx("sentence_words", values, cfg=cfg))
+    assert out.value is None
+    assert "unknown tsfresh_feature_set" in out.warning
+
+
 # --------------------------------------------------- new-group combinatorics guard
 
 def test_default_selection_is_unchanged_by_this_pass():
@@ -635,10 +884,11 @@ def test_default_selection_is_unchanged_by_this_pass():
 
 
 def test_new_feature_groups_are_all_opt_in():
-    new_groups = set(ts._CATCH22_FEATURE_NAMES) | {"wavelet_energy", "wavelet_entropy",
-                                                    "textdescriptives_check"}
+    new_groups = (set(ts._CATCH22_FEATURE_NAMES) | set(ts._CATCH24_FEATURE_NAMES) |
+                 {"wavelet_energy", "wavelet_entropy", "textdescriptives_check", "tsfresh"})
     assert new_groups.isdisjoint(ts.DEFAULT_FEATURE_GROUPS)
     assert set(ts._EMBEDDING_SEQUENCES).isdisjoint(ts.DEFAULT_SEQUENCES)
+    assert new_groups == set(ts.FEATURE_NAMES) - set(ts._BASE_FEATURE_NAMES)
 
 
 def test_every_feature_name_has_a_label_unit_and_minimum_length():
@@ -665,6 +915,25 @@ def test_max_findings_still_caps_a_large_catch22_selection():
     real = [item for item in findings if item["metric_id"] != "rhythm.timeseries_truncated"]
     truncated = [item for item in findings if item["metric_id"] == "rhythm.timeseries_truncated"]
     assert len(real) == 10
+    assert len(truncated) == 1
+
+
+def test_worst_case_selection_is_still_bounded_by_max_findings():
+    # Every sequence times every feature group (tsfresh included, whatever
+    # preset it is set to -- the group itself is always exactly one finding)
+    # is this suite's absolute worst case. This pins that number so it is
+    # visible the next time a sequence or feature group is added, and proves
+    # max_findings still hard-caps it regardless of how large it grows.
+    from textgrader import sequences as seq
+    worst_case = len(seq.SEQUENCES) * len(ts.FEATURE_NAMES)
+    assert worst_case == 688
+    analysis = _analysis(_long_text(paragraphs=150))
+    findings = ts.measure(analysis, config={
+        "sequences": list(seq.SEQUENCES), "feature_groups": list(ts.FEATURE_NAMES)})
+    real = [item for item in findings if item["metric_id"] not in
+           ("rhythm.timeseries_truncated", "rhythm.timeseries_config")]
+    truncated = [item for item in findings if item["metric_id"] == "rhythm.timeseries_truncated"]
+    assert len(real) == 200  # the default max_findings
     assert len(truncated) == 1
 
 

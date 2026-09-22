@@ -108,6 +108,13 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # "wavelet_energy"/"wavelet_entropy" feature group (energy per scale and
     # Shannon entropy of that per-scale distribution).
     "pywt": ("pywt", "pip install PyWavelets"),
+    # A configurable, off-by-default tsfresh feature set for timeseries_suite's
+    # optional "tsfresh" feature group. Heavy (a large dependency tree; the
+    # "comprehensive" preset alone can extract close to 800 numbers from one
+    # sequence) so it never runs unless "tsfresh" is explicitly selected in
+    # feature_groups -- see that group's own note in timeseries_suite.py for
+    # why it is still exactly one finding per sequence regardless of preset.
+    "tsfresh": ("tsfresh", "pip install tsfresh"),
 }
 
 _lock = threading.Lock()

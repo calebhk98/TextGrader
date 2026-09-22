@@ -356,15 +356,17 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "language": "en",
               "wavelet_name": "db4",
               "wavelet_max_level": 5,
+              "tsfresh_feature_set": "minimal",
+              "tsfresh_max_features": 25,
               "min_lengths": {},
               "max_findings": 200,
           },
           summary="Autocorrelation/trend/spectral/nonlinear features over named linguistic "
                   "sequences (sentence length, punctuation, parse depth, embedding-based "
-                  "sentence similarity, ...), plus optional catch22 (22 canonical features), "
-                  "wavelet energy/entropy and a textdescriptives dependency-distance "
-                  "cross-check; each sequence and feature group is independently selectable "
-                  "and off by default."),
+                  "sentence similarity, ...), plus optional catch22/catch24 (24 canonical "
+                  "features), wavelet energy/entropy, a configurable/capped tsfresh feature "
+                  "set and a textdescriptives dependency-distance cross-check; each sequence "
+                  "and feature group is independently selectable and off by default."),
     _spec("stylometry_suite", "stylometry_suite", "authorial", "moderate",
           # Deliberately NOT ("lexicalrichness", "sentence_transformers"): the
           # latter would flip needs_model for this WHOLE suite and drop it out
