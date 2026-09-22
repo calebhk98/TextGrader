@@ -73,3 +73,9 @@ brotli>=1.1
 lz4>=4.3
 python-snappy>=0.6
 pyppmd>=1.1
+# Augmented Dickey-Fuller stationarity test, used by the experimental
+# timeseries_suite metric's "stationarity" feature.  Everything else in that
+# suite (ACF, trend, spectral, Hurst, DFA, permutation entropy, change points,
+# Page-Hinkley) is dependency-free or already covered by numpy/scipy/ruptures
+# above; without this one it falls back to a labelled, weaker half-split proxy.
+statsmodels>=0.14

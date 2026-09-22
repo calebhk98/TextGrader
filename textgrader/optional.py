@@ -42,6 +42,12 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "lz4": ("lz4.frame", "pip install lz4"),
     "snappy": ("snappy", "pip install python-snappy"),
     "pyppmd": ("pyppmd", "pip install pyppmd"),
+    # ADF stationarity test for timeseries_suite's "stationarity" feature.
+    # Everything else that suite computes (ACF, trend, spectral, Hurst, DFA,
+    # permutation entropy, change points, Page-Hinkley) is dependency-free or
+    # already covered by numpy/scipy/ruptures above; this is the one classical
+    # time-series statistic worth a real implementation rather than a proxy.
+    "statsmodels": ("statsmodels", "pip install statsmodels"),
 }
 
 _lock = threading.Lock()

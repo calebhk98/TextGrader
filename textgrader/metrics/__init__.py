@@ -301,6 +301,30 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "compression ratios and NCD, entropy/complexity families (Shannon, "
                   "Renyi, Tsallis, permutation, spectral, SVD, ApEn/SampEn, LZ), and "
                   "seeded shuffle-corruption baselines. Off by default; experimental."),
+    _spec("timeseries_suite", "timeseries_suite", "sentence_rhythm", "moderate",
+          defaults={
+              "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
+              "feature_groups": ["dispersion", "acf", "trend", "turning_points", "runs"],
+              "lags": [1, 2, 3],
+              "pacf_max_lag": 5,
+              "window_words": 2000,
+              "rolling_window": 10,
+              "change_point_penalty": 3.0,
+              "page_hinkley_delta": 0.005,
+              "page_hinkley_lambda": 3.0,
+              "permutation_entropy_order": 3,
+              "permutation_entropy_delay": 1,
+              "dfa_min_box": 4,
+              "piecewise_segments": 2,
+              "detrend": False,
+              "embedding_model": "all-MiniLM-L6-v2",
+              "language": "en",
+              "min_lengths": {},
+              "max_findings": 200,
+          },
+          summary="Autocorrelation/trend/spectral/nonlinear features over named linguistic "
+                  "sequences (sentence length, punctuation, parse depth, ...); each sequence "
+                  "and feature group is independently selectable."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
