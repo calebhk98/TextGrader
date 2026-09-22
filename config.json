@@ -283,8 +283,10 @@
       "enabled": false,
       "features": {
         "lexical": true,
+        "lexical_wordnet": false,
         "semantic": true,
         "entity": true,
+        "coreference": false,
         "connectives": true,
         "order_permutation": true
       },
@@ -297,6 +299,8 @@
       "entity_max_tracked": 150,
       "entity_graph_window_sentences": 3,
       "entity_min_mentions_for_graph": 2,
+      "coreference_model": "biu-nlp/f-coref",
+      "coreference_max_words": 4000,
       "connective_max_reported": 25,
       "permutations": 50,
       "seed": 0,
