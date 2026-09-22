@@ -46,7 +46,29 @@ vector cache and TF-IDF lexical fallback rather than re-implementing the
 embedding/no-embedding split a third time in this codebase; that module
 already carries the full explanation of why the fallback is a lexical-overlap
 proxy and not a substitute measurement, and this module's findings pass its
-``backend`` note through unchanged.
+``backend`` note through unchanged. Both sequences have now run end to end on
+the real ``sentence-transformers`` backend, not only the fallback: on a short
+paraphrase-heavy passage, the embedding backend read continuous, graded
+similarity across almost every adjacent sentence pair while the TF-IDF
+fallback read a near-flat zero except where two sentences happened to share
+literal words -- the exact gap the fallback's own warning describes, now
+confirmed on real text rather than only asserted in prose.
+
+**Why the embedding sequences are never on by default anywhere.**
+:mod:`textgrader.metrics.timeseries_suite` is ``cost="moderate"`` with
+``requires=()``, which is what keeps it in the corpus builder's per-book
+profiling pass (``textgrader/corpus.py``'s ``needs_parse``/``needs_model``
+gate looks only at ``cost`` and ``requires``, not at what a sequence *this*
+module builds might load). That gate cannot see that
+``sentence_similarity_prev``/``sentence_distance_centroid`` load a
+sentence-embedding model, so nothing in ``timeseries_suite`` may select
+either one by default: doing so would make an ostensibly cheap, always-on
+metric silently download and run a neural model over every reference book a
+corpus is built from. Both sequences are reachable only when a caller's
+``sequences`` setting names them explicitly (``timeseries_suite``'s own
+``DEFAULT_SEQUENCES`` never does), and no code path in this module imports
+:mod:`textgrader.metrics.semantic_adjacent` until one of them is actually
+requested.
 
 Not every sequence the task's "Source sequences" list asks for is here.
 Sentiment/emotion scoring would need a lexicon this environment does not have

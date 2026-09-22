@@ -6,6 +6,8 @@ memoizes, and that it degrades to an empty, clearly-labelled sequence rather
 than raising when an optional package is unavailable.
 """
 
+import statistics
+
 import pytest
 
 from textgrader import optional
@@ -172,3 +174,54 @@ def test_embedding_sequences_need_a_minimum_of_sentences():
     centroid = seq.get_sequence(tiny, "sentence_distance_centroid")
     assert similarity.values == ()
     assert centroid.values == ()
+
+
+# ------------------------------------- the real embedding backend, end to end
+
+_PARAPHRASE_TEXT = (
+    "The old house stood at the end of the lane, quiet and grey under a heavy sky. "
+    "Sarah walked toward it slowly, her boots crunching on the gravel path. "
+    "The kitchen was small and cold. "
+    "It had always been small and cold. "
+    "A dog barked outside, sharp and sudden in the evening air."
+)
+
+
+def test_embedding_backend_actually_runs_when_sentence_transformers_is_installed():
+    if not optional.have("sentence_transformers"):
+        pytest.skip("sentence_transformers not installed in this environment")
+    analysis = DocumentAnalysis.from_text(_PARAPHRASE_TEXT)
+    similarity = seq.get_sequence(analysis, "sentence_similarity_prev")
+    centroid = seq.get_sequence(analysis, "sentence_distance_centroid")
+    assert "backend=embedding" in similarity.warning
+    assert "backend=embedding" in centroid.warning
+    # Real cosine similarities/distances, not degenerate placeholders.
+    assert all(-1.0001 <= v <= 1.0001 for v in similarity.values)
+    assert all(-0.0001 <= v <= 2.0001 for v in centroid.values)
+    assert len({round(v, 3) for v in similarity.values}) > 1  # not all identical
+
+
+def test_embedding_backend_catches_a_paraphrase_the_lexical_fallback_misses(monkeypatch):
+    if not optional.have("sentence_transformers"):
+        pytest.skip("sentence_transformers not installed in this environment")
+    embedding = seq.get_sequence(DocumentAnalysis.from_text(_PARAPHRASE_TEXT),
+                                 "sentence_similarity_prev")
+
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "sentence_transformers")
+    optional.reset_cache()
+    try:
+        lexical = seq.get_sequence(DocumentAnalysis.from_text(_PARAPHRASE_TEXT),
+                                   "sentence_similarity_prev")
+    finally:
+        optional.reset_cache()
+
+    assert "backend=embedding" in embedding.warning
+    assert "backend=lexical" in lexical.warning
+    # Most of this text shares almost no vocabulary between adjacent
+    # sentences, so the TF-IDF lexical fallback reports near-zero there,
+    # while the real embedding backend still reads continuous, partial
+    # similarity throughout -- the disagreement the module docstring for
+    # semantic_adjacent calls out by name, reproduced here on a fresh example.
+    near_zero_lexical = sum(1 for v in lexical.values if v < 0.05)
+    assert near_zero_lexical >= len(lexical.values) - 2
+    assert statistics.fmean(embedding.values) > statistics.fmean(lexical.values)

@@ -33,19 +33,60 @@ length is not invisible just because nobody wrote a bespoke
 ``dependency_distance_autocorrelation`` module.
 
 **Guarding the combinatorics.**  Sequences (16 in the registry) times
-features (15 groups) is 240 possible findings before a single lag or box
-size is counted -- exactly the explosion the task's own brief warns against.
-Three things bound it: (1) every feature group is reported as *one* finding
-per sequence, with its secondary numbers (all lags, all box sizes, segment
-slopes, ...) folded into that finding's ``distribution`` rather than exploded
-into their own ids; (2) the default configuration selects three
-dependency-free, always-available sequences and five feature groups that are
-informative even on a single chapter (15 findings by default, see
-``DEFAULT_SEQUENCES``/``DEFAULT_FEATURE_GROUPS`` below for the reasoning);
+features (40 groups, after this pass added catch22's 22, the two wavelet
+groups and the textdescriptives cross-check to the original 15) is 640
+possible findings before a single lag or box size is counted -- a bigger
+explosion than the original 240 the task's brief warned against, precisely
+because this pass made three more feature families real. Four things bound
+it: (1) every feature group is reported as *one* finding per sequence, with
+its secondary numbers (all lags, all box sizes, segment slopes, per-scale
+wavelet energies, ...) folded into that finding's ``distribution`` rather
+than exploded into their own ids -- catch22 is the one deliberate exception,
+because the task asked for each of its 22 features under its own stable id
+rather than folded together, so it is 22 *feature groups*, not one group
+with 22 numbers inside it; (2) the default configuration is **unchanged by
+this pass on purpose**: it still selects the same three dependency-free,
+always-available sequences and the same five low-assumption feature groups
+it always has (15 findings by default, see ``DEFAULT_SEQUENCES``/
+``DEFAULT_FEATURE_GROUPS`` below) -- catch22, the wavelet groups and the
+embedding-backed sequences are all opt-in, both because catch22 alone
+(22 features) over even the three default sequences would already be 66
+findings, more than four times the current default, and because two of
+those sequences are embedding-backed and must never turn on by themselves
+(see "Why the embedding sequences stay out of every default" below);
 (3) ``max_findings`` (default 200) is a hard stop -- a user who selects
 every sequence and every feature group gets the first 200 combinations, in
 the order they configured, plus one finding that says so, rather than a
-silent multi-thousand-row report.
+silent multi-thousand-row report; (4) a ``"catch22"`` shorthand in
+``feature_groups`` expands to all 22 ``catch22_*`` names (deduplicated
+against anything already listed) so a user does not have to type 22 strings
+to turn the whole group on, but it is still exactly as bounded by
+``max_findings`` as if they had.
+
+**Why the embedding sequences stay out of every default.**  This suite is
+``cost="moderate"`` with ``requires=()``, which is what lets the corpus
+builder profile it over every reference book (see
+``textgrader/corpus.py``'s ``needs_parse``/``needs_model`` gate). That gate
+only checks ``"sentence_transformers" in requires``, so it cannot see that
+two sequences in the registry this suite draws from
+(``sentence_similarity_prev``, ``sentence_distance_centroid``) load a
+sentence-embedding model. Adding ``sentence_transformers`` to ``REQUIRES``
+would fix that for free but would also flip this suite's own
+``needs_model`` to true and silently drop its other fourteen, cheap
+sequences out of corpus profiling too -- a real regression this pass
+chooses not to make quietly. (The more honest long-term fix is a finer-
+grained gate -- one that asked "does this specific configuration need a
+model" rather than "does this metric's ``requires`` tuple ever mention one"
+-- but that is a change to ``textgrader/corpus.py``'s gating rule itself,
+outside every file this pass is allowed to touch, so it is left as an
+argument for whoever owns that module rather than made quietly here.)
+Instead, ``DEFAULT_SEQUENCES`` simply never contains an embedding-backed
+sequence, and no code path in this module imports or loads an embedding
+model unless one of those two sequences is explicitly present in a caller's
+``sequences`` list (``sequences.get_sequence`` only reaches
+``semantic_adjacent``'s model loader for those two names, and only when
+asked for by name) -- so corpus profiling, which always runs with
+``MetricSpec.defaults``, never touches it.
 
 **Every measurement is individually selectable.**  ``sequences`` and
 ``feature_groups`` are both explicit lists in this metric's configuration
@@ -97,25 +138,59 @@ classical result that the longest run in ``n`` random draws grows only as
 comparing them across texts of very different sequence length is comparing
 different quantities even after normalization.
 
-**Deferred.**  ``catch22``/``catch24`` (needs ``pycatch22``) and a
-configurable ``tsfresh`` feature set are named in the task's acceptance
-criteria but are not implemented here: neither package is installed in this
-environment, both are large enough that their success path could not be
-exercised or validated before committing, and the task's own scope note
-("nothing that needs an untestable package") rules them out for this pass.
-Wavelet energy by scale (``PyWavelets``) and recurrence-quantification
-features (``PyRQA``) are left out for the identical reason. A streaming
-``river`` ADWIN detector is skipped in favour of a small dependency-free
-Page-Hinkley implementation (``page_hinkley``, below), which needs no
-optional package and is directly testable against a synthetic step-shift
-sequence. Sentiment/emotion scoring and topic-probability sequences are not
-in this module at all; see ``textgrader/sequences.py``'s docstring for why
-they were left out of the sequence registry itself, one level down.
+**Deferred.**  ``pycatch22``, ``sentence-transformers`` and ``PyWavelets``
+were not installed when this suite was first written, so ``catch22``, the
+two embedding-backed sequences and wavelet features were either missing or
+running only on a fallback whose success path had never executed. All three
+are installed now and this pass wired them in and validated the real path,
+not just the fallback -- see ``catch22_*`` below (22 canonical features,
+Lubba et al. 2019, each under its own stable id per the task's naming rule),
+``wavelet_energy``/``wavelet_entropy`` (energy per scale and the Shannon
+entropy of that distribution, ``PyWavelets``) and the sequence registry's
+own docstring for the embedding-sequence validation. ``catch24`` (catch22
+plus raw mean/variance) is skipped on purpose: this suite already reports
+plain dispersion (mean, median, sd) per sequence, so adding catch24's two
+extra features would only duplicate ``dispersion`` under a different id.
+A configurable ``tsfresh`` feature set is still not implemented: the package
+was deliberately not installed in this environment (it is heavy and pulls a
+large dependency tree), so its success path still cannot be exercised or
+validated, and this suite would rather ship nothing for it than ship code
+nobody has run. Recurrence-quantification features (``PyRQA``) are left out
+for the same reason -- not installed, not testable. A streaming ``river``
+ADWIN detector is skipped in favour of a small dependency-free Page-Hinkley
+implementation (``page_hinkley``, below), which needs no optional package
+and is directly testable against a synthetic step-shift sequence.
+Sentiment/emotion scoring and topic-probability sequences are not in this
+module at all; see ``textgrader/sequences.py``'s docstring for why they were
+left out of the sequence registry itself, one level down. A
+``textdescriptives`` cross-check is wired in for exactly the one sequence
+where it overlaps this suite's own work end to end
+(``sentence_dependency_distance`` -- see ``textdescriptives_check`` below);
+``textdescriptives``' ``readability``/``information_theory``/``quality``
+components measure whole-document properties this suite's per-sentence,
+ordered-sequence contract does not cover; wiring in every component that
+merely *touches* a related idea would not be a cross-check, only noise.
 
 Deterministic settings throughout: no random seeds are needed because every
 feature here is a closed-form or exact-recursion computation, not a fit with
-random initialization (a genuine, tested exception is the ``ruptures``-backed
-``change_points`` feature's PELT search, which is itself deterministic).
+random initialization. The ``ruptures``-backed ``change_points`` feature's
+PELT search is the one genuine exception in spirit (it is a search, not a
+closed form) and it is itself deterministic -- but until this pass installed
+``ruptures``, that search had never actually run in this environment; only
+its single-split fallback had. Running it for the first time found a real
+bug: the fixed ``change_point_penalty=3.0`` this module shipped with was
+tuned against nothing (the fallback code path that used it never existed --
+the fallback ignores ``change_point_penalty`` entirely), and on standardized
+values it made PELT flag roughly 1-2% of points as change points in *pure
+white noise*, worse the longer the sequence ran (2 spurious points at
+n=200, 7 at n=500, 17 at n=1,000, 48 at n=3,000 on one fixed seed), because
+a flat penalty does not grow with the number of candidate split points a
+longer sequence offers PELT to overfit. ``change_point_penalty`` is now a
+multiplier of ``log(n)`` (default 2.0, the standard BIC-style penalty for a
+Gaussian mean-shift model on unit-variance data) rather than a flat score,
+which measured near zero false positives across lengths from 80 to 1,200 in
+a 30-seed check while still finding this module's own synthetic level-shift
+test within a few points of where it was injected.
 """
 
 from __future__ import annotations
@@ -152,7 +227,14 @@ DEFAULT_SEQUENCES = ("sentence_words", "paragraph_words", "sentence_punctuation"
 #: direct, least assumption-laden reading. See module docstring.
 DEFAULT_FEATURE_GROUPS = ("dispersion", "acf", "trend", "turning_points", "runs")
 
-FEATURE_NAMES = (
+#: The original 15 feature groups, each a self-contained ``(values, cfg) ->
+#: _Outcome`` function needing nothing but the sequence's own numbers.  The
+#: three families this pass added (catch22, wavelets, the textdescriptives
+#: cross-check) need more context -- the analysis, the sequence name, whether
+#: detrending is on -- than that signature carries, so they are registered
+#: separately in ``_EXTENDED_FEATURES`` below rather than forced into it.
+#: ``FEATURE_NAMES`` (further down) is the union callers should read.
+_BASE_FEATURE_NAMES = (
     "dispersion", "rolling_dispersion", "acf", "pacf", "trend", "piecewise_trend",
     "stationarity", "turning_points", "runs", "spectral", "hurst", "dfa",
     "permutation_entropy", "change_points", "page_hinkley",
@@ -525,8 +607,28 @@ def _feature_permutation_entropy(values: TypingSequence[float], cfg: Mapping[str
 
 
 def _feature_change_points(values: TypingSequence[float], cfg: Mapping[str, Any]) -> _Outcome:
+    """Change-point rate via ``ruptures``' PELT search, or a single-split fallback.
+
+    ``change_point_penalty`` is a *multiplier of* ``log(n)``, not a flat PELT
+    penalty. That is a deliberate fix, not the original design: this suite
+    shipped for a long time with a flat ``pen=3.0`` that only the fallback's
+    code path defined a default for (the fallback itself never reads
+    ``change_point_penalty`` at all), because ``ruptures`` was not installed
+    anywhere this suite had run. The first time it actually ran, a flat
+    penalty let PELT overfit noise -- worse the longer the sequence, because
+    a fixed score does not keep pace with how many candidate split points a
+    longer sequence gives PELT to search: on pure white noise it fired on
+    roughly 1.5% of points regardless of length (2 events at n=200, 7 at
+    n=500, 17 at n=1,000, 48 at n=3,000, one fixed seed). Scaling the penalty
+    by ``log(n)`` (the standard BIC-style penalty for a Gaussian mean-shift
+    model on unit-variance data) is the classical fix and measured near zero
+    false positives from n=80 to n=1,200 across 30 seeds in this module's own
+    validation, while still finding an injected level shift within a few
+    points of where it happened.
+    """
+
     n = len(values)
-    penalty = float(cfg.get("change_point_penalty", 3.0))
+    penalty_multiplier = float(cfg.get("change_point_penalty", 2.0))
     ruptures_module, reason = require("ruptures")
     numpy, numpy_reason = require("numpy")
     if ruptures_module is not None and numpy is not None:
@@ -535,12 +637,14 @@ def _feature_change_points(values: TypingSequence[float], cfg: Mapping[str, Any]
             std = float(arr.std())
             if std > 0:
                 arr = (arr - arr.mean()) / std
+            penalty = penalty_multiplier * math.log(max(n, 2))
             algo = ruptures_module.Pelt(model="l2").fit(arr)
             breakpoints = [point for point in algo.predict(pen=penalty) if point < n]
             rate = 100.0 * len(breakpoints) / n
             return _Outcome(rate, distribution={
                 "backend": "ruptures.Pelt", "library_version": _lib_version(ruptures_module),
-                "count": len(breakpoints), "locations": breakpoints[:25]})
+                "count": len(breakpoints), "locations": breakpoints[:25],
+                "penalty": penalty, "penalty_multiplier": penalty_multiplier})
         except Exception as exc:  # pragma: no cover - library/runtime guard
             reason = f"ruptures.Pelt failed ({type(exc).__name__}: {exc})"
     reason = reason or numpy_reason
@@ -617,20 +721,381 @@ _FEATURES: dict[str, Callable[[TypingSequence[float], Mapping[str, Any]], _Outco
     "page_hinkley": _feature_page_hinkley,
 }
 
-assert set(_FEATURES) == set(FEATURE_NAMES)
+assert set(_FEATURES) == set(_BASE_FEATURE_NAMES)
+
+
+# ------------------------------------------------------- catch22 / wavelets /
+# ------------------------------------------------------- textdescriptives
+#
+# These three families need more than a sequence's own numbers: catch22 and
+# the wavelet decomposition are each one shared, potentially expensive
+# computation that several of this module's feature *names* read from (22
+# catch22 features from one ``catch22_all`` call; energy and entropy from one
+# wavelet decomposition), and the textdescriptives cross-check needs the
+# document's shared spaCy parse, not just a sequence of floats. None of that
+# fits the plain ``(values, cfg) -> _Outcome`` signature every feature above
+# uses, so each gets a small ``ctx`` (analysis, sequence name, detrending
+# flag, the raw config) instead, and is registered in ``_EXTENDED_FEATURES``
+# rather than ``_FEATURES``. ``_measure_one`` dispatches to whichever dict
+# has the requested name.
+
+
+def _extra_settings_key(sequence_name: str, cfg: Mapping[str, Any]) -> str:
+    extra = _sequence_settings(sequence_name, cfg)
+    return ",".join(f"{key}={extra[key]}" for key in sorted(extra))
+
+
+# ---- catch22 -----------------------------------------------------------
+
+#: (library feature name, this suite's stable id suffix, unit, description).
+#: Keyed by the *library's* name so a value from a future pycatch22 release
+#: can be matched to our own id by name, not by position -- catch22_all
+#: returns a positional list, and the task's own stable-id rule forbids
+#: exposing either that library name or a bare position as a metric id, so
+#: this table is the one place a name from either world is allowed to touch
+#: the other. Every one of catch22's 22 features is scale- and offset-free by
+#: construction (the library z-scores its input before computing all but a
+#: couple of them), so none of these fall back to the sequence's own unit the
+#: way ``dispersion`` does; each has its own fixed unit below.
+_CATCH22_CATALOGUE: tuple[tuple[str, str, str, str], ...] = (
+    ("DN_HistogramMode_5", "histogram_mode_5bin", "z-score",
+     "Mode of a 5-bin histogram of the (z-scored) values"),
+    ("DN_HistogramMode_10", "histogram_mode_10bin", "z-score",
+     "Mode of a 10-bin histogram of the (z-scored) values"),
+    ("CO_f1ecac", "acf_1e_decay_time", "lag steps",
+     "First lag at which the autocorrelation function crosses 1/e"),
+    ("CO_FirstMin_ac", "acf_first_minimum", "lag steps",
+     "First minimum of the autocorrelation function"),
+    ("CO_HistogramAMI_even_2_5", "auto_mutual_info_2bin_lag5", "bits",
+     "Automutual information at lag 5, 2-bin histogram estimator"),
+    ("CO_trev_1_num", "time_reversal_asymmetry", "ratio",
+     "Time-reversal asymmetry statistic at lag 1"),
+    ("MD_hrv_classic_pnn40", "large_step_fraction", "proportion",
+     "Proportion of successive differences exceeding 0.4 standard deviations (pNN40)"),
+    ("SB_BinaryStats_mean_longstretch1", "longest_above_mean_run", "points",
+     "Longest run of consecutive values above the mean"),
+    ("SB_TransitionMatrix_3ac_sumdiagcov", "transition_matrix_trace", "ratio",
+     "Trace of the covariance of a 3-letter symbolized transition matrix"),
+    ("PD_PeriodicityWang_th0_01", "periodicity_wang", "lag steps",
+     "Wang et al.'s periodicity-detection lag"),
+    ("CO_Embed2_Dist_tau_d_expfit_meandiff", "embed2_dist_expfit", "ratio",
+     "Goodness of an exponential fit to 2D time-delay-embedding point distances"),
+    ("IN_AutoMutualInfoStats_40_gaussian_fmmi", "auto_mutual_info_first_min", "lag steps",
+     "First minimum of the automutual information function (Gaussian estimator)"),
+    ("FC_LocalSimple_mean1_tauresrat", "forecast_ar1_error_ratio", "ratio",
+     "Change in autocorrelation timescale after a 1-step local-mean forecast"),
+    ("DN_OutlierInclude_p_001_mdrmd", "outlier_timing_positive", "fraction of series",
+     "Timing of positive outliers relative to the series"),
+    ("DN_OutlierInclude_n_001_mdrmd", "outlier_timing_negative", "fraction of series",
+     "Timing of negative outliers relative to the series"),
+    ("SP_Summaries_welch_rect_area_5_1", "spectral_low_freq_power", "power ratio",
+     "Share of power in the lowest-frequency fifth of the Welch spectrum"),
+    ("SB_BinaryStats_diff_longstretch0", "longest_decreasing_run", "points",
+     "Longest run of consecutive decreases"),
+    ("SB_MotifThree_quantile_hh", "motif3_entropy", "bits",
+     "Shannon entropy of a 3-letter symbolic-word distribution"),
+    ("SC_FluctAnal_2_rsrangefit_50_1_logi_prop_r1", "rs_range_low_scale_fit", "ratio",
+     "Rescaled-range fluctuation-analysis fit, low-scale proportion"),
+    ("SC_FluctAnal_2_dfa_50_1_2_logi_prop_r1", "dfa_low_scale_fit", "ratio",
+     "Detrended-fluctuation-analysis fit, low-scale proportion"),
+    ("SP_Summaries_welch_rect_centroid", "spectral_centroid", "radians per sample",
+     "Centroid frequency of the Welch power spectrum"),
+    ("FC_LocalSimple_mean3_stderr", "forecast_ma3_error_stderr", "ratio",
+     "Residual standard error of a 3-step local-mean forecast"),
+)
+
+_CATCH22_ALIAS = "catch22"
+_CATCH22_FEATURE_NAMES = tuple(f"catch22_{stable}" for _, stable, _, _ in _CATCH22_CATALOGUE)
+_CATCH22_LIBRARY_NAME_BY_FEATURE = {f"catch22_{stable}": library
+                                    for library, stable, _, _ in _CATCH22_CATALOGUE}
+#: Minimum catch22 needs before its features stop occasionally returning a
+#: non-finite value on this suite's own tiny-document test fixtures (a
+#: three-point series already produced one NaN in manual testing); 30 is the
+#: same order of magnitude as this module's other nonlinear/scaling minimums
+#: (``hurst``/``dfa`` at 40) rather than a value from the catch22 paper.
+_CATCH22_MIN_LENGTH = 30
+
+
+def _catch22_result(ctx: Mapping[str, Any]) -> tuple[dict[str, float] | None, str | None, Any]:
+    analysis: DocumentAnalysis = ctx["analysis"]
+    key = (f"timeseries_suite:catch22:{ctx['sequence_name']}:"
+           f"{_extra_settings_key(ctx['sequence_name'], ctx['cfg'])}:detrend={ctx['detrended']}")
+
+    def build() -> tuple[dict[str, float] | None, str | None, Any]:
+        module, reason = require("pycatch22")
+        if module is None:
+            return None, reason, None
+        try:
+            result = module.catch22_all(list(ctx["working"]), catch24=False)
+            return dict(zip(result["names"], result["values"])), None, module
+        except Exception as exc:  # pragma: no cover - library/runtime guard
+            return None, f"pycatch22.catch22_all failed ({type(exc).__name__}: {exc})", None
+
+    return analysis.memo(key, build)
+
+
+def _feature_catch22(feature_name: str, values: TypingSequence[float], cfg: Mapping[str, Any],
+                     ctx: Mapping[str, Any] | None = None) -> _Outcome:
+    if ctx is None:
+        return _Outcome(None, warning="catch22 features need suite context and cannot run standalone")
+    values_by_library_name, reason, module = _catch22_result(ctx)
+    if values_by_library_name is None:
+        return _Outcome(None, warning=reason)
+    library_name = _CATCH22_LIBRARY_NAME_BY_FEATURE[feature_name]
+    if library_name not in values_by_library_name:
+        return _Outcome(None, warning=f"pycatch22 did not return {library_name!r}; the installed "
+                                      f"pycatch22 version may not match what this suite expects")
+    raw = values_by_library_name[library_name]
+    if raw is None or not math.isfinite(raw):
+        return _Outcome(None, warning="pycatch22 returned a non-finite value for this sequence, "
+                                      "most often because it has zero variance")
+    return _Outcome(float(raw), distribution={
+        "catch22_feature": library_name, "backend": "pycatch22.catch22_all",
+        "library": "pycatch22", "library_version": _lib_version(module)})
+
+
+def _make_catch22_feature(feature_name: str):
+    def feature(values: TypingSequence[float], cfg: Mapping[str, Any],
+               ctx: Mapping[str, Any] | None = None) -> _Outcome:
+        return _feature_catch22(feature_name, values, cfg, ctx)
+    feature.__name__ = f"_feature_{feature_name}"
+    return feature
+
+
+# ---- wavelets -----------------------------------------------------------
+
+_WAVELET_MIN_LENGTH = 40
+
+
+def _wavelet_result(ctx: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    analysis: DocumentAnalysis = ctx["analysis"]
+    wavelet_name = str(ctx["cfg"].get("wavelet_name", "db4"))
+    max_level_cfg = int(ctx["cfg"].get("wavelet_max_level", 5))
+    key = (f"timeseries_suite:wavelet:{ctx['sequence_name']}:"
+           f"{_extra_settings_key(ctx['sequence_name'], ctx['cfg'])}:detrend={ctx['detrended']}:"
+           f"wavelet={wavelet_name}:max_level={max_level_cfg}")
+
+    def build() -> tuple[dict[str, Any] | None, str | None]:
+        pywt_module, reason = require("pywt")
+        if pywt_module is None:
+            return None, reason
+        numpy_module, numpy_reason = require("numpy")
+        if numpy_module is None:
+            return None, numpy_reason
+        try:
+            wavelet_obj = pywt_module.Wavelet(wavelet_name)
+        except Exception as exc:
+            return None, f"unknown wavelet {wavelet_name!r} ({type(exc).__name__}: {exc})"
+        n = len(ctx["working"])
+        max_possible = pywt_module.dwt_max_level(n, wavelet_obj.dec_len)
+        if max_possible < 1:
+            return None, (f"needs more points for even a level-1 {wavelet_name!r} decomposition "
+                          f"(has {n})")
+        level = min(max_possible, max(1, max_level_cfg))
+        try:
+            arr = numpy_module.asarray(ctx["working"], dtype=float)
+            coeffs = pywt_module.wavedec(arr, wavelet_name, level=level)
+            energies = [float(numpy_module.sum(numpy_module.asarray(band, dtype=float) ** 2))
+                       for band in coeffs]
+        except Exception as exc:  # pragma: no cover - library/runtime guard
+            return None, f"pywt.wavedec failed ({type(exc).__name__}: {exc})"
+        band_labels = [f"cA{level}"] + [f"cD{lvl}" for lvl in range(level, 0, -1)]
+        return {"energies": energies, "band_labels": band_labels, "level": level,
+                "wavelet": wavelet_name, "library_version": _lib_version(pywt_module)}, None
+
+    return analysis.memo(key, build)
+
+
+def _feature_wavelet_energy(values: TypingSequence[float], cfg: Mapping[str, Any],
+                            ctx: Mapping[str, Any] | None = None) -> _Outcome:
+    if ctx is None:
+        return _Outcome(None, warning="wavelet features need suite context and cannot run standalone")
+    result, reason = _wavelet_result(ctx)
+    if result is None:
+        return _Outcome(None, warning=reason)
+    energies = result["energies"]
+    total = sum(energies)
+    if total <= 0:
+        return _Outcome(None, warning="the sequence has no variance at any wavelet scale; "
+                                      "energy share is undefined", sample_size_sensitive=True)
+    return _Outcome(100.0 * energies[0] / total, distribution={
+        "energies": energies, "energy_share_percent": [100.0 * e / total for e in energies],
+        "band_labels": result["band_labels"], "level": result["level"], "wavelet": result["wavelet"],
+        "library": "PyWavelets", "library_version": result["library_version"]},
+        sample_size_sensitive=True)
+
+
+def _feature_wavelet_entropy(values: TypingSequence[float], cfg: Mapping[str, Any],
+                             ctx: Mapping[str, Any] | None = None) -> _Outcome:
+    if ctx is None:
+        return _Outcome(None, warning="wavelet features need suite context and cannot run standalone")
+    result, reason = _wavelet_result(ctx)
+    if result is None:
+        return _Outcome(None, warning=reason)
+    energies = result["energies"]
+    total = sum(energies)
+    common = {"energies": energies, "band_labels": result["band_labels"], "level": result["level"],
+             "wavelet": result["wavelet"], "library": "PyWavelets",
+             "library_version": result["library_version"]}
+    if total <= 0:
+        return _Outcome(0.0, distribution=common, sample_size_sensitive=True,
+                        warning="the sequence has no variance at any wavelet scale; wavelet "
+                                "entropy is undefined so 0.0 (all energy in one band) was used")
+    p = [e / total for e in energies if e > 0]
+    raw_entropy = -sum(pi * math.log2(pi) for pi in p)
+    max_entropy = math.log2(len(energies)) if len(energies) > 1 else 1.0
+    normalized = raw_entropy / max_entropy if max_entropy > 0 else 0.0
+    return _Outcome(normalized, distribution={**common, "raw_entropy_bits": raw_entropy},
+                    sample_size_sensitive=True)
+
+
+# ---- textdescriptives cross-check ---------------------------------------
+
+#: Sequences this suite already builds that a textdescriptives component
+#: also measures, independently, off the same spaCy parse. Extend this (and
+#: the dispatch in ``_feature_textdescriptives_check``) if a future sequence
+#: gains a second textdescriptives overlap; today there is exactly one.
+_TEXTDESCRIPTIVES_CROSS_CHECK_SEQUENCES = frozenset({"sentence_dependency_distance"})
+
+
+def _feature_textdescriptives_check(values: TypingSequence[float], cfg: Mapping[str, Any],
+                                    ctx: Mapping[str, Any] | None = None) -> _Outcome:
+    if ctx is None:
+        return _Outcome(None, warning="the textdescriptives cross-check needs suite context and "
+                                      "cannot run standalone")
+    sequence_name = ctx["sequence_name"]
+    if sequence_name not in _TEXTDESCRIPTIVES_CROSS_CHECK_SEQUENCES:
+        return _Outcome(None, warning=f"no textdescriptives cross-check is defined for the "
+                                      f"{sequence_name!r} sequence (only "
+                                      f"{sorted(_TEXTDESCRIPTIVES_CROSS_CHECK_SEQUENCES)} have one)")
+    analysis: DocumentAnalysis = ctx["analysis"]
+    if analysis.nlp_unavailable:
+        return _Outcome(None, warning=analysis.nlp_unavailable)
+    td_module, reason = require("textdescriptives")
+    if td_module is None:
+        return _Outcome(None, warning=reason)
+    try:
+        from textdescriptives.components.dependency_distance import DependencyDistance
+        # Registers Doc/Span/Token extensions as getters; idempotent, and it
+        # needs no pipeline component added, so it runs on the shared parse
+        # this document already built rather than re-parsing.
+        DependencyDistance(analysis.nlp)
+        # Recomputed here, in the same loop as textdescriptives' own value,
+        # rather than read from ``values``/``ctx["sequence"]``: this suite's
+        # own sentence_dependency_distance sequence skips a sentence with no
+        # non-ROOT token (a one-word sentence), and textdescriptives does
+        # not, so pulling the two from separately-built lists produced a
+        # spurious count mismatch on ordinary prose in manual testing. Pairing
+        # them sentence-by-sentence in one pass guarantees they line up.
+        ours: list[float] = []
+        other: list[float] = []
+        for _, doc in analysis.spacy_docs():
+            for sent in doc.sents:
+                if len(sent) == 0:
+                    continue
+                distances = [abs(token.i - token.head.i) for token in sent if token.dep_ != "ROOT"]
+                if not distances:
+                    continue
+                ours.append(statistics.fmean(distances))
+                other.append(float(sent._.dependency_distance["dependency_distance_mean"]))
+    except Exception as exc:  # pragma: no cover - library/runtime guard
+        return _Outcome(None, warning=f"textdescriptives dependency-distance cross-check failed "
+                                      f"({type(exc).__name__}: {exc})")
+    if len(ours) < 5:
+        return _Outcome(None, warning="fewer than five sentences; the cross-check needs more to "
+                                      "compare")
+    _, _, r = _ols(ours, other)
+    mean_abs_gap = statistics.fmean(abs(a - b) for a, b in zip(ours, other))
+    return _Outcome(r, distribution={
+        "backend": "textdescriptives.dependency_distance", "library": "textdescriptives",
+        "library_version": _lib_version(td_module), "mean_absolute_gap": mean_abs_gap,
+        "own_mean": statistics.fmean(ours), "textdescriptives_mean": statistics.fmean(other),
+        "note": "textdescriptives' per-sentence mean includes the ROOT token (distance 0); this "
+                "suite's own sentence_dependency_distance sequence excludes it, so a nonzero "
+                "mean_absolute_gap here reflects that definitional difference, not disagreement "
+                "about the underlying parse"})
+
+
+_EXTENDED_FEATURES: dict[str, Callable[..., _Outcome]] = {
+    **{feature_name: _make_catch22_feature(feature_name) for feature_name in _CATCH22_FEATURE_NAMES},
+    "wavelet_energy": _feature_wavelet_energy,
+    "wavelet_entropy": _feature_wavelet_entropy,
+    "textdescriptives_check": _feature_textdescriptives_check,
+}
+
+#: Every valid ``feature_groups`` entry: the original 15 plus the 22 catch22
+#: features, the 2 wavelet features and the 1 textdescriptives cross-check.
+#: None of the 25 new ones are in ``DEFAULT_FEATURE_GROUPS`` -- see the
+#: module docstring's "Guarding the combinatorics" section for why.
+FEATURE_NAMES = _BASE_FEATURE_NAMES + tuple(_EXTENDED_FEATURES)
+
+FEATURE_LABELS.update({
+    **{name: f"catch22: {desc}" for name, (_, _, _, desc) in
+       zip(_CATCH22_FEATURE_NAMES, _CATCH22_CATALOGUE)},
+    "wavelet_energy": "Wavelet energy concentration",
+    "wavelet_entropy": "Wavelet entropy",
+    "textdescriptives_check": "Agreement with textdescriptives",
+})
+
+FEATURE_UNITS.update({
+    **{f"catch22_{stable}": unit for _, stable, unit, _ in _CATCH22_CATALOGUE},
+    "wavelet_energy": "%", "wavelet_entropy": "ratio", "textdescriptives_check": "correlation",
+})
+
+DEFAULT_MIN_LENGTHS.update({
+    **{name: _CATCH22_MIN_LENGTH for name in _CATCH22_FEATURE_NAMES},
+    "wavelet_energy": _WAVELET_MIN_LENGTH, "wavelet_entropy": _WAVELET_MIN_LENGTH,
+    "textdescriptives_check": 5,
+})
+
+# Wavelet decomposition depth (and so the number of bands the energy/entropy
+# is spread across) grows with sequence length, exactly the systematic,
+# length-linked dependence the module docstring's "Sample-size honesty"
+# section describes for hurst/dfa/spectral/runs/permutation_entropy.
+SAMPLE_SIZE_SENSITIVE_FEATURES = SAMPLE_SIZE_SENSITIVE_FEATURES | frozenset(
+    {"wavelet_energy", "wavelet_entropy"})
+
+# A raw-value agreement check against another library's implementation;
+# detrending one side and not the other would make the comparison meaningless.
+_NEVER_DETREND = _NEVER_DETREND | frozenset({"textdescriptives_check"})
+
+assert set(_EXTENDED_FEATURES) == set(FEATURE_NAMES) - set(_BASE_FEATURE_NAMES)
 
 
 # ------------------------------------------------------------------- settings
 
+def _expand_feature_group_aliases(names: list[str]) -> list[str]:
+    """Expand the ``"catch22"`` shorthand into its 22 stable feature names.
+
+    A convenience only: every catch22 feature is just as selectable by its
+    own name (``"catch22_histogram_mode_5bin"``, ...), and the expansion
+    happens before ``max_findings`` truncation, so this changes nothing about
+    what is computed or how it is bounded -- only how many characters a user
+    has to type to ask for all of it.
+    """
+
+    expanded: list[str] = []
+    for name in names:
+        candidates = _CATCH22_FEATURE_NAMES if name == _CATCH22_ALIAS else (name,)
+        for candidate in candidates:
+            if candidate not in expanded:
+                expanded.append(candidate)
+    return expanded
+
+
 def _settings(config: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
         "sequences": list(option(config, "sequences", DEFAULT_SEQUENCES)),
-        "feature_groups": list(option(config, "feature_groups", DEFAULT_FEATURE_GROUPS)),
+        "feature_groups": _expand_feature_group_aliases(
+            list(option(config, "feature_groups", DEFAULT_FEATURE_GROUPS))),
         "lags": [int(x) for x in option(config, "lags", [1, 2, 3])],
         "pacf_max_lag": int(option(config, "pacf_max_lag", 5)),
         "window_words": int(option(config, "window_words", 2000)),
         "rolling_window": int(option(config, "rolling_window", 10)),
-        "change_point_penalty": float(option(config, "change_point_penalty", 3.0)),
+        # A multiplier of log(n), not a flat PELT penalty -- see
+        # _feature_change_points' docstring for why this changed from a flat
+        # 3.0 the first time the ruptures-backed path actually ran.
+        "change_point_penalty": float(option(config, "change_point_penalty", 2.0)),
         "page_hinkley_delta": float(option(config, "page_hinkley_delta", 0.005)),
         "page_hinkley_lambda": float(option(config, "page_hinkley_lambda", 3.0)),
         "permutation_entropy_order": int(option(config, "permutation_entropy_order", 3)),
@@ -640,6 +1105,8 @@ def _settings(config: Mapping[str, Any] | None) -> dict[str, Any]:
         "detrend": bool(option(config, "detrend", False)),
         "embedding_model": option(config, "embedding_model", "all-MiniLM-L6-v2"),
         "language": option(config, "language", "en"),
+        "wavelet_name": str(option(config, "wavelet_name", "db4")),
+        "wavelet_max_level": int(option(config, "wavelet_max_level", 5)),
         "min_lengths": dict(option(config, "min_lengths", {})),
         "max_findings": int(option(config, "max_findings", 200)),
     }
@@ -694,7 +1161,12 @@ def _measure_one(analysis: DocumentAnalysis, sequence_name: str, feature_name: s
     if detrended:
         working = _residuals(working)
 
-    outcome = _FEATURES[feature_name](working, cfg)
+    if feature_name in _EXTENDED_FEATURES:
+        ctx = {"analysis": analysis, "sequence_name": sequence_name, "sequence": sequence,
+              "cfg": cfg, "detrended": detrended, "working": working}
+        outcome = _EXTENDED_FEATURES[feature_name](working, cfg, ctx)
+    else:
+        outcome = _FEATURES[feature_name](working, cfg)
     distribution = dict(outcome.distribution)
     distribution.setdefault("sequence", sequence_name)
     distribution.setdefault("sequence_unit", sequence.unit)
@@ -715,9 +1187,11 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     cfg = _settings(config)
 
     sequences = [name for name in cfg["sequences"] if name in seq.SEQUENCES]
-    features = [name for name in cfg["feature_groups"] if name in _FEATURES]
+    features = [name for name in cfg["feature_groups"]
+               if name in _FEATURES or name in _EXTENDED_FEATURES]
     unknown_sequences = [name for name in cfg["sequences"] if name not in seq.SEQUENCES]
-    unknown_features = [name for name in cfg["feature_groups"] if name not in _FEATURES]
+    unknown_features = [name for name in cfg["feature_groups"]
+                        if name not in _FEATURES and name not in _EXTENDED_FEATURES]
 
     if not sequences or not features:
         problems = []

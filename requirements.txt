@@ -55,9 +55,11 @@ networkx>=3.0
 pandas>=2.0
 
 # Descriptive statistics, readability, dependency distance and coherence on top
-# of spaCy.  TextGrader computes these directly from the shared parse, so this
-# is here for users who want its extra features in their own code rather than
-# because a metric needs it.
+# of spaCy.  TextGrader computes most of these directly from the shared parse
+# for its own metrics, but timeseries_suite's "textdescriptives_check" feature
+# does use this directly: it cross-checks its own sentence_dependency_distance
+# sequence against textdescriptives' independent dependency-distance
+# implementation and keeps both numbers rather than picking one.
 textdescriptives>=2.8
 
 # Test runner.  The suite is pytest-based; `unittest discover` silently skipped
@@ -79,3 +81,11 @@ pyppmd>=1.1
 # Page-Hinkley) is dependency-free or already covered by numpy/scipy/ruptures
 # above; without this one it falls back to a labelled, weaker half-split proxy.
 statsmodels>=0.14
+
+# catch22: 22 canonical time-series features (Lubba et al. 2019), used by
+# timeseries_suite's optional, off-by-default "catch22_*" feature group.
+pycatch22>=0.4
+
+# Discrete wavelet transform, used by timeseries_suite's optional,
+# off-by-default "wavelet_energy"/"wavelet_entropy" feature group.
+PyWavelets>=1.4

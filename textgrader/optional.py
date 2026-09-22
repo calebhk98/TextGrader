@@ -48,6 +48,16 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # already covered by numpy/scipy/ruptures above; this is the one classical
     # time-series statistic worth a real implementation rather than a proxy.
     "statsmodels": ("statsmodels", "pip install statsmodels"),
+    # catch22: 22 canonical, published time-series features (Lubba et al.
+    # 2019) for timeseries_suite's optional "catch22_*" feature group. Kept
+    # as its own package rather than reimplemented because the whole point
+    # of catch22 is that its 22 features are a specific, citable, externally
+    # validated selection, not a set this codebase should be re-deriving.
+    "pycatch22": ("pycatch22", "pip install pycatch22"),
+    # Discrete wavelet transform for timeseries_suite's optional
+    # "wavelet_energy"/"wavelet_entropy" feature group (energy per scale and
+    # Shannon entropy of that per-scale distribution).
+    "pywt": ("pywt", "pip install PyWavelets"),
 }
 
 _lock = threading.Lock()

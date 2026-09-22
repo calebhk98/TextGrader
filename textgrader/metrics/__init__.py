@@ -309,7 +309,7 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "pacf_max_lag": 5,
               "window_words": 2000,
               "rolling_window": 10,
-              "change_point_penalty": 3.0,
+              "change_point_penalty": 2.0,
               "page_hinkley_delta": 0.005,
               "page_hinkley_lambda": 3.0,
               "permutation_entropy_order": 3,
@@ -319,12 +319,17 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "detrend": False,
               "embedding_model": "all-MiniLM-L6-v2",
               "language": "en",
+              "wavelet_name": "db4",
+              "wavelet_max_level": 5,
               "min_lengths": {},
               "max_findings": 200,
           },
           summary="Autocorrelation/trend/spectral/nonlinear features over named linguistic "
-                  "sequences (sentence length, punctuation, parse depth, ...); each sequence "
-                  "and feature group is independently selectable."),
+                  "sequences (sentence length, punctuation, parse depth, embedding-based "
+                  "sentence similarity, ...), plus optional catch22 (22 canonical features), "
+                  "wavelet energy/entropy and a textdescriptives dependency-distance "
+                  "cross-check; each sequence and feature group is independently selectable "
+                  "and off by default."),
     _spec("stylometry_suite", "stylometry_suite", "authorial", "moderate",
           defaults={
               "features": {
