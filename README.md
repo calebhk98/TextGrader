@@ -246,6 +246,7 @@ of it, so a slow run always says what was slow.
 | `sentence_length_entropy` | fast | - | no | Entropy of the sentence-length distribution, normalized for range. |
 | `sentence_run_lengths` | fast | - | no | Run-length distribution of short/medium/long sentence bands. |
 | `sentence_segmentation` | fast | pysbd | no | Which segmenter was used, and how much it disagrees with the built-in one. |
+| `timeseries_suite` | moderate | statsmodels, ruptures | no | Trend, autocorrelation, spectral and nonlinear features over named linguistic sequences; every sequence and feature group is selected in config. |
 
 ### paragraph rhythm
 
@@ -277,6 +278,7 @@ of it, so a slow run always says what was slow.
 | `mattr` | moderate | - | yes | Moving-average type-token ratio, length-resistant lexical diversity. |
 | `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
 | `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
+| `randomness_suite` | moderate | wordfreq | no | Language-likeness, compression and entropy channels: how predictable the text is, and how far it sits from English. |
 | `word_rarity` | moderate | wordfreq | no | Zipf word-rarity distribution from general-language frequencies. |
 
 ### repetition
@@ -317,7 +319,9 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `causal_connectives` | fast | - | no | Causal and explanatory connective rates. |
+| `coherence_suite` | parse | spacy, networkx | no | Lexical and semantic adjacency, a surface entity grid and graph, connective families, and sentence/paragraph order-permutation baselines. |
 | `hedges_boosters` | fast | - | no | Hedge, booster and modal rates. |
+| `logic_suite` | parse | spacy | no | Candidate contradictions and argument-shape counts from surface heuristics and proposition triples. |
 | `rhetorical_constructions` | moderate | - | no | Repeated rhetorical templates, discovered rather than listed. |
 | `sentence_initial_connectives` | fast | - | no | Rate of sentences opening on However, Indeed, Moreover and the like. |
 
@@ -352,6 +356,7 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `function_words` | fast | - | no | Burrows's Delta against the corpus function-word profiles. |
+| `stylometry_suite` | moderate | - | no | Authorship channels kept separate on purpose: n-gram profiles, lexical-richness statistics, Heaps/Zipf fits, section stability and corpus-reference distances. |
 
 ## What these measurements do not claim
 
