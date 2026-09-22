@@ -36,11 +36,22 @@ suite measures four largely independent kinds of relationship:
     replacement: the two disagreeing is itself evidence, not something to
     hide, so both are always reported once ``coreference`` is on.
 ``lexical_wordnet``
-    A synonym/hypernym-aware lexical chain, alongside (not instead of) the
+    A first-sense-synonym-aware lexical chain, alongside (not instead of) the
     identity-based one in ``lexical``.  Off by default: it needs the
     ``nltk`` ``wordnet`` corpus, which is a real download some environments
     do not have, and it makes a heuristic (first-sense) call that the
     identity chain does not have to make.
+``lexical_wordnet_hypernym``
+    A THIRD, looser lexical chain: two mentions link when their first-sense
+    synsets sit within a bounded number of hops in WordNet's hypernym tree
+    (``car``/``truck`` under ``motor vehicle``), not only when they are each
+    other's synonym.  Reported alongside, never instead of, the identity and
+    synonym chains - see :func:`textgrader.coherence.hypernym_lexical_chains`
+    for why "the same broad category recurs" is worth measuring separately
+    from "the same word" and "the same sense".  Off by default for the same
+    reasons as ``lexical_wordnet`` (needs the WordNet corpus, makes a
+    first-sense call) plus its own added cost (a bounded hypernym-tree walk
+    per comparison, not a hash lookup).
 ``connectives`` / ``order_permutation``
     Whether the text marks its own transitions (explicit connectives, by
     relation family, and whether they cluster at paragraph starts), and
@@ -48,19 +59,28 @@ suite measures four largely independent kinds of relationship:
     random shuffle of themselves on a cohesion score.  Both are
     dependency-free.
 
-Every one of those seven groups is switched on or off independently through
+Every one of those eight groups is switched on or off independently through
 ``features`` in this metric's config (see ``DEFAULT_FEATURES`` below); the
 top-level ``coherence_suite.enabled`` switch on its own turns nothing on,
 consistent with every other metric.  Once it is on, the original five groups
 (``lexical``, ``semantic``, ``entity``, ``connectives``, ``order_permutation``)
 default to on too, so a user opts *out* of the ones that were already
 dependency-free or degrade gracefully rather than having to discover and opt
-into every one of them.  ``coreference`` and ``lexical_wordnet`` are the
-exception: both default to off even then, because both are new, both load an
-optional dependency this module did not used to have, and neither is safe to
-fire unasked on a 300,000-word novel (:mod:`textgrader.corpus`'s profiler
-would never load a coreference model on its own either, since this module's
-``cost`` stays ``"parse"`` - see ``COST`` below).
+into every one of them.  ``coreference``, ``lexical_wordnet`` and
+``lexical_wordnet_hypernym`` are the exception: all three default to off even
+then, because each loads an optional dependency this module did not used to
+have (or, for the hypernym chain, adds a materially heavier per-comparison
+cost on top of one), and none is safe to fire unasked on a 300,000-word novel
+(:mod:`textgrader.corpus`'s profiler would never load a coreference model on
+its own either, since this module's ``cost`` stays ``"parse"`` - see
+``COST`` below).  ``config.json``'s entry for this suite carries a
+``_requires_*`` note next to ``features`` for each of these, and for the two
+other real prerequisites in this suite (``sentence-transformers`` for
+``semantic``'s embedding backend, and ``networkx`` for the entity
+co-occurrence graph): what each one needs installed, and what happens
+without it. Those notes are documentation, not configuration - ``grade.py``'s
+``metric_options``/``options_match_profile`` strip any ``"_"``-prefixed key
+before it reaches a metric or affects profile comparability.
 
 No polarity judgement is made anywhere in this module. High cohesion can be
 repetitive prose; low cohesion can be a deliberate montage or a poem. Every
@@ -87,8 +107,10 @@ environment):
   falling back to the ``lexical`` TF-IDF proxy, and a finding still says
   honestly which backend actually produced it either way.
 * **WordNet-based lexical cohesion.** The ``nltk`` ``wordnet`` corpus is
-  present; ``lexical_wordnet`` adds a synonym/hypernym-aware chain next to
-  the identity-based one, with the same "both reported, disagreement kept"
+  present; ``lexical_wordnet`` adds a synonym-aware chain next to the
+  identity-based one, and ``lexical_wordnet_hypernym`` adds a third, looser
+  hypernym-proximity chain on top of that (see above) - all three reported
+  side by side, with the same "every disagreement is kept, not collapsed"
   rule as coreference.
 * **Per-channel (dialogue vs. narration) entity grids.** Reconsidered now
   that real coreference exists: entity *identity* is resolved once, over the
@@ -99,13 +121,49 @@ environment):
   narration/dialogue overlap channels already used.  ``entity``'s four
   role-sequence metrics (new/given, reintroduction distance, dangling rate,
   transition entropy) now have narration and dialogue variants.  The
-  co-occurrence **graph** and the **order-permutation tests** deliberately do
-  not: a co-occurrence window and a shuffle-based arrangement score are both
-  questions about the document's overall structure, not about one channel's
-  share of a role sequence, and channel-splitting either would answer a
-  different, not obviously more useful, question rather than the same one
-  more narrowly - inventing that split was judged not worth doing versus
-  documenting the boundary here.
+  co-occurrence **graph** and the **order-permutation tests** deliberately
+  still do not, on reconsideration: coreference changes how reliably entity
+  *identity* is tracked, not whether restricting a co-occurrence window or a
+  shuffle-based arrangement score to one channel would answer a more useful
+  question than the whole-document one already does - a co-occurrence window
+  and an order-permutation score are both about the document's overall
+  structure, and narrowing either to "just the dialogue turns" or "just the
+  narration" measures a smaller, not obviously more informative, structure
+  rather than the same one more precisely.  That judgment call is unchanged
+  by coreference being available, so it is restated here rather than
+  silently dropped.
+* **A cached, per-book entity-grid TRANSITION-FREQUENCY TABLE, and a real
+  corpus reference for it.** :func:`profile_vector` (below) is the new
+  ``textgrader.corpus.build_profile`` hook this suite exposes: for every
+  book it profiles, it returns the surface (lemma) entity grid's full 16-way
+  S/O/X/absent transition table as a normalized ``dict[str, float]``
+  (:func:`textgrader.coherence.transition_frequency_vector`), which
+  ``build_profile`` stores as one row under
+  ``feature_profiles["coherence_suite"]`` - the same mechanism
+  ``function_words.vector`` already uses for its own per-book rate table.
+  This is exactly the table the previous pass's docstring said the corpus
+  mechanism "genuinely cannot carry": that was true of the OLD, scalar-only
+  ``book[metric_id] = value`` path, which still only ever carries this
+  table's entropy (see ``discourse.coherence_entity_grid_transition_entropy``,
+  unchanged), but the new ``profile_vector`` hook is a second, dict-valued
+  path built for exactly this case.  ``discourse.coherence_entity_grid_``
+  ``transition_corpus_delta`` is the finding that reads those cached rows
+  back: a Burrows-Delta-style mean absolute z-score of this document's own
+  16-way vector against the corpus's pooled mean and standard deviation, term
+  by term (mirroring ``style.function_word_delta``'s method exactly, applied
+  to a different 16-value vector instead of a function-word rate table).
+  **How a user actually gets a transition table into a profile**: this
+  suite's ``cost`` stays ``"parse"`` and it lists ``sentence_transformers``
+  in ``REQUIRES``, so ``textgrader.corpus._metric_names`` only includes it
+  when profiling is run with BOTH ``--parse-metrics`` and ``--model-metrics``
+  (one flag alone is not enough - see that function's docstring), on top of
+  the ordinary ``coherence_suite.enabled: true`` a profile built with
+  ``metric_selection="enabled"`` also needs.  A profile built with
+  ``metric_selection="all"`` (the default when no ``metrics`` config is
+  passed to ``build_profile`` at all) needs only the two flags.  Until a
+  profile meeting that bar exists, the corpus-delta finding reports why it
+  cannot compare, the same as ``style.function_word_delta`` does with no
+  corpus at all.
 
 Still deferred:
 
@@ -114,29 +172,6 @@ Still deferred:
   this environment; faking a relation label or a tree depth from string
   matching would be worse than not reporting it. Only explicit,
   surface-matched connectives are measured. Permanently out of scope.
-* **A fitted corpus reference distribution for entity-grid TRANSITION
-  FREQUENCIES** (as opposed to their entropy, which is a single number and
-  already flows through the existing mechanism below). ``textgrader.corpus``
-  turns every scalar ``finding["value"]`` from a profiled metric into a
-  per-book column and then a pooled distribution automatically - so
-  ``discourse.coherence_entity_grid_transition_entropy``'s entropy *already*
-  gets a real corpus reference distribution for free, the day someone builds
-  a profile with both ``--parse-metrics`` and ``--model-metrics`` (this
-  suite's ``cost="parse"`` and its ``sentence_transformers`` requirement mean
-  both flags, not just one, are needed - see ``textgrader/corpus.py``'s
-  ``_metric_names``).  What the corpus mechanism genuinely cannot carry,
-  without a schema change to ``textgrader/corpus.py`` this task does not
-  permit, is the full 16-way transition-frequency *table* itself (S→S, S→O,
-  ...): ``build_profile`` only ever extracts one scalar ``value`` per metric
-  id into a book's row, never a finding's ``distribution`` dict, and
-  ``item_distributions`` only pools the fixed, pre-named list in
-  ``ITEM_SOURCES`` (sentence/paragraph/word/turn counts), not an arbitrary
-  categorical count table a metric produces at measurement time.  Emitting
-  one metric id per transition type to route around that would add sixteen
-  near-duplicate, low-value ids to this suite's surface for one narrow
-  comparison; that trade was judged not worth it, so the transition counts
-  and their entropy are reported as this module already did, and only the
-  entropy number, not the table, is corpus-comparable today.
 * **Pronoun-to-named-mention transition rate.** ``pov.entity_pronoun_ratio``
   already measures named-entity-to-pronoun balance in narration; adding a
   second, entity-grid-flavoured version of the same comparison here would be
@@ -189,6 +224,7 @@ MIN_SAMPLE_GRAPH_NODES = 3
 DEFAULT_FEATURES: dict[str, bool] = {
     "lexical": True,
     "lexical_wordnet": False,
+    "lexical_wordnet_hypernym": False,
     "semantic": True,
     "entity": True,
     "coreference": False,
@@ -212,12 +248,14 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_lexical(analysis, config))
     if features.get("lexical_wordnet", False):
         out.append(_lexical_chain_coverage_wordnet(analysis, config))
+    if features.get("lexical_wordnet_hypernym", False):
+        out.append(_lexical_chain_coverage_hypernym(analysis, config))
     if features.get("semantic", True):
         out.extend(_semantic(analysis, config))
     if features.get("connectives", True):
         out.extend(_connectives(analysis, config))
     if features.get("entity", True):
-        out.extend(_entity(analysis, config))
+        out.extend(_entity(analysis, config, profile))
     if features.get("coreference", False):
         out.extend(_coreference_entity(analysis, config))
     if features.get("order_permutation", True):
@@ -393,6 +431,56 @@ def _lexical_chain_coverage_wordnet(analysis: DocumentAnalysis,
                   "last_sentence_index": chain[-1]} for chain in ranked],
         warning=None if real_chains else
         "no shared or synonymous content word formed a chain of the minimum length")
+
+
+def _lexical_chain_coverage_hypernym(analysis: DocumentAnalysis,
+                                     config: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``lexical_wordnet_hypernym`` feature: a third, looser lexical-chain
+    channel, alongside (not instead of) the identity and first-sense-synonym
+    ones - see ``coh.hypernym_lexical_chains``'s docstring for why "shares a
+    broad category" is worth reporting separately from "is the same word" and
+    "is the same sense"."""
+
+    metric_id = "discourse.coherence_lexical_chain_coverage_hypernym"
+    name = "Sentence share covered by a WordNet hypernym-proximity lexical chain"
+    min_len = int(option(config, "min_word_len", 3))
+    gap = int(option(config, "chain_gap", 3))
+    min_chain_len = int(option(config, "chain_min_length", 2))
+    max_distance = int(option(config, "chain_hypernym_max_distance", 3))
+    sentences = analysis.sentences
+    if not sentences:
+        return finding(metric_id, name, None, "%", family=FAMILY, sample_size=0,
+                       min_sample=MIN_SAMPLE, warning="no sentences to measure")
+    wn, reason = analysis.memo("coherence_wordnet", coh.require_wordnet)
+    if wn is None:
+        return unavailable(metric_id, name, reason, family=FAMILY)
+    chains = coh.hypernym_lexical_chains(sentences, wn, gap=gap, min_len=min_len,
+                                         max_distance=max_distance)
+    real_chains = [chain for chain in chains if len(chain["indices"]) >= min_chain_len]
+    covered: set[int] = set()
+    for chain in real_chains:
+        covered.update(chain["indices"])
+    coverage = 100.0 * len(covered) / len(sentences)
+    lengths = [len(chain["indices"]) for chain in real_chains]
+    all_distances = [d for chain in real_chains for d in chain["distances"]]
+    ranked = sorted(real_chains, key=lambda chain: len(chain["indices"]), reverse=True)[:20]
+    return finding(
+        metric_id, name, coverage, "%", family=FAMILY, sample_size=len(sentences),
+        min_sample=MIN_SAMPLE, sample_size_sensitive=True,
+        distribution={"backend": "wordnet_hypernym", "chain_count": len(real_chains),
+                     "mean_chain_length": (sum(lengths) / len(lengths)) if lengths else None,
+                     "longest_chain": max(lengths) if lengths else 0,
+                     "gap": gap, "min_chain_length": min_chain_len,
+                     "max_hypernym_distance": max_distance,
+                     "mean_link_hypernym_distance": (sum(all_distances) / len(all_distances))
+                                                    if all_distances else None,
+                     "word_sense_disambiguation": "none (first WordNet sense only)"},
+        evidence=[{"length": len(chain["indices"]), "first_sentence_index": chain["indices"][0],
+                  "last_sentence_index": chain["indices"][-1],
+                  "mean_link_distance": (sum(chain["distances"]) / len(chain["distances"]))
+                                        if chain["distances"] else None} for chain in ranked],
+        warning=None if real_chains else
+        "no content word came within the configured hypernym distance of an open chain")
 
 
 # -------------------------------------------------------------- semantic group
@@ -772,10 +860,120 @@ _SURFACE_BACKEND = {"backend": "surface_lemma",
                                        "(surface-based, not coreference)"}
 _SURFACE_NO_MENTIONS = "no entity mentions found (no noun chunk was headed by a noun or proper noun)"
 
+_CORPUS_DELTA_ID = "discourse.coherence_entity_grid_transition_corpus_delta"
+_CORPUS_DELTA_NAME = ("How unusual this document's entity-grid transition mix is against the "
+                     "corpus's pooled one (Burrows-Delta-style mean |z-score| over the 16 "
+                     "S/O/X/absent transition rates)")
 
-def _entity(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[str, Any]]:
+
+def _surface_transition_vector(analysis: DocumentAnalysis, config: Mapping[str, Any]
+                               ) -> tuple[list[str], dict[str, Sequence[str]]] | None:
+    """The full-document surface entity grid's tracked entities and dense role
+    rows, memoized under the same key :func:`profile_vector` uses, so a
+    grading run and a corpus-profiling run of the same document never walk
+    the shared parse's noun chunks twice for this."""
+
+    max_tracked = int(option(config, "entity_max_tracked", 150))
+    per_sentence, _channels = analysis.memo(
+        "coherence_entity_mentions",
+        lambda: coh.entity_mentions_by_sentence(analysis.spacy_sents_by_channel()))
+    if not per_sentence:
+        return None
+    freq = coh.entity_frequency(per_sentence)
+    tracked = [key for key, _ in sorted(freq.items(), key=lambda item: -item[1])[:max_tracked]]
+    if not tracked:
+        return None
+    return tracked, coh.grid_rows(per_sentence, tracked)
+
+
+def profile_vector(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None
+                   ) -> dict[str, float] | None:
+    """The per-book vector :mod:`textgrader.corpus`'s ``build_profile`` caches
+    for this suite: the surface (lemma) entity grid's 16-way transition table,
+    normalized to a probability vector by :func:`coh.transition_frequency_vector`.
+
+    This is the table the module docstring used to say a corpus profile could
+    never carry - only entropy (one scalar) fit through the old,
+    scalar-only ``book[metric_id] = value`` path.  ``profile_vector`` is the
+    second, dict-valued path ``build_profile`` now offers, so the full table
+    is cached exactly like ``function_words.vector`` already caches a
+    function-word rate table: one row per book under
+    ``feature_profiles["coherence_suite"]``.
+
+    Always the SURFACE backend, never coreference: profiling a corpus must
+    never load a transformer model just because the config being profiled
+    happens to have ``features.coreference`` on (see the module docstring's
+    gating note); the surface grid is also the one every document in a
+    profiled corpus can actually produce without an expensive, windowed
+    inference pass, which a pooled reference distribution needs to be honest.
+    Returns ``None`` (not cached) when spaCy is unavailable or the document
+    has no trackable entity at all, exactly the cases :func:`transition_frequency_vector`
+    itself already reports as "nothing to cache" via an empty dict.
+    """
+
+    if analysis.nlp_unavailable:
+        return None
+    config = config or {}
+    computed = _surface_transition_vector(analysis, config)
+    if computed is None:
+        return None
+    _tracked, rows = computed
+    return coh.transition_frequency_vector(coh.transition_counts(rows)) or None
+
+
+def _entity_grid_transition_corpus_delta(rows: Mapping[str, Sequence[str]],
+                                         profile: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The corpus-reference channel the module docstring used to defer: not
+    the entropy of this document's transition mix (that already has a real
+    corpus reference the day it is profiled, via the ordinary scalar path),
+    but how far the transition mix ITSELF sits from the corpus's pooled one,
+    term by term, using ``profile_vector``'s cached rows the same way
+    ``style.function_word_delta`` already uses ``feature_profiles['function_words']``."""
+
+    counts = coh.transition_counts(rows)
+    total = sum(counts.values())
+    if not total:
+        return finding(_CORPUS_DELTA_ID, _CORPUS_DELTA_NAME, None, "delta", family=FAMILY,
+                       sample_size=0, min_sample=MIN_SAMPLE,
+                       warning="no adjacent-sentence entity-grid transition to compare against "
+                               "a corpus")
+    document_vector = coh.transition_frequency_vector(counts)
+    corpus_rows = ((profile or {}).get("feature_profiles") or {}).get("coherence_suite") or []
+    if not corpus_rows:
+        return finding(
+            _CORPUS_DELTA_ID, _CORPUS_DELTA_NAME, None, "delta", family=FAMILY,
+            sample_size=total, min_sample=MIN_SAMPLE,
+            warning="no corpus entity-grid transition profile available; build one with "
+                    "coherence_suite enabled and BOTH --parse-metrics and --model-metrics "
+                    "(this suite's cost is 'parse' and it requires sentence_transformers, so "
+                    "textgrader.corpus._metric_names needs both flags before profile_vector "
+                    "ever runs - see this module's docstring)")
+    means = {key: sum(row.get(key, 0.0) for row in corpus_rows) / len(corpus_rows)
+            for key in coh.TRANSITION_KEYS}
+    sds = {key: (sum((row.get(key, 0.0) - means[key]) ** 2 for row in corpus_rows)
+                / len(corpus_rows)) ** 0.5 for key in coh.TRANSITION_KEYS}
+    z_scores = {key: abs(document_vector.get(key, 0.0) - means[key]) / sds[key]
+               for key in coh.TRANSITION_KEYS if sds[key]}
+    delta = sum(z_scores.values()) / len(z_scores) if z_scores else None
+    evidence = [{"transition": key, "z_score": z, "document_rate": document_vector.get(key, 0.0),
+                "corpus_mean_rate": means[key]}
+               for key, z in sorted(z_scores.items(), key=lambda item: -item[1])[:16]]
+    return finding(
+        _CORPUS_DELTA_ID, _CORPUS_DELTA_NAME, delta, "delta", family=FAMILY,
+        sample_size=total, min_sample=MIN_SAMPLE,
+        distribution={"backend": "surface_lemma", "corpus_size": len(corpus_rows),
+                     "role_schema": coh.ROLE_SCHEMA_VERSION,
+                     "transitions_with_variance": len(z_scores)},
+        evidence=evidence,
+        warning=None if z_scores else
+        "corpus entity-grid transition profile had zero variance for every transition type")
+
+
+def _entity(analysis: DocumentAnalysis, config: Mapping[str, Any],
+           profile: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     all_ids = [pair for suffix in ("", "narration", "dialogue") for pair in _grid_ids(suffix)]
     all_ids.append(_graph_ids(""))
+    all_ids.append((_CORPUS_DELTA_ID, _CORPUS_DELTA_NAME))
     reason = analysis.nlp_unavailable
     if reason:
         return [unavailable(metric_id, name, reason, family=FAMILY) for metric_id, name in all_ids]
@@ -811,6 +1009,7 @@ def _entity(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[
     graph_id, graph_name = _graph_ids("")
     out.append(_entity_graph(graph_id, graph_name, rows, tracked, graph_window,
                              min_mentions_for_graph, freq, _SURFACE_BACKEND))
+    out.append(_entity_grid_transition_corpus_delta(rows, profile))
     return out
 
 

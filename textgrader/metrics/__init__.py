@@ -229,12 +229,14 @@ REGISTRY: dict[str, MetricSpec] = dict([
     _spec("coherence_suite", "coherence_suite", "discourse", "parse",
           requires=("spacy", "sentence_transformers", "networkx", "fastcoref", "nltk"),
           defaults={
-              "features": {"lexical": True, "lexical_wordnet": False, "semantic": True,
+              "features": {"lexical": True, "lexical_wordnet": False,
+                          "lexical_wordnet_hypernym": False, "semantic": True,
                           "entity": True, "coreference": False, "connectives": True,
                           "order_permutation": True},
               "min_word_len": 3,
               "chain_gap": 3,
               "chain_min_length": 2,
+              "chain_hypernym_max_distance": 3,
               "semantic_model": "all-MiniLM-L6-v2",
               "semantic_low_tail_threshold": 0.15,
               "entity_lookback_sentences": 10,
@@ -251,13 +253,15 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "order_max_paragraphs_sampled": 30,
               "order_max_paragraphs_for_doc": 60,
           },
-          summary="Experimental discourse coherence/cohesion: lexical and WordNet-aware "
-                  "semantic adjacency, a surface-based entity grid and graph (with narration/"
-                  "dialogue channel splits) plus an optional real-coreference (fastcoref) "
-                  "backend reported side by side with it, connective-family rates, and "
-                  "sentence/paragraph order-permutation baselines. Off by default; each group "
-                  "toggles independently under 'features', and the coreference/WordNet groups "
-                  "stay off even when the rest of the suite is enabled."),
+          summary="Experimental discourse coherence/cohesion: lexical, WordNet-synonym and "
+                  "WordNet-hypernym-proximity lexical chains, embedding-based semantic "
+                  "adjacency, a surface-based entity grid and graph (with narration/dialogue "
+                  "channel splits) and a corpus-referenced transition-frequency delta, plus an "
+                  "optional real-coreference (fastcoref) backend reported side by side with the "
+                  "surface grid, connective-family rates, and sentence/paragraph "
+                  "order-permutation baselines. Off by default; each group toggles "
+                  "independently under 'features', and the coreference/WordNet groups stay off "
+                  "even when the rest of the suite is enabled."),
     _spec("logic_suite", "logic_suite", "discourse", "parse",
           ("spacy", "transformers", "fastcoref", "nltk", "dateutil"),
           defaults={
