@@ -31,6 +31,9 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "sentence_transformers": ("sentence_transformers", "pip install sentence-transformers"),
     "sklearn": ("sklearn", "pip install scikit-learn"),
     "ruptures": ("ruptures", "pip install ruptures"),
+    # spaCy component metrics (entropy/perplexity, readability); used directly
+    # by randomness_suite's textdescriptives cross-check (off by default,
+    # needs its own spaCy pipeline with the component attached).
     "textdescriptives": ("textdescriptives", "pip install textdescriptives"),
     "networkx": ("networkx", "pip install networkx"),
     # Neural coreference resolution for coherence_suite's optional
@@ -47,12 +50,25 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # Compression channels for textgrader.metrics.randomness_suite. Every one
     # of these is optional: the stdlib zlib/gzip/bz2/lzma channels cover the
     # suite's acceptance criteria on their own, and each of these degrades to
-    # one "unavailable" finding rather than to a missing suite.
+    # one "unavailable" finding rather than to a missing suite. All four -
+    # zstandard, brotli, lz4, pyppmd - are installed and exercised for real;
+    # pyppmd additionally backs a genuine PPM predictive-model channel
+    # (cross-entropy, not only a compression ratio). snappy needs the system
+    # libsnappy-dev package, which this environment does not have, so it
+    # stays unavailable, proving the degradation path still works.
     "zstandard": ("zstandard", "pip install zstandard"),
     "brotli": ("brotli", "pip install brotli"),
     "lz4": ("lz4.frame", "pip install lz4"),
     "snappy": ("snappy", "pip install python-snappy"),
     "pyppmd": ("pyppmd", "pip install pyppmd"),
+    # A pretrained causal language model for randomness_suite's neural-LM
+    # perplexity channel (features.neural_language_model, off by default).
+    # Heavy (torch is a multi-gigabyte install) and only imported when that
+    # flag is explicitly on - never during corpus profiling, which runs this
+    # suite's other, cheap channels with default settings. See that channel's
+    # docstring for why its perplexity is not a gibberish detector.
+    "torch": ("torch", "pip install torch"),
+    "transformers": ("transformers", "pip install transformers"),
     # ADF stationarity test for timeseries_suite's "stationarity" feature.
     # Everything else that suite computes (ACF, trend, spectral, Hurst, DFA,
     # permutation entropy, change points, Page-Hinkley) is dependency-free or

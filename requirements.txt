@@ -72,9 +72,11 @@ fastcoref>=2.1
 pandas>=2.0
 
 # Descriptive statistics, readability, dependency distance and coherence on top
-# of spaCy.  TextGrader computes these directly from the shared parse, so this
-# is here for users who want its extra features in their own code rather than
-# because a metric needs it.
+# of spaCy.  Used directly by randomness_suite's textdescriptives cross-check
+# (features.textdescriptives_cross_check, off by default): it builds its own
+# spaCy pipeline with textdescriptives' information_theory component attached
+# and reports the result next to this suite's own wordfreq-based rarity
+# channel, without reconciling them - see that channel's docstring.
 textdescriptives>=2.8
 
 # Test runner.  The suite is pytest-based; `unittest discover` silently skipped
@@ -85,6 +87,10 @@ pytest>=7.0
 # (textgrader.metrics.randomness_suite).  zlib, gzip, bz2 and lzma need none of
 # these; each package below backs exactly one additional compressor and
 # degrades to a visible "unavailable" finding, never a crash, if it is absent.
+# pyppmd additionally backs a real PPM predictive-model channel
+# (ppm_cross_entropy), not only a compression ratio. python-snappy needs the
+# system libsnappy-dev package; without it, its one finding degrades visibly,
+# which is the point - it is left in compression_algorithms on purpose.
 zstandard>=0.21
 brotli>=1.1
 lz4>=4.3
@@ -97,24 +103,13 @@ pyppmd>=1.1
 # above; without this one it falls back to a labelled, weaker half-split proxy.
 statsmodels>=0.14
 
-# NLI cross-encoder and coreference backends for the experimental logic_suite
-# metric's "nli_entailment" and "coreference_resolution" features.  Both are
-# off by default and, like sentence-transformers above, pull in a multi-
-# gigabyte torch install that most users do not need -- installed here rather
-# than split into a second embeddings-style extras file only because
-# logic_suite's own gate (cost="parse", features off by default) already keeps
-# them from ever loading uninvited; see the module docstring's "gating rule"
-# note before changing that. Without transformers, the NLI channel reports
-# "unavailable" with an install hint and every other logic_suite measurement
-# is unaffected. fastcoref additionally pulls in its own spaCy dependency and,
-# as shipped, was found at the time of writing to be incompatible with recent
-# transformers releases (see textgrader/propositions.py); coreference
-# resolution degrades to "unavailable" rather than crashing when that happens.
-transformers>=4.40
-torch>=2.0
-fastcoref>=2.1
-
 # Date parsing for logic_suite's "temporal_ordering" feature (which of two
-# differing dates on the same subject+predicate is earlier). Lightweight, no
-# torch dependency, unlike the three packages just above.
+# differing dates on the same subject+predicate is earlier).  Lightweight and
+# torch-free, unlike the neural backends, which is why it lives here.
 python-dateutil>=2.8
+
+# The neural backends several experimental suites can use -- an NLI
+# cross-encoder, a coreference resolver and a causal language model -- are NOT
+# here: they pull in torch, so they live in requirements-embeddings.txt beside
+# sentence-transformers for the same reason.  Every channel that wants one is
+# off by default and reports "unavailable" with an install hint without it.

@@ -18,17 +18,23 @@ toggle plus its own named tunables, because a suite this broad has no single
 "reasonable" configuration for every use.
 
 **Language models are trained on a held-out split of the document being
-graded, never on the whole thing.** There is no bundled or downloaded
-reference language model in this codebase (no KenLM binary, no pretrained
-weights), so "reference likelihood" here means: hold back a suffix of the
-document's own sentences, fit an n-gram model with additive smoothing on
-everything before it, and score the held-out suffix. This is a legitimate,
-testable, leave-one-out measurement of how internally predictable a text is at
-several linguistic levels; it is NOT a claim about English in general, and
-every finding says so in its ``distribution``. The corruption-baseline group
-reuses the exact same trained model to score a corrupted version of the same
-held-out text, which is what turns "predictable to itself" into "sensitive to
-word order / character order / sentence order", per the brief.
+graded, never on the whole thing - except the one channel that says
+otherwise.** Every n-gram channel here (char, byte, word, POS, dependency,
+punctuation) and the PPM channel work the same way: hold back a suffix of the
+document's own sentences, fit a model with additive smoothing (or, for PPM,
+an adaptive context model) on everything before it, and score the held-out
+suffix. This is a legitimate, testable, leave-one-out measurement of how
+internally predictable a text is at several linguistic levels; it is NOT a
+claim about English in general, and every one of these findings says so in
+its ``distribution``. The corruption-baseline group reuses the exact same
+trained model to score a corrupted version of the same held-out text, which
+is what turns "predictable to itself" into "sensitive to word order /
+character order / sentence order", per the brief. The single exception is
+``features.neural_language_model`` (off by default): now that torch and
+transformers are installed, that one channel scores text under a real
+pretrained model (distilgpt2) instead of one fit on the document, which IS a
+claim about general English, with its own caveats spelled out in "Judgment
+calls" below and in the channel's own docstring.
 
 **Sample-size discipline is the organizing constraint of this whole module.**
 Compression ratio, every entropy family, and every perplexity number move with
@@ -62,26 +68,68 @@ than a number that mostly encodes their difference in length.
   compared against a model trained on a disjoint, earlier slice of the same
   document, so nothing is scored against text it was fit on.
 * "Letter-frequency divergence from English" uses single-letter frequencies
-  only (a small, well-established 26-value table). A letter-bigram reference
-  table would need either a licensed frequency list or a general corpus this
-  codebase does not ship, so bigram divergence is not implemented (see
-  Deferred) rather than approximated from something unverifiable.
+  from a small, well-established 26-value table (Lewand 2000). Letter-*bigram*
+  divergence needed a reference table too, and this codebase ships no raw
+  reference corpus to build one from (see NCD, below) - but it does ship
+  ``data/prose_reference.json``, whose ``word_frequency`` field is a
+  53,000-type word-count table pooled from the reference corpus at build
+  time. Weighting every consecutive a-z letter pair inside every word by that
+  word's corpus count turns a word-frequency table nobody built for this
+  purpose into a legitimate bigram frequency table (the top results - "th",
+  "he", "in", "er", "an" - match published English bigram-frequency lists,
+  which is the actual check that it is legitimate, not a table pulled from
+  thin air). ``distribution.reference`` on the finding names this exact
+  source so nobody mistakes it for a licensed table.
 * The "unpronounceable cluster" and "known-word rate" channels are
   deliberately weak, independent sensors, not a spellchecker: a heuristic
   consonant-run count will flag real words ("rhythm", "strengths") and a
   wordfreq lookup will miss real names. That is fine; they are one vote each,
   reported for what they are.
+* The neural causal-LM perplexity channel (``features.neural_language_model``,
+  off by default) is the one deliberate exception to "no bundled or
+  downloaded reference language model": torch and transformers are now
+  installed, so a real pretrained model (distilgpt2 by default) is available
+  and answers a question the from-scratch n-gram channels structurally
+  cannot - how well-formed does this read against general English, not just
+  against itself. It is scored for what it is worth and no further: subword
+  (BPE) tokenization fragments unfamiliar strings into short, individually
+  unsurprising pieces, so this channel is NOT a gibberish detector and can
+  rank purely random letters as *more* fluent than grammatically-scrambled
+  real words (measured on this exact model: a real sentence scores ~243
+  perplexity, the same sentence word-shuffled scores ~10,053, and random
+  letters of the same length score ~303 - lower than the shuffled real
+  sentence). See ``_group_neural_language_model``'s docstring and the
+  finding's own ``distribution`` note for the full explanation; the character
+  n-gram and compression channels above remain this module's gibberish
+  sensors.
+* The ``textdescriptives`` cross-check (``features.textdescriptives_cross_check``,
+  off by default) reports that package's ``information_theory`` component
+  numbers (entropy/perplexity from spaCy's static lexeme-probability table)
+  next to this module's own wordfreq-based ``unknown_word_rate``, on purpose,
+  without reconciling them: they use different reference tables and different
+  formulas (textdescriptives sums per-token -p*log(p) over the whole
+  document rather than normalizing by token count first), so the numbers
+  disagree in scale, and the disagreement itself is reported rather than
+  hidden.
 
 **Deferred** (named, not silently skipped):
 
-* KenLM, the NLTK language-model module, and MALLET are not used. KenLM needs
-  a compiled binary and a trained ARPA model this environment cannot build or
-  download; shipping a from-scratch character n-gram trainer (above) is the
-  stdlib-only substitute the task brief explicitly allows. NLTK's own
-  smoothing classes were skipped in favor of one Lidstone-smoothed
-  implementation shared by every n-gram channel here (char, byte, word, POS,
-  dependency, punctuation), so all six report comparably smoothed numbers
-  instead of six different smoothing behaviours.
+* KenLM and MALLET are not used and stay out of scope: KenLM needs a compiled
+  binary this environment has no build toolchain for, and MALLET is a
+  separate Java toolchain, not a Python package this suite can degrade
+  cleanly around. ``snappy`` (needs the system ``libsnappy-dev`` package, not
+  installable from a Python wheel here) stays unavailable for the same
+  reason and is left in ``compression_algorithms`` on purpose, so its
+  "unavailable" finding keeps proving the degradation path works. Every
+  *other* compressor named in the original brief - zstandard, brotli, lz4,
+  pyppmd - is installed, exercised, and used for real, including pyppmd as an
+  actual PPM predictive-model channel (``ppm_cross_entropy``), not only a
+  compression ratio.
+* The NLTK language-model module is not used. NLTK's own smoothing classes
+  were skipped in favor of one Lidstone-smoothed implementation shared by
+  every from-scratch n-gram channel here (char, byte, word, POS, dependency,
+  punctuation), so all six report comparably smoothed numbers instead of six
+  different smoothing behaviours.
 * ``gibberish-detector`` is not installed and is not added as a dependency;
   the consonant-cluster heuristic here is this suite's independent weak
   sensor for the same phenomenon, implemented so it degrades to nothing
@@ -93,39 +141,59 @@ than a number that mostly encodes their difference in length.
   implementing them directly on top of NumPy means they degrade to "NumPy
   unavailable" instead of "one more third-party package unavailable", and are
   easy to unit-test against the textbook formulas.
-* Normalized Compression Distance against a whole reference corpus is not
-  implemented. Nothing reaches this module except one document's
-  ``DocumentAnalysis`` and (optionally) a corpus *profile* of scalar
-  distributions; there is no representative-document store to compare
-  against without extending the corpus-builder pipeline, which is out of
-  this task's file scope. What IS implemented is NCD between a document and
-  seeded corruptions of itself (word/char/sentence shuffles), which answers
-  a related, self-contained question: how much does compressibility change
-  when this specific kind of structure is destroyed.
+* Normalized Compression Distance against a whole reference corpus is still
+  not implemented, and for the same reason as before: nothing reaches this
+  module except one document's ``DocumentAnalysis`` and (optionally) a
+  corpus *profile* of scalar distributions and pooled counts, never raw
+  text, so there is no representative document to concatenate-and-compress
+  against. The letter-bigram table above is built from one of those pooled
+  counts (a word-frequency table), which is a much weaker artifact than raw
+  text - it can drive a frequency-table divergence but not NCD, which needs
+  actual compressible bytes. What IS implemented is NCD between a document
+  and seeded corruptions of itself (word/char/sentence shuffles), which
+  answers a related, self-contained question: how much does compressibility
+  change when this specific kind of structure is destroyed.
 * Byte n-gram cross-entropy is reported at one configurable order rather
   than swept across orders like the character channel: for UTF-8 English
   prose the byte and character streams are almost identical past order 2,
   so a full sweep would mostly restate the character sweep at higher cost.
-* POS and dependency-label n-gram perplexity are real, implemented measures,
-  but sit behind ``features.pos_dependency`` (off by default) because they
-  need the shared spaCy parse, which is the one part of this suite that would
-  otherwise turn a "moderate"-cost metric into a "parse"-cost one for every
-  user regardless of whether they wanted this particular channel.
+* POS and dependency-label n-gram perplexity, and the ``textdescriptives``
+  cross-check, are real, implemented measures, but sit behind
+  ``features.pos_dependency`` and ``features.textdescriptives_cross_check``
+  (both off by default) because both need a spaCy parse - the shared one for
+  the former, a second, differently-configured pipeline (with
+  textdescriptives' components attached) for the latter, since those
+  components must be present before parsing, not applied after. Either one
+  would otherwise turn a "moderate"-cost metric into a "parse"-cost one for
+  every user regardless of whether they wanted that particular channel.
+* The neural causal-LM channel needs torch and transformers, both of which
+  are large, and a model download or a warm local cache the first time a
+  given ``neural_lm_model`` name is used; ``features.neural_language_model``
+  is off by default for that cost, not for a lack of a working
+  implementation (see "Judgment calls" above), and the code path that would
+  import either package is never reached unless that flag is explicitly on
+  (verified by a test that patches ``optional.require`` and asserts neither
+  name is ever requested under the default configuration).
 """
 
 from __future__ import annotations
 
 import bz2
 import gzip
+import importlib
+import json
 import lzma
 import math
 import random
+import threading
 import zlib
 from collections import Counter
 from typing import Any, Mapping, Sequence
 
+from .. import optional
 from ..document import DocumentAnalysis
 from ..optional import require
+from ..paths import PROSE_REFERENCE
 from ..stats import shannon_entropy as numeric_shannon_entropy
 from .common import MODERATE, finding, option, rate, unavailable
 from .punctuation_profile import MARK_RE
@@ -149,6 +217,10 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "pos_dependency": False,  # needs the shared spaCy parse; opt-in.
     "corruption_baselines": True,
     "lexical_gibberish": True,
+    "ppm_language_model": True,  # pyppmd is a real predictive model, not just a ratio.
+    "letter_bigram_divergence": True,  # derived reference table; see module docstring.
+    "neural_language_model": False,  # downloads/runs a pretrained model; opt-in, see module docstring.
+    "textdescriptives_cross_check": False,  # needs its own spaCy pipeline; opt-in for parse cost.
 }
 
 #: Every tunable this module reads via ``option()``. Mirrored, key for key,
@@ -187,6 +259,10 @@ DEFAULTS: dict[str, Any] = {
     "corruption_word_order": 2,
     "corruption_max_chars": 20_000,
     "consonant_cluster_min": 4,
+    "ppm_max_order": 6,
+    "neural_lm_model": "distilgpt2",
+    "neural_lm_max_chars": 6_000,
+    "textdescriptives_max_chars": 50_000,
 }
 
 VOWELS = set("aeiou")
@@ -202,6 +278,82 @@ ENGLISH_LETTER_FREQ: dict[str, float] = {
 }
 _LETTER_TOTAL = sum(ENGLISH_LETTER_FREQ.values())
 ENGLISH_LETTER_FREQ = {k: v / _LETTER_TOTAL for k, v in ENGLISH_LETTER_FREQ.items()}
+
+_ASCII_LOWERCASE = set("abcdefghijklmnopqrstuvwxyz")
+
+_bigram_reference_lock = threading.Lock()
+_bigram_reference_cache: tuple[dict[str, float] | None, int, str | None] | None = None
+
+#: Loaded (tokenizer, model) pairs for ``features.neural_language_model``,
+#: keyed by model name. A model is process-level, reusable state, not
+#: something derived from one document, so it does not belong on
+#: ``analysis.memo``; caching it here means grading several documents in one
+#: process loads each named model once.
+_lm_model_lock = threading.Lock()
+_lm_model_cache: dict[str, tuple[Any, Any] | None] = {}
+
+#: Loaded spaCy+textdescriptives pipelines for ``features.textdescriptives_cross_check``,
+#: keyed by spaCy model name. Same reasoning as ``_lm_model_cache``: this is a
+#: second, differently-configured spaCy pipeline (textdescriptives'
+#: components must be added before parsing), not the one ``analysis.nlp``
+#: already builds and caches per document.
+_td_pipeline_lock = threading.Lock()
+_td_pipeline_cache: dict[str, Any] = {}
+
+
+def _bigram_reference_table() -> tuple[dict[str, float] | None, int, str | None]:
+    """A letter-bigram frequency table derived from the shipped corpus profile.
+
+    No raw reference corpus ships with this codebase (see the module
+    docstring's "Deferred" section on NCD), but ``data/prose_reference.json``
+    does ship a pooled ``word_frequency`` table: every distinct word type the
+    reference corpus contained, with its total count across every book. That
+    is enough to build a bigram table nobody built for this purpose: weight
+    every consecutive a-z letter pair inside every reference word by that
+    word's corpus count. Computed once per process and cached, since the
+    source file is a couple of megabytes of JSON.
+    """
+
+    global _bigram_reference_cache
+    with _bigram_reference_lock:
+        if _bigram_reference_cache is not None:
+            return _bigram_reference_cache
+    try:
+        payload = json.loads(PROSE_REFERENCE.read_text(encoding="utf-8"))
+        word_frequency = payload["word_frequency"]
+        if not isinstance(word_frequency, dict) or not word_frequency:
+            raise ValueError("word_frequency is missing or empty")
+        counts: Counter = Counter()
+        for word, count in word_frequency.items():
+            letters = [char for char in str(word).lower() if char in _ASCII_LOWERCASE]
+            for a, b in zip(letters, letters[1:]):
+                counts[a + b] += count
+        total = sum(counts.values())
+        if not total:
+            raise ValueError("no a-z letter pairs found in word_frequency")
+        result = ({pair: count / total for pair, count in counts.items()}, total, None)
+    except Exception as exc:  # missing file, unreadable JSON, unexpected shape
+        result = (None, 0, f"could not derive a letter-bigram reference table from "
+                            f"{PROSE_REFERENCE.name} ({type(exc).__name__}: {exc}); rebuild the "
+                            f"shipped corpus profile or run python3 build_corpus.py")
+    with _bigram_reference_lock:
+        _bigram_reference_cache = result
+    return result
+
+
+def _reset_randomness_suite_caches() -> None:
+    """Forget every process-level cache this module keeps, for tests."""
+
+    global _bigram_reference_cache
+    with _bigram_reference_lock:
+        _bigram_reference_cache = None
+    with _lm_model_lock:
+        _lm_model_cache.clear()
+    with _td_pipeline_lock:
+        _td_pipeline_cache.clear()
+
+
+optional.on_reset(_reset_randomness_suite_caches)
 
 
 def _features(config: Mapping[str, Any] | None) -> dict[str, bool]:
@@ -364,17 +516,29 @@ def _corruption_texts(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> di
     ``test`` and against seeded corruptions of ``test``, so nothing is ever
     scored against text it was fit on, and the corruption itself never touches
     more than ``corruption_max_chars`` of text.
+
+    Four groups in this module now want exactly this split (corruption
+    baselines, NCD, the n-gram low-likelihood-sentence channel, and the new
+    PPM cross-entropy channel), so it is cached on ``analysis.memo`` rather
+    than rebuilt once per group: two metrics that ask the same document the
+    same question should get the same answer from the same work, not four
+    independent re-derivations of it.
     """
 
+    fraction = option(opts, "corruption_sentence_fraction", 0.3)
+    cap = option(opts, "corruption_max_chars", 20_000)
+    key = f"randomness.corruption_texts:{fraction}:{cap}"
+    return analysis.memo(key, lambda: _build_corruption_texts(analysis, fraction, cap))
+
+
+def _build_corruption_texts(analysis: DocumentAnalysis, fraction: float, cap: int) -> dict[str, Any] | None:
     sentences = analysis.sentences
     if len(sentences) < 12:
         return None
-    fraction = option(opts, "corruption_sentence_fraction", 0.3)
     split = max(1, int(len(sentences) * (1 - fraction)))
     train_sents, test_sents = sentences[:split], sentences[split:]
     if not test_sents:
         return None
-    cap = option(opts, "corruption_max_chars", 20_000)
     train_text = " ".join(train_sents).lower()[:cap]
     test_text = " ".join(test_sents).lower()[:cap]
     if len(train_text) < 200 or len(test_text) < 50:
@@ -390,6 +554,43 @@ def _shuffled(rng: random.Random, items: Sequence[Any]) -> list[Any]:
 
 # --------------------------------------------------------------- compression
 
+def _effective_setting(name: str, level: int) -> tuple[str, int]:
+    """The (parameter name, clamped value) each codec actually receives.
+
+    Every codec here shares the one ``compression_level`` knob, but each has
+    its own valid range and its own name for it, and getting the clamp wrong
+    is not cosmetic: an out-of-range value raises inside the codec (``zstd``
+    rejects any level above 22; ``pyppmd``'s default variant rejects a
+    negative ``max_order``) and used to be swallowed by ``_compress``'s
+    blanket ``except Exception``, silently turning a misconfiguration into an
+    "unavailable" finding instead of a working result. Clamping here, once,
+    keeps ``_compress`` and the finding's own ``distribution`` in agreement
+    about what was actually used.
+    """
+
+    if name == "bz2":
+        return "level", max(1, min(level, 9))
+    if name == "lzma":
+        return "preset", max(0, min(level, 9))
+    if name == "brotli":
+        return "quality", max(0, min(level, 11))
+    if name == "zstd":
+        return "level", max(1, min(level, 22))
+    if name == "lz4":
+        # 0-16; values above 16 are already treated as 16 by the library, and
+        # values below 0 are a documented "fast acceleration" mode, so both
+        # ends are left unclamped here.
+        return "compression_level", level
+    if name == "ppmd":
+        # pyppmd's "I" variant (the default) only accepts max_order 2-16;
+        # compression_level's default of 6 happens to fall inside that range,
+        # but nothing enforced it before, so a configured level outside it
+        # crashed straight into _compress's except-and-degrade path instead
+        # of compressing.
+        return "max_order", max(2, min(level, 16))
+    return "level", level  # zlib, gzip, snappy: pass the configured level through.
+
+
 def _compress(name: str, data: bytes, level: int) -> tuple[bytes | None, str | None]:
     try:
         if name == "zlib":
@@ -397,24 +598,29 @@ def _compress(name: str, data: bytes, level: int) -> tuple[bytes | None, str | N
         if name == "gzip":
             return gzip.compress(data, compresslevel=level), None
         if name == "bz2":
-            return bz2.compress(data, compresslevel=max(1, min(level, 9))), None
+            _, setting = _effective_setting(name, level)
+            return bz2.compress(data, compresslevel=setting), None
         if name == "lzma":
-            return lzma.compress(data, preset=max(0, min(level, 9))), None
+            _, setting = _effective_setting(name, level)
+            return lzma.compress(data, preset=setting), None
         if name == "zstd":
             module, reason = require("zstandard")
             if module is None:
                 return None, reason
-            return module.ZstdCompressor(level=level).compress(data), None
+            _, setting = _effective_setting(name, level)
+            return module.ZstdCompressor(level=setting).compress(data), None
         if name == "brotli":
             module, reason = require("brotli")
             if module is None:
                 return None, reason
-            return module.compress(data, quality=max(0, min(level, 11))), None
+            _, setting = _effective_setting(name, level)
+            return module.compress(data, quality=setting), None
         if name == "lz4":
             module, reason = require("lz4")
             if module is None:
                 return None, reason
-            return module.compress(data, compression_level=level), None
+            _, setting = _effective_setting(name, level)
+            return module.compress(data, compression_level=setting), None
         if name == "snappy":
             module, reason = require("snappy")
             if module is None:
@@ -424,22 +630,44 @@ def _compress(name: str, data: bytes, level: int) -> tuple[bytes | None, str | N
             module, reason = require("pyppmd")
             if module is None:
                 return None, reason
-            return module.compress(data), None
+            _, setting = _effective_setting(name, level)
+            return module.compress(data, max_order=setting), None
         return None, f"unknown compressor {name!r}"
     except Exception as exc:  # pragma: no cover - defensive; a codec may reject input
         return None, f"{name} failed ({type(exc).__name__}: {exc})"
 
 
+#: Module actually imported for each short compressor name, for both
+#: ``require()`` (optional.PACKAGES is keyed by this) and version lookup.
+_COMPRESSOR_MODULE_NAME = {"zstd": "zstandard", "brotli": "brotli", "lz4": "lz4",
+                          "snappy": "snappy", "ppmd": "pyppmd"}
+
+
 def _library_version(name: str) -> str | None:
-    versions = {"zlib": zlib.ZLIB_VERSION}
-    if name in versions:
-        return versions[name]
-    module_name = {"zstd": "zstandard", "brotli": "brotli", "lz4": "lz4",
-                   "snappy": "snappy", "ppmd": "pyppmd"}.get(name)
+    if name == "zlib":
+        return zlib.ZLIB_VERSION
+    module_name = _COMPRESSOR_MODULE_NAME.get(name)
     if module_name is None:
         return None
     module, _ = require(module_name)
-    return getattr(module, "__version__", None) if module is not None else None
+    if module is None:
+        return None
+    version = getattr(module, "__version__", None)
+    if version is not None:
+        return version
+    if name == "lz4":
+        # require("lz4") returns the lz4.frame submodule (PACKAGES imports
+        # "lz4.frame" directly, since that is what the compressor needs), and
+        # that submodule carries no __version__ of its own - only the
+        # top-level lz4 package does. Without this fallback every lz4 finding
+        # silently recorded library_version=None even though the package
+        # (and its version) were right there; require("lz4") having already
+        # succeeded means the top-level package is importable too.
+        try:
+            return getattr(importlib.import_module("lz4"), "__version__", None)
+        except Exception:  # pragma: no cover - defensive only
+            return None
+    return None
 
 
 # ------------------------------------------------------------------- groups
@@ -805,13 +1033,18 @@ def _group_compression(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> l
         compressed_len = len(compressed) or 1
         ratio = original / compressed_len
         bits_per_char = 8.0 * compressed_len / len(block)
+        setting_name, setting_value = _effective_setting(name, level)
         out.append(finding(
             f"{ID}compression_ratio_{name}", f"Compression ratio ({name}, fixed block)", ratio, "ratio",
             family=FAMILY, sample_size=len(block), min_sample=MIN_SAMPLE, sample_size_sensitive=True,
             distribution={"algorithm": name, "level": level, "block_chars": len(block),
                          "original_bytes": original, "compressed_bytes": compressed_len,
                          "bits_per_char": bits_per_char, "library_version": _library_version(name),
-                         "encoding": "utf-8, lowercased canonical text"}))
+                         "encoding": "utf-8, lowercased canonical text",
+                         # ``level`` above is the one shared config knob; this codec's own
+                         # parameter (name and clamped value) may differ from it, e.g.
+                         # ppmd's "max_order" or zstd's range-clamped "level".
+                         "effective_setting": {setting_name: setting_value}}))
 
     zlib_compressed, _ = _compress("zlib", block_bytes, level)
     if zlib_compressed is not None:
@@ -1011,6 +1244,114 @@ def _group_language_model(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -
         evidence=[{"sentence": excerpt}],
         distribution={"order": order, "held_out_sentences_scored": len(per_sentence)}))
     return out
+
+
+def _group_ppm_language_model(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """PPM (pyppmd) cross-entropy of the held-out suffix, as a real predictive model.
+
+    ``compression_ratio_ppmd`` (in ``_group_compression``) answers "how much
+    does PPMd shrink this text"; this answers a different question, "how
+    surprised is PPMd's own adaptive model by text it has not seen", which is
+    what makes it a language-model channel rather than another compression
+    ratio. PPM (prediction by partial matching) already works by building an
+    adaptive predictive model as it goes, so its cross-entropy on held-out
+    text can be read straight off the compressed size: compressing
+    ``train + test`` costs ``compress(train)``'s bits for the ``train``
+    prefix (approximately - the codec's own small per-call header is the
+    only thing that does not cancel exactly) plus however many additional
+    bits the model, now primed on ``train``, needed to describe ``test``. The
+    marginal cost *is* the cross-entropy, in the same units and against the
+    same held-out split every other n-gram channel here uses, without this
+    module needing to reimplement PPM's context-mixing itself.
+    """
+
+    mid = f"{ID}ppm_cross_entropy"
+    name = "PPM (pyppmd) cross-entropy of held-out text"
+    module, reason = require("pyppmd")
+    if module is None:
+        return [unavailable(mid, name, reason, family=FAMILY)]
+
+    prep = _corruption_texts(analysis, opts)
+    if prep is None:
+        return [unavailable(mid, name, "fewer than 12 sentences to build a train/held-out split",
+                            family=FAMILY)]
+
+    order = max(2, min(option(opts, "ppm_max_order", 6), 16))
+    train_bytes = prep["train_text"].encode("utf-8")
+    test_bytes = prep["test_text"].encode("utf-8")
+    test_chars = len(prep["test_text"])
+    if test_chars < 50:
+        return [unavailable(mid, name, "held-out text too short to score", family=FAMILY)]
+
+    try:
+        train_compressed = module.compress(train_bytes, max_order=order)
+        combined_compressed = module.compress(train_bytes + test_bytes, max_order=order)
+    except Exception as exc:
+        return [unavailable(mid, name, f"pyppmd failed ({type(exc).__name__}: {exc})", family=FAMILY)]
+
+    delta_bits = 8.0 * (len(combined_compressed) - len(train_compressed))
+    if delta_bits <= 0:
+        return [unavailable(mid, name,
+                            "PPM model produced a non-positive held-out cost (held-out text "
+                            "compressed for free against the trained prefix); too little held-out "
+                            "text for the per-call header to cancel out", family=FAMILY)]
+
+    cross_entropy = delta_bits / test_chars
+    return [finding(
+        mid, name, cross_entropy, "bits/char", family=FAMILY, sample_size=test_chars,
+        min_sample=MIN_SAMPLE, sample_size_sensitive=True,
+        distribution={"algorithm": "ppmd", "max_order": order, "perplexity": 2 ** cross_entropy,
+                     "train_chars": len(prep["train_text"]), "test_chars": test_chars,
+                     "library_version": _library_version("ppmd"),
+                     "method": "8 * (len(compress(train+test)) - len(compress(train))) / "
+                               "len(test_chars): the marginal compressed cost of the held-out "
+                               "suffix under a model already primed on the training prefix",
+                     "note": "a real PPM predictive-model cross-entropy, not the compression "
+                             "ratio reported by compression_ratio_ppmd; compare it against "
+                             "char_ngram_cross_entropy (same held-out split, additive-smoothed "
+                             "fixed-order model) rather than against any compression_ratio_* "
+                             "finding"})]
+
+
+def _group_letter_bigram_divergence(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Jensen-Shannon divergence of this text's letter-bigram frequencies from
+    a reference table derived from the shipped corpus profile.
+
+    See the module docstring's "Judgment calls" section for where the
+    reference table comes from and why weighting bigrams by a pooled
+    word-frequency table is a legitimate substitute for a licensed one.
+    """
+
+    mid = f"{ID}letter_bigram_divergence"
+    name = "Jensen-Shannon divergence of this text's letter-bigram frequencies from a corpus-derived reference"
+    reference, total_ref, reason = _bigram_reference_table()
+    if reference is None:
+        return [unavailable(mid, name, reason, family=FAMILY)]
+
+    tokens = analysis.tokens
+    if not tokens:
+        return [unavailable(mid, name, "no words to measure", family=FAMILY)]
+
+    bigrams: Counter = Counter()
+    for word in tokens:
+        letters = [char for char in word.lower() if char in ENGLISH_LETTER_FREQ]
+        for a, b in zip(letters, letters[1:]):
+            bigrams[a + b] += 1
+    total = sum(bigrams.values())
+    if not total:
+        return [unavailable(mid, name, "no a-z letter pairs found", family=FAMILY)]
+
+    observed = {pair: count / total for pair, count in bigrams.items()}
+    divergence = _js_divergence(observed, reference)
+    return [finding(
+        mid, name, divergence, "bits", family=FAMILY, sample_size=total, min_sample=MIN_SAMPLE,
+        sample_size_sensitive=True,
+        distribution={"reference": f"derived from {PROSE_REFERENCE.name}'s word_frequency table "
+                                   f"({total_ref:,} reference letter-pair observations): every "
+                                   "consecutive a-z letter pair inside every reference word, "
+                                   "weighted by that word's corpus count",
+                     "distinct_bigrams_observed": len(bigrams),
+                     "distinct_bigrams_in_reference": len(reference)})]
 
 
 def _group_punctuation_sequence(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1315,6 +1656,221 @@ def _group_lexical_gibberish(analysis: DocumentAnalysis, opts: Mapping[str, Any]
     return out
 
 
+# ------------------------------------------------------ neural language model
+
+def _load_causal_lm(model_name: str) -> tuple[Any, Any, str | None]:
+    """Load and cache a pretrained tokenizer+model pair. Imports nothing by itself.
+
+    Callers must already have confirmed ``torch`` and ``transformers`` are
+    importable (via ``optional.require``); this function only turns a model
+    name into a ready-to-score (tokenizer, model) pair, or a reason it could
+    not.
+    """
+
+    with _lm_model_lock:
+        cached = _lm_model_cache.get(model_name)
+    if cached is not None:
+        return cached
+
+    transformers, reason = require("transformers")
+    if transformers is None:
+        result = (None, None, reason)
+    else:
+        try:
+            tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+            model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
+            model.eval()
+            result = (tokenizer, model, None)
+        except Exception as exc:
+            result = (None, None, f"could not load causal LM {model_name!r} "
+                                  f"({type(exc).__name__}: {exc}); check the model name, network "
+                                  f"access, or the Hugging Face cache")
+    with _lm_model_lock:
+        _lm_model_cache[model_name] = result
+    return result
+
+
+def _group_neural_language_model(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Perplexity under a pretrained causal LM (distilgpt2 by default).
+
+    Off by default (``features.neural_language_model``); neither ``torch``
+    nor ``transformers`` is imported (``optional.require`` is not even
+    called) unless this group actually runs, so corpus profiling - which
+    runs this suite's other, cheap channels over every reference book with
+    ``MetricSpec.defaults`` - never triggers a model load. See
+    ``test_neural_language_model_imports_nothing_under_default_config`` for
+    the check that this stays true.
+
+    **This is not a gibberish detector, and reads the wrong way on one of
+    this suite's own test corruptions.** A causal LM's tokenizer splits text
+    into subword (BPE) pieces from a fixed vocabulary; a string with no
+    recognisable word in it does not fail to tokenize, it just fragments into
+    many short, individually common pieces, each of which the model finds
+    unsurprising on its own. A real sentence with its *word order* scrambled
+    keeps every whole-word token (the vocabulary knows every word) but now in
+    an order the model finds bizarre - and that surprise compounds one token
+    at a time, order after order. So this channel can and does rank
+    character-random letters as more "fluent" than word-order-scrambled real
+    prose, even though the character n-gram and compression channels
+    elsewhere in this module correctly rank random letters as the more
+    random of the two. Measured on this exact model and default settings:
+    "The lighthouse keeper walked down to the shore at dawn." scores ~243
+    perplexity; the same sentence word-shuffled scores ~10,053; a same-length
+    span of random lowercase letters scores ~303 - below the shuffled real
+    sentence. Use this channel to ask whether a span reads as fluent,
+    in-distribution English phrasing; use the character n-gram or
+    compression channels above to detect gibberish.
+    """
+
+    mid = f"{ID}neural_lm_perplexity"
+    name = "Causal-LM perplexity (pretrained, length-capped span)"
+    torch, torch_reason = require("torch")
+    if torch is None:
+        return [unavailable(mid, name, torch_reason, family=FAMILY)]
+    transformers, tf_reason = require("transformers")
+    if transformers is None:
+        return [unavailable(mid, name, tf_reason, family=FAMILY)]
+
+    model_name = option(opts, "neural_lm_model", "distilgpt2")
+    char_cap = option(opts, "neural_lm_max_chars", 6_000)
+    text = analysis.text.strip()[:char_cap]
+    if not text:
+        return [unavailable(mid, name, "no text to score", family=FAMILY)]
+
+    tokenizer, model, reason = _load_causal_lm(model_name)
+    if model is None:
+        return [unavailable(mid, name, reason, family=FAMILY)]
+
+    try:
+        encoded = tokenizer(text, return_tensors="pt", truncation=True, max_length=1024)
+        input_ids = encoded["input_ids"]
+        if input_ids.shape[1] < 4:
+            return [unavailable(mid, name, "fewer than 4 model tokens to score", family=FAMILY)]
+        with torch.no_grad():
+            outcome = model(input_ids, labels=input_ids)
+        loss_nats = float(outcome.loss)
+    except Exception as exc:
+        return [unavailable(mid, name, f"{model_name} failed ({type(exc).__name__}: {exc})",
+                            family=FAMILY)]
+
+    if not math.isfinite(loss_nats):
+        return [unavailable(mid, name, f"{model_name} produced a non-finite loss", family=FAMILY)]
+
+    n_tokens = int(input_ids.shape[1])
+    perplexity = math.exp(loss_nats)
+    return [finding(
+        mid, name, perplexity, "perplexity", family=FAMILY, sample_size=n_tokens,
+        min_sample=MIN_SAMPLE, sample_size_sensitive=True,
+        distribution={"model": model_name, "framework": "transformers",
+                     "cross_entropy_nats_per_token": loss_nats,
+                     "cross_entropy_bits_per_token": loss_nats / math.log(2),
+                     "tokens_scored": n_tokens, "characters_scored": len(text),
+                     "tokenizer": "model-specific subword BPE vocabulary",
+                     "warning_not_a_gibberish_detector": (
+                         "subword tokenization can score purely random character strings as MORE "
+                         "fluent (lower perplexity) than grammatically-scrambled real words; see "
+                         "this group's docstring for a worked example and reasoning. Use the "
+                         "character n-gram or compression channels above for gibberish detection.")})]
+
+
+# --------------------------------------------------- textdescriptives cross-check
+
+def _load_textdescriptives_pipeline(model_name: str) -> tuple[Any, str | None]:
+    """Build and cache a spaCy pipeline with textdescriptives' information-theory
+    component attached. A second, differently-configured pipeline from
+    ``analysis.nlp``: textdescriptives' components must be present before
+    parsing, so an already-parsed ``Doc`` from the shared pipeline cannot be
+    reused here.
+    """
+
+    with _td_pipeline_lock:
+        cached = _td_pipeline_cache.get(model_name)
+    if cached is not None:
+        return cached
+
+    spacy, reason = require("spacy")
+    if spacy is None:
+        result = (None, reason)
+    else:
+        textdescriptives, td_reason = require("textdescriptives")
+        if textdescriptives is None:
+            result = (None, td_reason)
+        else:
+            try:
+                nlp = spacy.load(model_name, disable=["ner"])
+                nlp.add_pipe("textdescriptives/information_theory")
+                result = (nlp, None)
+            except Exception as exc:
+                result = (None, f"could not build a textdescriptives pipeline on {model_name!r} "
+                                f"({type(exc).__name__}: {exc}); run "
+                                f"python -m spacy download {model_name}")
+    with _td_pipeline_lock:
+        _td_pipeline_cache[model_name] = result
+    return result
+
+
+def _group_textdescriptives_cross_check(analysis: DocumentAnalysis,
+                                        opts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """textdescriptives' word log-probability entropy/perplexity, reported next
+    to (never reconciled with) this suite's own ``unknown_word_rate``.
+
+    Off by default (``features.textdescriptives_cross_check``) because it
+    needs its own spaCy parse - a second one, not the shared
+    ``analysis.spacy_docs()`` parse ``features.pos_dependency`` uses, since
+    textdescriptives' component has to be in the pipeline before parsing, not
+    added to an already-parsed ``Doc``. Both channels ask "how unusual are
+    this text's words against general English", but from different
+    references (spaCy's static lexeme-probability table here, wordfreq's Zipf
+    frequencies for ``unknown_word_rate``) and different formulas
+    (textdescriptives sums ``-p * log(p)`` per token across the whole
+    document rather than normalizing by token count, so its numbers do not
+    live on a 0-1 or bits-per-symbol scale the way this suite's other entropy
+    findings do). They are expected to disagree in scale; that disagreement
+    is the reported result, not an error to fix.
+    """
+
+    mid = f"{ID}textdescriptives_word_perplexity"
+    name = "Per-word log-probability perplexity (textdescriptives cross-check)"
+    model_name = analysis.nlp_settings.model
+    char_cap = option(opts, "textdescriptives_max_chars", 50_000)
+    text = analysis.text[:char_cap]
+    if len(text.split()) < 20:
+        return [unavailable(mid, name, "fewer than 20 words to score", family=FAMILY)]
+
+    nlp, reason = _load_textdescriptives_pipeline(model_name)
+    if nlp is None:
+        return [unavailable(mid, name, reason, family=FAMILY)]
+
+    try:
+        doc = nlp(text)
+    except Exception as exc:
+        return [unavailable(mid, name, f"textdescriptives parse failed "
+                            f"({type(exc).__name__}: {exc})", family=FAMILY)]
+
+    entropy = getattr(doc._, "entropy", None)
+    perplexity = getattr(doc._, "perplexity", None)
+    per_word = getattr(doc._, "per_word_perplexity", None)
+    if per_word is None or not math.isfinite(per_word):
+        return [unavailable(mid, name, "textdescriptives could not compute a per-word perplexity "
+                            "for this span (missing lexeme-probability table for this model?)",
+                            family=FAMILY)]
+
+    return [finding(
+        mid, name, per_word, "perplexity/word", family=FAMILY, sample_size=len(doc),
+        min_sample=MIN_SAMPLE, sample_size_sensitive=True,
+        distribution={"source": "textdescriptives/information_theory (Doc._.entropy / "
+                                "_.perplexity / _.per_word_perplexity, from spaCy token.prob "
+                                "static lexeme frequencies)",
+                     "spacy_model": model_name, "characters_scored": len(text),
+                     "tokens_scored": len(doc),
+                     "entropy_nats_raw_sum": entropy if entropy is not None and math.isfinite(entropy) else None,
+                     "perplexity_raw": perplexity if perplexity is not None and math.isfinite(perplexity) else None,
+                     "cross_check_of": f"{ID}unknown_word_rate",
+                     "note": "a different reference table and a different formula from "
+                             "unknown_word_rate (see this group's docstring); expect a different "
+                             "scale, not agreement, and treat disagreement as the finding"})]
+
+
 # ---------------------------------------------------------------------- main
 
 def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
@@ -1330,6 +1886,8 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_group_compression(analysis, config or {}))
     if features.get("language_model", True):
         out.extend(_group_language_model(analysis, config or {}))
+    if features.get("ppm_language_model", True):
+        out.extend(_group_ppm_language_model(analysis, config or {}))
     if features.get("punctuation_sequence", True):
         out.extend(_group_punctuation_sequence(analysis, config or {}))
     if features.get("pos_dependency", False):
@@ -1338,5 +1896,11 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_group_corruption_baselines(analysis, config or {}))
     if features.get("lexical_gibberish", True):
         out.extend(_group_lexical_gibberish(analysis, config or {}))
+    if features.get("letter_bigram_divergence", True):
+        out.extend(_group_letter_bigram_divergence(analysis, config or {}))
+    if features.get("neural_language_model", False):
+        out.extend(_group_neural_language_model(analysis, config or {}))
+    if features.get("textdescriptives_cross_check", False):
+        out.extend(_group_textdescriptives_cross_check(analysis, config or {}))
 
     return out

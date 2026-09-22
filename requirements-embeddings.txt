@@ -7,3 +7,18 @@
 # the finding's warning and its evidence say which backend produced the number.
 -r requirements.txt
 sentence-transformers>=2.2
+
+# NLI cross-encoder (logic_suite's `nli_entailment`), coreference resolution
+# (logic_suite and coherence_suite), and a causal language model
+# (randomness_suite's `neural_language_model`).  All three share the torch
+# install above and every one of them is off by default; without them each
+# channel reports "unavailable" with an install hint and its suite's other
+# measurements are unaffected.
+#
+# fastcoref as shipped was, at the time of writing, incompatible with recent
+# transformers releases; textgrader/coherence.py carries a narrow, documented
+# shim for that and coreference degrades rather than crashing when it is not
+# enough.
+transformers>=4.40
+torch>=2.0
+fastcoref>=2.1
