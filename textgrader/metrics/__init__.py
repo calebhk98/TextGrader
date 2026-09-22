@@ -222,7 +222,7 @@ REGISTRY: dict[str, MetricSpec] = dict([
           defaults={"window_words": 2500},
           summary="Gradual style drift from the opening to the close."),
     _spec("change_points", "drift_change_points", "book_drift", "moderate",
-          requires=("ruptures",), defaults={"window_words": 2500, "penalty": 3.0},
+          requires=("ruptures",), defaults={"window_words": 2500, "penalty": 2.0},
           summary="Where the style changes abruptly."),
 
     # ---------------------------------------------------------- experimental

@@ -190,3 +190,72 @@ class BundledFrequencyTable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChangePointPenaltyScaling(unittest.TestCase):
+    """PELT's penalty is the whole false-positive control, so it cannot be a
+    constant: a fixed penalty admits spurious change points at a rate that
+    grows with the book. This only ever showed up once ``ruptures`` was
+    actually installed, because without it the metric silently used its
+    single-split fallback instead.
+    """
+
+    @staticmethod
+    def _noise(sections, features=8, seed=0):
+        import random
+        rng = random.Random(seed)
+        columns = [[rng.gauss(0, 1) for _ in range(sections)] for _ in range(features)]
+        standardized = []
+        for column in columns:
+            mean = sum(column) / len(column)
+            var = sum((v - mean) ** 2 for v in column) / len(column)
+            std = var ** 0.5 or 1.0
+            standardized.append([(v - mean) / std for v in column])
+        return [list(row) for row in zip(*standardized)]
+
+    def test_penalty_scales_with_sections_and_features(self):
+        from textgrader.metrics.drift_change_points import bic_penalty
+        import math
+        self.assertAlmostEqual(bic_penalty(120, 8, 2.0), 2.0 * 8 * math.log(120))
+        self.assertGreater(bic_penalty(200, 8, 2.0), bic_penalty(40, 8, 2.0))
+        self.assertGreater(bic_penalty(120, 8, 2.0), bic_penalty(120, 2, 2.0))
+
+    def test_pure_noise_yields_no_change_points_at_any_length(self):
+        from textgrader.metrics.drift_change_points import _detect
+        from textgrader.optional import have
+        if not have("ruptures"):
+            self.skipTest("ruptures not installed; the fallback path is tested elsewhere")
+        for sections in (12, 40, 120):
+            for seed in range(5):
+                found, _, detector, _ = _detect(self._noise(sections, seed=seed), 2.0)
+                self.assertEqual(detector, "pelt")
+                self.assertEqual(
+                    found, [],
+                    f"{len(found)} spurious change points in pure noise "
+                    f"at {sections} sections (seed {seed})")
+
+    def test_a_real_step_shift_is_still_found(self):
+        from textgrader.metrics.drift_change_points import _detect
+        from textgrader.optional import have
+        if not have("ruptures"):
+            self.skipTest("ruptures not installed")
+        rows = self._noise(120, seed=1)
+        for index in range(60, 120):          # a sustained change, not an outlier
+            rows[index] = [value + 1.5 for value in rows[index]]
+        found, _, _, _ = _detect(rows, 2.0)
+        self.assertTrue(found, "an injected step shift was missed")
+        self.assertLessEqual(min(abs(point - 60) for point in found), 3)
+
+    def test_findings_record_which_detector_produced_them(self):
+        from textgrader.document import DocumentAnalysis
+        from textgrader.metrics import drift_change_points
+        text = ("The keeper walked down to the shore at dawn and counted boats. "
+                "Rain came later, and the harbour went quiet again.\n\n") * 60
+        findings = drift_change_points.measure(
+            DocumentAnalysis.from_text(text, comparison_unit="book"),
+            config={"window_words": 250, "penalty": 2.0})
+        for item in findings:
+            if item["value"] is not None:
+                self.assertIn(item["distribution"]["detector"],
+                              ("pelt", "single_split_scan"))
+                self.assertIn("penalty_effective", item["distribution"])

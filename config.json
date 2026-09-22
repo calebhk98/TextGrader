@@ -277,7 +277,7 @@
     "change_points": {
       "enabled": false,
       "window_words": 2500,
-      "penalty": 3.0
+      "penalty": 2.0
     },
     "coherence_suite": {
       "enabled": false,
@@ -326,9 +326,20 @@
         "textdescriptives_cross_check": false
       },
       "language": "en",
-      "char_ngram_orders": [2, 3, 4, 5, 6],
+      "char_ngram_orders": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
       "byte_ngram_order": 3,
-      "word_ngram_orders": [1, 2, 3, 4],
+      "word_ngram_orders": [
+        1,
+        2,
+        3,
+        4
+      ],
       "punct_ngram_order": 3,
       "pos_ngram_order": 3,
       "dependency_ngram_order": 2,
@@ -337,15 +348,35 @@
       "lm_max_chars": 150000,
       "lm_max_tokens": 60000,
       "entropy_token_cap": 100000,
-      "renyi_orders": [0.5, 2.0],
-      "tsallis_orders": [0.5, 2.0],
+      "renyi_orders": [
+        0.5,
+        2.0
+      ],
+      "tsallis_orders": [
+        0.5,
+        2.0
+      ],
       "excess_entropy_max_order": 4,
-      "mi_lags": [1, 2, 3],
+      "mi_lags": [
+        1,
+        2,
+        3
+      ],
       "mi_max_tokens": 20000,
       "complexity_quadratic_cap": 1500,
       "permutation_order": 3,
       "lz_max_chars": 20000,
-      "compression_algorithms": ["zlib", "gzip", "bz2", "lzma", "zstd", "brotli", "lz4", "snappy", "ppmd"],
+      "compression_algorithms": [
+        "zlib",
+        "gzip",
+        "bz2",
+        "lzma",
+        "zstd",
+        "brotli",
+        "lz4",
+        "snappy",
+        "ppmd"
+      ],
       "compression_level": 6,
       "compression_block_chars": 20000,
       "ncd_algorithm": "zlib",
@@ -400,9 +431,23 @@
     },
     "timeseries_suite": {
       "enabled": false,
-      "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
-      "feature_groups": ["dispersion", "acf", "trend", "turning_points", "runs"],
-      "lags": [1, 2, 3],
+      "sequences": [
+        "sentence_words",
+        "paragraph_words",
+        "sentence_punctuation"
+      ],
+      "feature_groups": [
+        "dispersion",
+        "acf",
+        "trend",
+        "turning_points",
+        "runs"
+      ],
+      "lags": [
+        1,
+        2,
+        3
+      ],
       "pacf_max_lag": 5,
       "window_words": 2000,
       "rolling_window": 10,
@@ -446,10 +491,27 @@
         "embedding_style": false,
         "impostors": false
       },
-      "char_ngram_orders": [2, 3, 4, 5, 6],
-      "byte_ngram_orders": [2],
-      "word_ngram_orders": [1, 2, 3],
-      "pos_ngram_orders": [1, 2, 3, 4],
+      "char_ngram_orders": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "byte_ngram_orders": [
+        2
+      ],
+      "word_ngram_orders": [
+        1,
+        2,
+        3
+      ],
+      "pos_ngram_orders": [
+        1,
+        2,
+        3,
+        4
+      ],
       "dependency_ngram_order": 2,
       "punctuation_ngram_order": 2,
       "affix_length": 3,
@@ -459,7 +521,12 @@
       "section_window_words": 3000,
       "section_shift_threshold": 2.5,
       "k_neighbors": 5,
-      "distance_metrics": ["cosine", "euclidean", "manhattan", "jensen_shannon"],
+      "distance_metrics": [
+        "cosine",
+        "euclidean",
+        "manhattan",
+        "jensen_shannon"
+      ],
       "primary_distance": "cosine",
       "compression_algorithm": "zlib",
       "min_corpus_documents": 4,
