@@ -43,7 +43,7 @@ METRIC_DEFINITION_VERSION = "2"
 
 from .core_metrics import measure as core_measure
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing
-from .metrics import MODEL_METRICS, REGISTRY
+from .metrics import MODEL_METRICS, REGISTRY, is_enabled
 from .stats import quantile_curve, summarize
 
 CORE_METRIC_KEYS = (
@@ -134,19 +134,36 @@ def _timestamp(value: str | None) -> str:
     return moment.isoformat().replace("+00:00", "Z")
 
 
-def _metric_names(include_parse: bool, include_model: bool) -> list[str]:
+def _metric_names(include_parse: bool, include_model: bool,
+                  metric_config: Mapping[str, Any] | None = None,
+                  selection: str = "enabled") -> list[str]:
     """Which registered metrics to precompute for every corpus text.
 
-    Everything cheap is profiled whether or not it is enabled for grading,
-    because a distribution is only useful if it already exists on the day
-    somebody turns a metric on.  Two groups are opt-in because of what they
-    cost per book, not because they are unwanted: the spaCy metrics are tens of
-    seconds each, and the semantic ones download and run an embedding model.
+    ``selection="enabled"`` (the default) profiles exactly the metrics switched
+    on in the ``metrics`` config, because computing a distribution nobody asked
+    for is work nobody asked for -- and the expensive suites are expensive
+    enough that "profile everything cheap" stopped being cheap.  Pass
+    ``selection="all"`` to precompute every registered metric regardless, which
+    is what you want when building a reference profile to ship, so a
+    distribution already exists on the day somebody turns a metric on.
+
+    ``include_parse``/``include_model`` remain a separate axis: they say
+    whether the spaCy and embedding-model metrics may run at all, and they gate
+    both selections.
     """
 
+    if selection == "auto":
+        # No config supplied at all means the caller has not said what it
+        # wants, so precompute everything; an explicit (possibly empty)
+        # metrics mapping is a statement about what is wanted, so honour it.
+        selection = "all" if metric_config is None else "enabled"
+    if selection not in ("enabled", "all"):
+        raise ValueError(
+            f"unknown metric selection {selection!r}; use 'enabled', 'all' or 'auto'")
     return [name for name, spec in REGISTRY.items()
             if (include_parse or not spec.needs_parse)
-            and (include_model or not spec.needs_model)]
+            and (include_model or not spec.needs_model)
+            and (selection == "all" or is_enabled(metric_config, name))]
 
 
 def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local corpus",
@@ -162,8 +179,34 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                   lexile_frequency_source: str = "none",
                   include_parse_metrics: bool = False,
                   include_model_metrics: bool = False,
+                  metric_selection: str = "auto",
                   progress=None) -> dict[str, Any]:
-    """Profile local text files without retaining or later requiring raw books."""
+    """Precompute, once, what every grading run would otherwise recompute.
+
+    A profile is a cache.  Measuring forty reference books is slow and the
+    answer does not change between runs, so it is done once here and the
+    result is what ``grade.py`` compares a manuscript against.  The corpus
+    itself stays reproducible: ``build_corpus.py`` downloads it and this
+    function reads whatever text files are in the corpus folder, so a profile
+    can always be rebuilt rather than being a artifact nobody can regenerate.
+
+    What lands in the profile is therefore a question of what is worth caching.
+    Per-book scalars and the feature vectors under ``feature_profiles`` are,
+    because they are small and every run needs them.  Raw book text is not: it
+    is large, and re-reading the corpus folder gets it back.  A measurement
+    that genuinely needs both texts at once (a true compression distance
+    between a manuscript and a specific reference book, say) cannot be served
+    from the cache at all and has to read the corpus at grading time, which is
+    why those channels carry their own config switch.
+
+    ``metric_selection`` decides which metrics are precomputed: ``"enabled"``
+    follows the ``metrics`` config, ``"all"`` precomputes everything the
+    parse/model flags allow, and ``"auto"`` (the default) means ``"enabled"``
+    when a ``metrics`` mapping was supplied and ``"all"`` when it was not.
+    Building a profile to ship wants ``"all"``; a project profiling its own
+    corpus for its own enabled metrics wants ``"enabled"`` and should not pay
+    for suites it has switched off.
+    """
 
     files = _source_files(inputs)
     if not files:
@@ -178,7 +221,8 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     processing = TextProcessing.from_config(settings)
     nlp_settings = NlpSettings.from_config(nlp)
     metric_settings = dict(metrics or {})
-    wanted = _metric_names(include_parse_metrics, include_model_metrics)
+    wanted = _metric_names(include_parse_metrics, include_model_metrics,
+                           metrics, metric_selection)
 
     books: list[dict[str, Any]] = []
     used_ids: Counter[str] = Counter()
@@ -267,7 +311,8 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                 setting = metric_settings.get(name, {})
                 options = dict(spec.defaults)
                 if isinstance(setting, Mapping):
-                    options.update({key: value for key, value in setting.items() if key != "enabled"})
+                    options.update({key: value for key, value in setting.items()
+                                    if key != "enabled" and not key.startswith("_")})
                 try:
                     module = importlib.import_module(f"textgrader.metrics.{spec.module}")
                     findings = module.measure(analysis, config=options, profile=None)
@@ -278,6 +323,20 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                     value = finding.get("value")
                     if isinstance(value, (int, float)) and not isinstance(value, bool):
                         book[finding["metric_id"]] = value
+                # A metric that needs more than one number per book -- an
+                # embedding, a transition table, a frequency vector -- caches it
+                # by exposing profile_vector(analysis, config).  Only a scalar
+                # fits in a book row, which is what kept those measurements
+                # out of the profile and forced them to be within-document.
+                builder = getattr(module, "profile_vector", None)
+                if callable(builder):
+                    try:
+                        vector = builder(analysis, options)
+                    except Exception as exc:
+                        metric_errors[f"{name}.profile_vector"] = f"{type(exc).__name__}: {exc}"
+                        vector = None
+                    if vector:
+                        feature_profiles.setdefault(name, []).append(vector)
             for name, values in _item_values(analysis).items():
                 pooled[name].extend(values)
             function_words = importlib.import_module("textgrader.metrics.function_words")
@@ -433,6 +492,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="sections shorter than this are skipped when splitting")
     parser.add_argument("--no-core-metrics", action="store_true",
                         help="omit the default core prose distributions")
+    parser.add_argument("--metric-selection", choices=("enabled", "all", "auto"), default=None,
+                        help="which registered metrics to precompute: 'enabled' follows the "
+                             "metrics config, 'all' precomputes everything the parse/model "
+                             "flags allow, 'auto' picks 'enabled' when a config supplies "
+                             "metrics. Defaults to corpus_builder.metric_selection in the "
+                             "config, else 'auto'.")
     parser.add_argument("--parse-metrics", action="store_true",
                         help="also profile the spaCy-parse metrics (tens of seconds per book)")
     parser.add_argument("--model-metrics", action="store_true",
@@ -453,6 +518,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         lexile_frequency_source=(config.get("analysis", {}) or {}).get(
             "lexile_frequency_source", "none"),
         metrics=config.get("metrics", {}), comparison_unit=args.comparison_unit,
+        metric_selection=args.metric_selection or
+        (config.get("corpus_builder", {}) or {}).get("metric_selection", "auto"),
         split_sections=args.split_sections, min_section_words=args.min_section_words,
         include_core_metrics=not args.no_core_metrics,
         include_parse_metrics=args.parse_metrics,

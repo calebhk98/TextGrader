@@ -430,6 +430,22 @@ MODEL_METRICS = {name for name, spec in REGISTRY.items() if spec.needs_model}
 FAMILIES = sorted({spec.family for spec in REGISTRY.values()})
 
 
+
+def is_enabled(metric_config: Mapping[str, Any] | None, name: str) -> bool:
+    """Whether ``name`` is switched on in a ``metrics`` config mapping.
+
+    Lives here rather than in ``grade.py`` because the corpus builder needs the
+    same answer: a profile that precomputes a different set of metrics than the
+    run it is compared against is the kind of mismatch this project refuses
+    everywhere else.
+    """
+
+    setting = (metric_config or {}).get(name)
+    if setting is None:
+        return False
+    return setting is True or (isinstance(setting, dict) and bool(setting.get("enabled", False)))
+
+
 def specs_by_family() -> dict[str, list[MetricSpec]]:
     out: dict[str, list[MetricSpec]] = {}
     for spec in REGISTRY.values():

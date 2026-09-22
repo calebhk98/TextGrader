@@ -197,7 +197,10 @@ def test_output_is_deterministic():
 def test_mismatched_options_withhold_comparison(tmp_path, base_config):
     source = tmp_path / "book.txt"
     source.write_text(_prose(STYLE_A_VOCAB, 9, paragraphs=80), encoding="utf-8")
-    profile = build_profile([source], metrics={"stylometry_suite": {"char_ngram_orders": [2, 3]}})
+    # build_profile now follows the metrics config rather than precomputing
+    # every registered metric, so the suite has to be enabled to be profiled.
+    profile = build_profile([source], metrics={
+        "stylometry_suite": {"enabled": True, "char_ngram_orders": [2, 3]}})
     write_profile(profile, tmp_path / "profile.json")
     config = {**base_config, "corpus_profile": "profile.json",
               "metrics": {**base_config["metrics"],

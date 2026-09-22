@@ -51,7 +51,8 @@
     "exclude_terms": [],
     "include_authors": [],
     "max_authors": null,
-    "max_books_per_author": 2
+    "max_books_per_author": 2,
+    "metric_selection": "enabled"
   },
   "metrics": {
     "repeated_ngrams": {

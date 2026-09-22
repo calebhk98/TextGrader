@@ -80,7 +80,11 @@ def test_profile_records_the_options_it_used(tmp_path):
 def test_mismatched_metric_options_are_not_compared(tmp_path, base_config):
     source = tmp_path / "book.txt"
     source.write_text("one two three one two three. " * 60, encoding="utf-8")
-    profile = build_profile([source], metrics={"mattr": {"window": 100}})
+    # The profile must actually profile mattr: a metrics mapping without
+    # "enabled" means off, and build_profile now follows that rather than
+    # precomputing every registered metric regardless of the config.
+    profile = build_profile([source],
+                            metrics={"mattr": {"enabled": True, "window": 100}})
     (tmp_path / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
     report = grade.analyze(source, {**base_config, "corpus_profile": "profile.json",
                                     "metrics": {**base_config["metrics"],

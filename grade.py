@@ -30,7 +30,7 @@ from textgrader.project import (CONFIG_ENV_VAR, near_miss, config_path,
 from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings,
                                  TextProcessing, resolve_unit, units_comparable)
 from textgrader.core_metrics import measure as core_measure
-from textgrader.metrics import REGISTRY
+from textgrader.metrics import REGISTRY, is_enabled
 from textgrader.reports import REPORTS, VIA_GRADE_ENV_VAR
 from textgrader.results import Action, MetricResult, Polarity, Report, StatusType
 from textgrader.rules import compile_rules
@@ -234,16 +234,18 @@ def _join(existing, addition):
 # --------------------------------------------------------------- metric running
 
 def metric_enabled(metric_config, name):
-    setting = metric_config.get(name)
-    if setting is None:
-        return False
-    return setting is True or (isinstance(setting, dict) and bool(setting.get("enabled", False)))
+    return is_enabled(metric_config, name)
 
 
 def metric_options(metric_config, name):
     setting = metric_config.get(name, {})
     options = dict(setting) if isinstance(setting, dict) else {}
     options.pop("enabled", None)
+    # Keys starting with "_" are notes for whoever reads config.json (what a
+    # feature needs installed, why it is off).  They are documentation, so they
+    # must not reach a metric or change whether a corpus profile is comparable.
+    for key in [key for key in options if key.startswith("_")]:
+        options.pop(key)
     spec = REGISTRY.get(name)
     if spec:
         merged = dict(spec.defaults)
@@ -263,6 +265,8 @@ def options_match_profile(profile, name, options):
         return False
     expected = dict(profile["metric_settings"].get(name, {}))
     expected.pop("enabled", None)
+    for key in [key for key in expected if key.startswith("_")]:
+        expected.pop(key)
     spec = REGISTRY.get(name)
     if spec:
         base = dict(spec.defaults)
