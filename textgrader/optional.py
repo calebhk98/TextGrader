@@ -33,6 +33,15 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "ruptures": ("ruptures", "pip install ruptures"),
     "textdescriptives": ("textdescriptives", "pip install textdescriptives"),
     "networkx": ("networkx", "pip install networkx"),
+    # Compression channels for textgrader.metrics.randomness_suite. Every one
+    # of these is optional: the stdlib zlib/gzip/bz2/lzma channels cover the
+    # suite's acceptance criteria on their own, and each of these degrades to
+    # one "unavailable" finding rather than to a missing suite.
+    "zstandard": ("zstandard", "pip install zstandard"),
+    "brotli": ("brotli", "pip install brotli"),
+    "lz4": ("lz4.frame", "pip install lz4"),
+    "snappy": ("snappy", "pip install python-snappy"),
+    "pyppmd": ("pyppmd", "pip install pyppmd"),
 }
 
 _lock = threading.Lock()

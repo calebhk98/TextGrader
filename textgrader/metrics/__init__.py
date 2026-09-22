@@ -271,6 +271,36 @@ REGISTRY: dict[str, MetricSpec] = dict([
           summary="Candidate contradictions, connective-relation overlap and proposition "
                   "structure; no NLI/OpenIE model is available here, so every value is a "
                   "surface-heuristic candidate, never a truth or entailment claim."),
+    _spec("randomness_suite", "randomness_suite", "lexical", "moderate",
+          requires=("wordfreq",),
+          defaults={
+              "features": {
+                  "char_entropy": True, "compression": True, "complexity_measures": True,
+                  "language_model": True, "punctuation_sequence": True,
+                  "pos_dependency": False, "corruption_baselines": True,
+                  "lexical_gibberish": True,
+              },
+              "language": "en",
+              "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_order": 3,
+              "word_ngram_orders": [1, 2, 3, 4], "punct_ngram_order": 3,
+              "pos_ngram_order": 3, "dependency_ngram_order": 2,
+              "lm_train_fraction": 0.7, "lm_smoothing_alpha": 0.5,
+              "lm_max_chars": 150000, "lm_max_tokens": 60000, "entropy_token_cap": 100000,
+              "renyi_orders": [0.5, 2.0], "tsallis_orders": [0.5, 2.0],
+              "excess_entropy_max_order": 4, "mi_lags": [1, 2, 3], "mi_max_tokens": 20000,
+              "complexity_quadratic_cap": 1500, "permutation_order": 3, "lz_max_chars": 20000,
+              "compression_algorithms": ["zlib", "gzip", "bz2", "lzma", "zstd", "brotli",
+                                         "lz4", "snappy", "ppmd"],
+              "compression_level": 6, "compression_block_chars": 20000, "ncd_algorithm": "zlib",
+              "corruption_seed": 1337, "corruption_permutations": 3,
+              "corruption_sentence_fraction": 0.3, "corruption_char_order": 4,
+              "corruption_word_order": 2, "corruption_max_chars": 20000,
+              "consonant_cluster_min": 4,
+          },
+          summary="Character/word/POS/punctuation language-likeness, multi-algorithm "
+                  "compression ratios and NCD, entropy/complexity families (Shannon, "
+                  "Renyi, Tsallis, permutation, spectral, SVD, ApEn/SampEn, LZ), and "
+                  "seeded shuffle-corruption baselines. Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
