@@ -252,6 +252,25 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "a surface-based entity grid and graph, connective-family rates, and "
                   "sentence/paragraph order-permutation baselines. Off by default; each group "
                   "toggles independently under 'features'."),
+    _spec("logic_suite", "logic_suite", "discourse", "parse", ("spacy",),
+          defaults={
+              "features": {
+                  "negation_and_quantifiers": True,
+                  "connective_relations": True,
+                  "propositions": True,
+                  "modal_argument_position": True,
+              },
+              "window_sentences": 6,
+              "max_pairs": 200,
+              "max_comparisons": 50_000,
+              "max_evidence": 20,
+              "proposition_cap": 20_000,
+              "connective_min_words": 4,
+              "repeated_assertion_min_words": 5,
+          },
+          summary="Candidate contradictions, connective-relation overlap and proposition "
+                  "structure; no NLI/OpenIE model is available here, so every value is a "
+                  "surface-heuristic candidate, never a truth or entailment claim."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
