@@ -291,7 +291,23 @@
     "style_report": false,
     "tics": false,
     "verify_citations": false,
-    "voice_separation": false
+    "voice_separation": false,
+    "logic_suite": {
+      "enabled": false,
+      "features": {
+        "negation_and_quantifiers": true,
+        "connective_relations": true,
+        "propositions": true,
+        "modal_argument_position": true
+      },
+      "window_sentences": 6,
+      "max_pairs": 200,
+      "max_comparisons": 50000,
+      "max_evidence": 20,
+      "proposition_cap": 20000,
+      "connective_min_words": 4,
+      "repeated_assertion_min_words": 5
+    }
   },
   "allow_external_metric_commands": false,
   "project_rules": {
