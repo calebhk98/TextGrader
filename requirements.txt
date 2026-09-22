@@ -57,3 +57,10 @@ textdescriptives>=2.8
 # Test runner.  The suite is pytest-based; `unittest discover` silently skipped
 # the pytest-style tests in tests/test_build_corpus.py.
 pytest>=7.0
+
+# Augmented Dickey-Fuller stationarity test, used by the experimental
+# timeseries_suite metric's "stationarity" feature.  Everything else in that
+# suite (ACF, trend, spectral, Hurst, DFA, permutation entropy, change points,
+# Page-Hinkley) is dependency-free or already covered by numpy/scipy/ruptures
+# above; without this one it falls back to a labelled, weaker half-split proxy.
+statsmodels>=0.14
