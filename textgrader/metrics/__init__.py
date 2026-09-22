@@ -224,6 +224,35 @@ REGISTRY: dict[str, MetricSpec] = dict([
     _spec("change_points", "drift_change_points", "book_drift", "moderate",
           requires=("ruptures",), defaults={"window_words": 2500, "penalty": 3.0},
           summary="Where the style changes abruptly."),
+
+    # ---------------------------------------------------------- experimental
+    _spec("stylometry_suite", "stylometry_suite", "authorial", "moderate",
+          defaults={
+              "features": {
+                  "character_ngrams": True, "byte_ngrams": True, "word_ngrams": True,
+                  "function_word_ngrams": True, "punctuation_shape": True, "word_shape": True,
+                  "affixes": True, "sentence_openings": True, "contractions_capitalization": True,
+                  "lexical_richness": True, "vocabulary_growth": True, "section_stability": True,
+                  "compression": True, "corpus_language_model": True, "corpus_reference": True,
+                  # Off by default: forces the shared spaCy parse (tens of seconds on a novel).
+                  "pos_dependency": False,
+              },
+              "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_orders": [2],
+              "word_ngram_orders": [1, 2, 3], "pos_ngram_orders": [1, 2, 3, 4],
+              "dependency_ngram_order": 2, "punctuation_ngram_order": 2,
+              "affix_length": 3, "min_affix_word_length": 5, "max_reported": 25,
+              "max_chars_for_ngrams": 500000, "section_window_words": 3000,
+              "section_shift_threshold": 2.5, "k_neighbors": 5,
+              "distance_metrics": ["cosine", "euclidean", "manhattan", "jensen_shannon"],
+              "primary_distance": "cosine", "compression_algorithm": "zlib",
+              "min_corpus_documents": 4, "min_documents_per_author": 2,
+              "outlier_threshold": 3.5, "seed": 42,
+          },
+          summary="Stylometry/authorship suite: character/word/POS/punctuation n-gram entropy, "
+                  "lexical-richness statistics, Heaps/Zipf fits, section-to-section style "
+                  "stability, compression-based measures, and nearest/centroid/OOD distances "
+                  "against a reference corpus. Every measurement group is independently "
+                  "switchable; see the module docstring for what was deferred."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
