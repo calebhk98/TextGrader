@@ -332,7 +332,9 @@
         "letter_bigram_divergence": true,
         "kenlm_language_model": false,
         "neural_language_model": false,
-        "textdescriptives_cross_check": false
+        "textdescriptives_cross_check": false,
+        "gibberish_detector_package": false,
+        "ncd_against_corpus": false
       },
       "_complexity_measures_requires": "needs numpy for the permutation/spectral/SVD/ApEn/SampEn family; without it every one of those five findings reports 'unavailable' (the Lempel-Ziv complexity finding in the same feature is dependency-free and still runs).",
       "_lexical_gibberish_requires": "unknown_word_rate needs wordfreq (pip install wordfreq); without it that one finding reports 'unavailable' -- letter_frequency_divergence, consonant_cluster_rate, immediate_repeat_rate and char_run_length_entropy in this same feature are dependency-free and still run.",
@@ -343,6 +345,8 @@
       "_kenlm_language_model_requires": "needs the `kenlm` Python wheel (query-time bindings) AND a compiled `lmplz` trainer binary that pip cannot provide -- build KenLM from source (a C++ compiler and Boost; see https://github.com/kpu/kenlm#compiling), then put the resulting `lmplz` on PATH or set kenlm_lmplz_path to its full path. Without either, kenlm_cross_entropy reports 'unavailable' naming exactly which piece (the wheel or the trainer) is missing and how to get it; nothing else in this suite is affected.",
       "_neural_language_model_requires": "needs torch + transformers (multi-gigabyte install; the configured neural_lm_model, distilgpt2 by default, is downloaded or read from a local cache on first use). Without either package, neural_lm_perplexity reports 'unavailable'. Caveat even when available: subword (BPE) tokenization can score purely random letters as MORE 'fluent' (lower perplexity) than grammatically word-order-scrambled real prose, so this channel is NOT a gibberish detector -- see the module docstring and this feature's own finding.distribution.warning_not_a_gibberish_detector.",
       "_textdescriptives_cross_check_requires": "needs its own spaCy pipeline plus the textdescriptives package (pip install textdescriptives); without either, textdescriptives_word_perplexity reports 'unavailable'.",
+      "_gibberish_detector_package_requires": "needs the gibberish-detector package (pip install gibberish-detector). Off by default so that corpus profiling never trains a fresh character-bigram model as a side effect of enabling this suite. Trains on this document's own held-out split (never on the package's bundled reference file, never on a corpus profile); without the package, gibberish_detector_score reports 'unavailable'. Reads its own gibberish_detector_charset tunable, and is an independent channel beside consonant_cluster_rate, not a replacement -- the two are expected to disagree, see the module docstring.",
+      "_ncd_against_corpus_requires": "ncd_corpus_dirs pointed at one or more directories of readable reference .txt/.md files, present on disk at GRADING time (not just when a corpus profile was built -- this measurement reads the folder directly, it is never served from a cached profile). Off by default for the same reason as gibberish_detector_package: corpus profiling must never open a corpus folder as a side effect of enabling this suite. Without a reachable directory this degrades to unavailable() naming what was missing. Mirrors stylometry_suite's identically-named ncd_corpus_dirs option but keeps its own ncd_corpus_algorithm/ncd_corpus_max_reference_documents/ncd_corpus_max_bytes bounds, independent of that suite's.",
       "language": "en",
       "char_ngram_orders": [
         2,
@@ -413,7 +417,12 @@
       "kenlm_timeout_seconds": 30,
       "neural_lm_model": "distilgpt2",
       "neural_lm_max_chars": 6000,
-      "textdescriptives_max_chars": 50000
+      "textdescriptives_max_chars": 50000,
+      "gibberish_detector_charset": "abcdefghijklmnopqrstuvwxyz",
+      "ncd_corpus_dirs": [],
+      "ncd_corpus_max_reference_documents": 10,
+      "ncd_corpus_max_bytes": 100000,
+      "ncd_corpus_algorithm": "zlib"
     },
     "absolutes": false,
     "banned_phrases": false,

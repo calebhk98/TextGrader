@@ -126,6 +126,14 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # feature_groups -- see that group's own note in timeseries_suite.py for
     # why it is still exactly one finding per sequence regardless of preset.
     "tsfresh": ("tsfresh", "pip install tsfresh"),
+    # A tiny, independent character-bigram gibberish classifier for
+    # randomness_suite's optional "gibberish_detector_package" feature (off by
+    # default; see the module docstring's gating rule). Trained fresh on each
+    # document's own held-out split, exactly like this suite's from-scratch
+    # n-gram channels -- never on the package's own bundled reference file --
+    # so it degrades to "unavailable" on an install that lacks it rather than
+    # to an import error.
+    "gibberish_detector": ("gibberish_detector", "pip install gibberish-detector"),
 }
 
 _lock = threading.Lock()
