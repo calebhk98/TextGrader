@@ -273,13 +273,16 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   # Off by default -- see the module docstring's "Gating" note:
                   # this suite's cost class ("parse") means MetricSpec.needs_model
                   # (which only checks for "sentence_transformers") does NOT
-                  # exclude this from corpus profiling, so these four flags are
-                  # the only thing standing between an NLI/coreference model and
-                  # a book nobody asked to run one against.
+                  # exclude this from corpus profiling, so these flags are the
+                  # only thing standing between a transformer model and a book
+                  # nobody asked to run one against.
                   "nli_entailment": False,
                   "coreference_resolution": False,
                   "lexical_opposition": False,
                   "temporal_ordering": False,
+                  "semantic_role_labeling": False,
+                  "relation_extraction": False,
+                  "argument_mining": False,
               },
               "window_sentences": 6,
               "max_pairs": 200,
@@ -292,16 +295,26 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "nli_model": "cross-encoder/nli-deberta-v3-small",
               "nli_max_pairs": 60,
               "nli_batch_size": 16,
+              "srl_model": "cu-kairos/propbank_srl_seq2seq_t5_small",
+              "srl_max_predicates": 40,
+              "relation_extraction_model": "Babelscape/rebel-large",
+              "relation_extraction_max_sentences": 40,
+              "argument_mining_model": "raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L",
+              "argument_mining_max_pairs": 40,
           },
           summary="Candidate contradictions, connective-relation overlap and proposition "
-                  "structure from surface heuristics (on by default), plus four off-by-default "
+                  "structure from surface heuristics (on by default), plus seven off-by-default "
                   "channels that need an installed model or resource: real NLI entailment/"
                   "contradiction scoring over the same candidate pairs with a heuristic-vs-model "
                   "agreement readout, fastcoref coreference resolution so pronoun subjects can "
-                  "enter the candidate pool, WordNet antonym/hypernym lexical relations, and "
-                  "dateutil-based temporal ordering. Every heuristic value stays a candidate, "
-                  "never a truth claim; every NLI value is a labelled model score, never a "
-                  "fact about the text -- see the module docstring."),
+                  "enter the candidate pool, WordNet antonym/hypernym lexical relations, "
+                  "dateutil-based temporal ordering, PropBank-style semantic role labelling (role-"
+                  "pattern consistency and argument-omission rate), closed-schema relation "
+                  "extraction (REBEL) kept beside the dependency-parse proxy, and a real argument-"
+                  "relation (claim/premise support/attack) classifier over connective-linked clause "
+                  "pairs, kept beside the honestly-named connective_chain_length proxy. Every "
+                  "heuristic value stays a candidate, never a truth claim; every model value is a "
+                  "labelled model score, never a fact about the text -- see the module docstring."),
     _spec("randomness_suite", "randomness_suite", "lexical", "moderate",
           requires=("wordfreq",),
           defaults={
