@@ -115,13 +115,21 @@ kenlm>=0.2
 # above; without this one it falls back to a labelled, weaker half-split proxy.
 statsmodels>=0.14
 
-# catch22: 22 canonical time-series features (Lubba et al. 2019), used by
-# timeseries_suite's optional, off-by-default "catch22_*" feature group.
+# catch22: 22 canonical time-series features (Lubba et al. 2019), plus the
+# catch24 raw mean/variance extras, used by timeseries_suite's optional,
+# off-by-default "catch22_*"/"catch24_raw_mean"/"catch24_raw_variance"
+# feature groups.
 pycatch22>=0.4
 
 # Discrete wavelet transform, used by timeseries_suite's optional,
 # off-by-default "wavelet_energy"/"wavelet_entropy" feature group.
 PyWavelets>=1.4
+
+# Configurable time-series feature extraction (minimal/efficient/comprehensive
+# presets), used by timeseries_suite's optional, off-by-default "tsfresh"
+# feature group. Heavy -- pulls in a large dependency tree -- but stays
+# torch-free, so it lives here rather than in requirements-embeddings.txt.
+tsfresh>=0.20
 
 # Date parsing for logic_suite's "temporal_ordering" feature (which of two
 # differing dates on the same subject+predicate is earlier).  Lightweight and

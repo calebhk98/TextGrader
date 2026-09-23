@@ -33,35 +33,47 @@ length is not invisible just because nobody wrote a bespoke
 ``dependency_distance_autocorrelation`` module.
 
 **Guarding the combinatorics.**  Sequences (16 in the registry) times
-features (40 groups, after this pass added catch22's 22, the two wavelet
-groups and the textdescriptives cross-check to the original 15) is 640
-possible findings before a single lag or box size is counted -- a bigger
-explosion than the original 240 the task's brief warned against, precisely
-because this pass made three more feature families real. Four things bound
-it: (1) every feature group is reported as *one* finding per sequence, with
-its secondary numbers (all lags, all box sizes, segment slopes, per-scale
-wavelet energies, ...) folded into that finding's ``distribution`` rather
-than exploded into their own ids -- catch22 is the one deliberate exception,
-because the task asked for each of its 22 features under its own stable id
-rather than folded together, so it is 22 *feature groups*, not one group
-with 22 numbers inside it; (2) the default configuration is **unchanged by
-this pass on purpose**: it still selects the same three dependency-free,
+features (43 groups: the original 15, catch22's 22, catch22's two catch24
+extras, the two wavelet groups, the textdescriptives cross-check, and one
+configurable ``tsfresh`` group added this pass) is 688 possible findings
+before a single lag or box size is counted -- bigger again than the 640 the
+previous pass left this docstring warning about, precisely because this pass
+made two more feature families real. Five things bound it: (1) every feature
+group is reported as *one* finding per sequence, with its secondary numbers
+(all lags, all box sizes, segment slopes, per-scale wavelet energies, every
+tsfresh sub-feature, ...) folded into that finding's ``distribution`` rather
+than exploded into their own ids -- catch22 (and, by extension, the two
+catch24 extras) is the one deliberate exception, because the task asked for
+each of catch22's 22 features under its own stable id rather than folded
+together, so it is 22 (+2) *feature groups*, not one group with 22 (+2)
+numbers inside it; ``tsfresh`` is folded the *other* way on purpose --
+``comprehensive`` alone can extract nearly 800 numbers from one sequence, and
+turning each into its own id would make this suite's own combinatorics
+problem the thing it most needed guarding against, so ``tsfresh`` is always
+exactly one finding per sequence no matter which preset is selected, with
+``tsfresh_max_features`` bounding how many of its sub-values are kept in that
+one finding's ``distribution``; (2) the default configuration is **unchanged
+by this pass on purpose**: it still selects the same three dependency-free,
 always-available sequences and the same five low-assumption feature groups
 it always has (15 findings by default, see ``DEFAULT_SEQUENCES``/
-``DEFAULT_FEATURE_GROUPS`` below) -- catch22, the wavelet groups and the
-embedding-backed sequences are all opt-in, both because catch22 alone
-(22 features) over even the three default sequences would already be 66
-findings, more than four times the current default, and because two of
-those sequences are embedding-backed and must never turn on by themselves
-(see "Why the embedding sequences stay out of every default" below);
-(3) ``max_findings`` (default 200) is a hard stop -- a user who selects
-every sequence and every feature group gets the first 200 combinations, in
-the order they configured, plus one finding that says so, rather than a
-silent multi-thousand-row report; (4) a ``"catch22"`` shorthand in
-``feature_groups`` expands to all 22 ``catch22_*`` names (deduplicated
-against anything already listed) so a user does not have to type 22 strings
-to turn the whole group on, but it is still exactly as bounded by
-``max_findings`` as if they had.
+``DEFAULT_FEATURE_GROUPS`` below) -- catch22, catch24, the wavelet groups,
+``tsfresh`` and the embedding-backed sequences are all opt-in, both because
+catch22 alone (22 features) over even the three default sequences would
+already be 66 findings, more than four times the current default, and
+because two of those sequences are embedding-backed and must never turn on
+by themselves (see "Why the embedding sequences stay out of every default"
+below); (3) ``max_findings`` (default 200) is a hard stop -- a user who
+selects every sequence and every feature group gets the first 200
+combinations, in the order they configured, plus one finding that says so,
+rather than a silent multi-thousand-row report; (4) a ``"catch22"``
+shorthand in ``feature_groups`` expands to all 22 ``catch22_*`` names, and a
+``"catch24"`` shorthand expands to those same 22 plus the two catch24-only
+extras (24 total), each deduplicated against anything already listed, so a
+user does not have to type 22 or 24 strings to turn the whole group on, but
+either is still exactly as bounded by ``max_findings`` as if they had; (5)
+``tsfresh`` itself is off by default and, even when selected, defaults to
+its ``minimal`` preset (10 fixed, hand-named sub-features) rather than
+``efficient``/``comprehensive`` -- see ``tsfresh_feature_set`` below.
 
 **Why the embedding sequences stay out of every default.**  This suite is
 ``cost="moderate"`` with ``requires=()``, which is what lets the corpus
@@ -138,38 +150,69 @@ classical result that the longest run in ``n`` random draws grows only as
 comparing them across texts of very different sequence length is comparing
 different quantities even after normalization.
 
-**Deferred.**  ``pycatch22``, ``sentence-transformers`` and ``PyWavelets``
-were not installed when this suite was first written, so ``catch22``, the
-two embedding-backed sequences and wavelet features were either missing or
-running only on a fallback whose success path had never executed. All three
-are installed now and this pass wired them in and validated the real path,
-not just the fallback -- see ``catch22_*`` below (22 canonical features,
-Lubba et al. 2019, each under its own stable id per the task's naming rule),
-``wavelet_energy``/``wavelet_entropy`` (energy per scale and the Shannon
-entropy of that distribution, ``PyWavelets``) and the sequence registry's
-own docstring for the embedding-sequence validation. ``catch24`` (catch22
-plus raw mean/variance) is skipped on purpose: this suite already reports
-plain dispersion (mean, median, sd) per sequence, so adding catch24's two
-extra features would only duplicate ``dispersion`` under a different id.
-A configurable ``tsfresh`` feature set is still not implemented: the package
-was deliberately not installed in this environment (it is heavy and pulls a
-large dependency tree), so its success path still cannot be exercised or
-validated, and this suite would rather ship nothing for it than ship code
-nobody has run. Recurrence-quantification features (``PyRQA``) are left out
-for the same reason -- not installed, not testable. A streaming ``river``
-ADWIN detector is skipped in favour of a small dependency-free Page-Hinkley
-implementation (``page_hinkley``, below), which needs no optional package
-and is directly testable against a synthetic step-shift sequence.
-Sentiment/emotion scoring and topic-probability sequences are not in this
-module at all; see ``textgrader/sequences.py``'s docstring for why they were
-left out of the sequence registry itself, one level down. A
-``textdescriptives`` cross-check is wired in for exactly the one sequence
-where it overlaps this suite's own work end to end
-(``sentence_dependency_distance`` -- see ``textdescriptives_check`` below);
-``textdescriptives``' ``readability``/``information_theory``/``quality``
-components measure whole-document properties this suite's per-sentence,
-ordered-sequence contract does not cover; wiring in every component that
-merely *touches* a related idea would not be a cross-check, only noise.
+**Deferred.**  ``pycatch22``, ``sentence-transformers``, ``PyWavelets`` and
+(this pass) ``tsfresh`` were not installed when this suite was first
+written, so ``catch22``, the two embedding-backed sequences, wavelet
+features and any tsfresh channel were either missing or running only on a
+fallback whose success path had never executed. All four are installed now
+and every pass since has wired one more in and validated the real path, not
+just the fallback -- see ``catch22_*`` below (22 canonical features, Lubba
+et al. 2019, each under its own stable id per the task's naming rule),
+``catch24_raw_mean``/``catch24_raw_variance`` (the two extra raw, non-
+z-scored features ``catch22_all(catch24=True)`` adds on top of the same 22 --
+see "catch22 / catch24" below for why these were reversed into this suite
+rather than left out), ``wavelet_energy``/``wavelet_entropy`` (energy per
+scale and the Shannon entropy of that distribution, ``PyWavelets``),
+``tsfresh`` (a configurable, capped tsfresh feature set -- see "tsfresh"
+below) and the sequence registry's own docstring for the embedding-sequence
+validation.
+
+``catch24`` was skipped in an earlier pass on the reasoning that its two
+extra features (a raw mean and a raw variance) would only duplicate this
+suite's own ``dispersion`` group under a different id. That reasoning was
+overruled: this project's own philosophy is that a metric is a sensor, not
+an opinion, and two channels agreeing -- even two that are *expected* to
+agree closely, because they compute a textbook quantity two different ways
+-- is a cross-check worth having, not a duplicate to delete. Both new ids
+say so explicitly in their own ``distribution["relationship_note"]``, naming
+exactly which existing finding they are expected to track (``dispersion``'s
+``mean``/``std`` for the same sequence) and why the numbers should still be
+computed independently rather than one copied from the other. See "catch22 /
+catch24" below for the two features' exact identity and unit.
+
+Recurrence-quantification features (``PyRQA``) are left out because the
+package is still not installed here, so its success path still cannot be
+exercised or validated, and this suite would rather ship nothing for it than
+ship code nobody has run. A streaming ``river`` ADWIN detector is skipped in
+favour of a small dependency-free Page-Hinkley implementation
+(``page_hinkley``, below), which needs no optional package and is directly
+testable against a synthetic step-shift sequence. Sentiment/emotion scoring
+and topic-probability sequences are not in this module at all; see
+``textgrader/sequences.py``'s docstring for why they were left out of the
+sequence registry itself, one level down. A ``textdescriptives`` cross-check
+is wired in for exactly the one sequence where it overlaps this suite's own
+work end to end (``sentence_dependency_distance`` -- see
+``textdescriptives_check`` below); ``textdescriptives``'
+``readability``/``information_theory``/``quality`` components measure
+whole-document properties this suite's per-sentence, ordered-sequence
+contract does not cover; wiring in every component that merely *touches* a
+related idea would not be a cross-check, only noise.
+
+A per-book corpus-reference channel for sequence shape (caching this
+suite's own summary of, say, ``sentence_words`` per book under
+``profile_vector`` so a manuscript's dispersion or spectral shape could be
+read as a corpus z-score, the way ``stylometry_suite``'s
+``corpus_reference`` already does for function words) was considered and
+deliberately not added this pass. Every other feature group here already
+folds unboundedly into ``distribution`` rather than the corpus profile, this
+suite's ``max_findings`` guard exists specifically because its own
+combinatorics are already this pass's largest risk, and a genuinely useful
+corpus-reference channel needs its own settings-comparability handling
+(matching ``sequences``/``feature_groups``/``detrend`` between the profile
+that built a cached vector and the manuscript being compared against it, the
+same care ``stylometry_suite`` already takes for function words) rather than
+a same-pass bolt-on. Left as a real, scoped candidate for a future pass
+rather than shipped half-considered here.
 
 Deterministic settings throughout: no random seeds are needed because every
 feature here is a closed-form or exact-recursion computation, not a fit with
@@ -817,6 +860,17 @@ _CATCH22_MIN_LENGTH = 30
 
 
 def _catch22_result(ctx: Mapping[str, Any]) -> tuple[dict[str, float] | None, str | None, Any]:
+    """The one shared ``pycatch22.catch22_all`` call every catch22/catch24 feature reads from.
+
+    Always requests ``catch24=True``: on top of the same 22 canonical
+    features, that costs nothing extra (pycatch22 computes the raw mean and
+    standard deviation as a side effect of z-scoring its input either way)
+    and is what lets ``catch24_raw_mean``/``catch24_raw_variance`` below read
+    from this exact cache instead of a second library call -- one book's
+    call to this function, from any of the 24 features, is one call to the
+    library, not 22 or 24.
+    """
+
     analysis: DocumentAnalysis = ctx["analysis"]
     key = (f"timeseries_suite:catch22:{ctx['sequence_name']}:"
            f"{_extra_settings_key(ctx['sequence_name'], ctx['cfg'])}:detrend={ctx['detrended']}")
@@ -826,7 +880,7 @@ def _catch22_result(ctx: Mapping[str, Any]) -> tuple[dict[str, float] | None, st
         if module is None:
             return None, reason, None
         try:
-            result = module.catch22_all(list(ctx["working"]), catch24=False)
+            result = module.catch22_all(list(ctx["working"]), catch24=True)
             return dict(zip(result["names"], result["values"])), None, module
         except Exception as exc:  # pragma: no cover - library/runtime guard
             return None, f"pycatch22.catch22_all failed ({type(exc).__name__}: {exc})", None
@@ -858,6 +912,89 @@ def _make_catch22_feature(feature_name: str):
     def feature(values: TypingSequence[float], cfg: Mapping[str, Any],
                ctx: Mapping[str, Any] | None = None) -> _Outcome:
         return _feature_catch22(feature_name, values, cfg, ctx)
+    feature.__name__ = f"_feature_{feature_name}"
+    return feature
+
+
+# ---- catch24 (catch22's two raw, non-z-scored extras) -------------------
+#
+# ``catch22_all(catch24=True)`` adds exactly two features on top of the same
+# 22: the raw arithmetic mean and the raw sample standard deviation of the
+# *un*-z-scored input (every one of the 22 above is scale- and offset-free by
+# construction; these two deliberately are not). An earlier pass of this
+# suite left catch24 out on the reasoning that both numbers would only
+# duplicate ``dispersion``'s own ``mean``/``std`` for the same sequence under
+# a different id. That reasoning was overruled: correlated measurements are
+# not a bug in this project's design, they are two independent instruments
+# reading the same thing, and a metric here is a sensor, not an opinion. Each
+# finding below names the sibling it is expected to agree with, in its own
+# ``distribution["relationship_note"]``, rather than pretending the overlap
+# does not exist.
+#
+# ``catch24_raw_variance`` is a genuine, if small, departure from a bare
+# passthrough: pycatch22 reports ``DN_Spread_Std``, a sample standard
+# deviation (``ddof=1``, matching ``textgrader.stats.summarize``'s own
+# ``std``), not a variance -- squaring it here is what makes the stable id
+# say what it actually holds, per the raw request for "raw mean and
+# variance", rather than silently relabeling a standard deviation as one.
+_CATCH24_ALIAS = "catch24"
+_CATCH24_EXTRAS: tuple[tuple[str, str, str, str], ...] = (
+    ("DN_Mean", "catch24_raw_mean", "Raw mean (not z-scored)",
+     "Arithmetic mean of the raw sequence values, before any z-scoring -- "
+     "closely related to this suite's own dispersion.mean for the same "
+     "sequence (both are the textbook arithmetic mean); kept as its own id "
+     "and computed independently rather than copied, per this project's "
+     "sensor-not-opinion policy on correlated measurements."),
+    ("DN_Spread_Std", "catch24_raw_variance", "Raw variance (not z-scored)",
+     "Sample variance (the square of pycatch22's raw, non-z-scored sample "
+     "standard deviation, ddof=1) of the sequence values -- closely related "
+     "to the square of this suite's own dispersion.std for the same "
+     "sequence (same ddof=1 convention); kept as its own id for the same "
+     "reason as catch24_raw_mean above."),
+)
+_CATCH24_FEATURE_NAMES = tuple(stable for _, stable, _, _ in _CATCH24_EXTRAS)
+_CATCH24_LIBRARY_NAME_BY_FEATURE = {stable: library for library, stable, _, _ in _CATCH24_EXTRAS}
+_CATCH24_DESCRIPTION_BY_FEATURE = {stable: note for _, stable, _, note in _CATCH24_EXTRAS}
+#: catch24's two extras are ordinary summary statistics (a mean, a variance),
+#: not nonlinear/scaling estimates, so they need nothing like catch22's own
+#: 30-point floor to be *meaningful* -- but they still run through the same
+#: shared ``catch22_all`` call, which pycatch22 has been observed (see
+#: ``_CATCH22_MIN_LENGTH``'s own note) to mishandle at the very smallest
+#: inputs, so this stays at ``dispersion``'s own floor rather than at 2 or 3.
+_CATCH24_MIN_LENGTH = 5
+
+
+def _feature_catch24(feature_name: str, values: TypingSequence[float], cfg: Mapping[str, Any],
+                     ctx: Mapping[str, Any] | None = None) -> _Outcome:
+    if ctx is None:
+        return _Outcome(None, warning="catch24 features need suite context and cannot run standalone")
+    values_by_library_name, reason, module = _catch22_result(ctx)
+    if values_by_library_name is None:
+        return _Outcome(None, warning=reason)
+    library_name = _CATCH24_LIBRARY_NAME_BY_FEATURE[feature_name]
+    if library_name not in values_by_library_name:
+        return _Outcome(None, warning=f"pycatch22 did not return {library_name!r} (a catch24 extra); "
+                                      f"the installed pycatch22 version may not support catch24")
+    raw = values_by_library_name[library_name]
+    if raw is None or not math.isfinite(raw):
+        return _Outcome(None, warning="pycatch22 returned a non-finite value for this sequence, "
+                                      "most often because it has zero variance")
+    if feature_name == "catch24_raw_variance":
+        value = float(raw) ** 2
+        backend_note = "pycatch22.catch22_all(catch24=True), DN_Spread_Std squared into a variance"
+    else:
+        value = float(raw)
+        backend_note = "pycatch22.catch22_all(catch24=True)"
+    return _Outcome(value, distribution={
+        "catch22_feature": library_name, "backend": backend_note,
+        "library": "pycatch22", "library_version": _lib_version(module),
+        "relationship_note": _CATCH24_DESCRIPTION_BY_FEATURE[feature_name]})
+
+
+def _make_catch24_feature(feature_name: str):
+    def feature(values: TypingSequence[float], cfg: Mapping[str, Any],
+               ctx: Mapping[str, Any] | None = None) -> _Outcome:
+        return _feature_catch24(feature_name, values, cfg, ctx)
     feature.__name__ = f"_feature_{feature_name}"
     return feature
 
@@ -1016,48 +1153,203 @@ def _feature_textdescriptives_check(values: TypingSequence[float], cfg: Mapping[
                 "about the underlying parse"})
 
 
+# ---- tsfresh --------------------------------------------------------------
+#
+# ``tsfresh`` ships three fixed presets (``MinimalFCParameters``,
+# ``EfficientFCParameters``, ``ComprehensiveFCParameters``), each a growing
+# catalogue of calculators; some calculators are unparameterized (``mean``,
+# ``length``) and some expand into many columns (``ar_coefficient`` alone
+# produces one column per lag it was asked for). ``minimal`` is exactly 10
+# fixed, unparameterized columns -- small and stable enough to hand-name
+# every one of them the way catch22's 22 are hand-named above.
+# ``efficient``/``comprehensive`` run to the high hundreds of columns
+# (measured: 777 and 783 respectively over a 300-point synthetic series),
+# far too many to hand-name individually without the table itself becoming a
+# second thing to keep in sync with every future tsfresh release; those two
+# keep tsfresh's own descriptive calculator name (never a plain integer or
+# array position -- tsfresh does not have positional output at all, every
+# column is already a semantic string like ``"abs_energy"`` or
+# ``"number_peaks__n_5"``) with its ``"__"`` parameter separator flattened to
+# a single ``"_"`` so nothing here repeats tsfresh's own internal formatting
+# convention verbatim.
+#
+# Regardless of preset, this suite reports exactly **one** finding per
+# sequence for the whole ``tsfresh`` feature group -- not one id per
+# sub-feature the way catch22 does -- specifically so that selecting
+# ``comprehensive`` cannot multiply this suite's already-guarded
+# combinatorics by another 780. ``tsfresh_max_features`` caps how many of
+# that one finding's sub-values are kept in its ``distribution`` (sorted by
+# name for a deterministic, reproducible subset); the headline value is the
+# percentage of the *full, uncapped* preset that came back finite, which
+# stays informative (a genuine data-quality signal: how much of what was
+# asked for could actually be computed on a sequence this length) regardless
+# of how large the underlying preset is or how many of its values got
+# truncated out of the reported subset.
+_TSFRESH_PRESETS = {"minimal": "MinimalFCParameters", "efficient": "EfficientFCParameters",
+                    "comprehensive": "ComprehensiveFCParameters"}
+#: Ordinary summary statistics (min/max/rms) need very little data to be
+#: defined, but several efficient/comprehensive calculators (FFT bins, AR
+#: coefficients up to lag 10, agg_linear_trend chunks) are only meaningful
+#: with materially more; 20 matches this module's acf/pacf floor rather than
+#: a value from tsfresh's own documentation, which does not specify one.
+_TSFRESH_MIN_LENGTH = 20
+#: Hand-named because ``minimal`` is small and fixed (10 unparameterized
+#: columns; see the section note above) -- the same reasoning that gives
+#: catch22's 22 features their own table rather than tsfresh's raw names.
+_TSFRESH_MINIMAL_LABELS = {
+    "sum_values": "Sum", "median": "Median", "mean": "Mean", "length": "Length",
+    "standard_deviation": "Standard deviation", "variance": "Variance",
+    "root_mean_square": "Root mean square", "maximum": "Maximum",
+    "absolute_maximum": "Maximum absolute value", "minimum": "Minimum",
+}
+
+
+def _tsfresh_result(ctx: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    analysis: DocumentAnalysis = ctx["analysis"]
+    feature_set = str(ctx["cfg"].get("tsfresh_feature_set", "minimal"))
+    key = (f"timeseries_suite:tsfresh:{ctx['sequence_name']}:"
+           f"{_extra_settings_key(ctx['sequence_name'], ctx['cfg'])}:detrend={ctx['detrended']}:"
+           f"feature_set={feature_set}")
+
+    def build() -> tuple[dict[str, Any] | None, str | None]:
+        preset_name = _TSFRESH_PRESETS.get(feature_set)
+        if preset_name is None:
+            return None, (f"unknown tsfresh_feature_set {feature_set!r}; use one of "
+                          f"{sorted(_TSFRESH_PRESETS)}")
+        tsfresh_module, reason = require("tsfresh")
+        if tsfresh_module is None:
+            return None, reason
+        pandas_module, pandas_reason = require("pandas")
+        if pandas_module is None:
+            return None, pandas_reason
+        try:
+            from tsfresh.feature_extraction import extract_features
+            from tsfresh.feature_extraction import settings as tsfresh_settings
+            fc_parameters = getattr(tsfresh_settings, preset_name)()
+            working_values = list(ctx["working"])
+            frame = pandas_module.DataFrame({
+                "id": [0] * len(working_values), "time": range(len(working_values)),
+                "value": working_values})
+            # tsfresh's own calculators routinely divide by zero or take the
+            # log of zero on a constant or very short input and warn loudly
+            # about it; that is the input's property, not a bug this suite's
+            # own run introduced, and the resulting NaN is already handled
+            # below by being reported as "not finite" rather than a number.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                extracted = extract_features(
+                    frame, column_id="id", column_sort="time", column_value="value",
+                    default_fc_parameters=fc_parameters, disable_progressbar=True, n_jobs=0)
+        except Exception as exc:  # pragma: no cover - library/runtime guard
+            return None, f"tsfresh.extract_features failed ({type(exc).__name__}: {exc})"
+        row = extracted.iloc[0].to_dict()
+        stable_values: dict[str, float | None] = {}
+        for raw_name, raw_value in row.items():
+            # tsfresh always names its one column "value__..."; the "value"
+            # half is this function's own column choice, not part of the
+            # feature's identity, so it is stripped rather than reported.
+            suffix = raw_name.split("__", 1)[1] if "__" in raw_name else raw_name
+            stable_name = suffix.replace("__", "_")
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError):
+                numeric = None
+            stable_values[stable_name] = numeric if numeric is not None and math.isfinite(numeric) else None
+        return {"values": stable_values, "feature_set": feature_set,
+                "library_version": _lib_version(tsfresh_module)}, None
+
+    return analysis.memo(key, build)
+
+
+def _feature_tsfresh(values: TypingSequence[float], cfg: Mapping[str, Any],
+                     ctx: Mapping[str, Any] | None = None) -> _Outcome:
+    if ctx is None:
+        return _Outcome(None, warning="the tsfresh feature set needs suite context and cannot run standalone")
+    result, reason = _tsfresh_result(ctx)
+    if result is None:
+        return _Outcome(None, warning=reason)
+    all_values = result["values"]
+    total = len(all_values)
+    if total == 0:
+        return _Outcome(None, warning="tsfresh returned no columns for the selected feature set")
+    finite_names = sorted(name for name, value in all_values.items() if value is not None)
+    finite_share = 100.0 * len(finite_names) / total
+    max_reported = max(1, int(cfg.get("tsfresh_max_features", 25)))
+    reported_names = sorted(all_values)[:max_reported]
+    reported = {name: all_values[name] for name in reported_names}
+    labels = ({_TSFRESH_MINIMAL_LABELS[name] for name in reported_names if name in _TSFRESH_MINIMAL_LABELS}
+             if result["feature_set"] == "minimal" else set())
+    return _Outcome(finite_share, distribution={
+        "feature_set": result["feature_set"], "requested_features": total,
+        "reported_features": len(reported), "truncated_feature_count": max(0, total - len(reported)),
+        "finite_feature_count": len(finite_names), "values": reported,
+        "labels": sorted(labels) if labels else None,
+        "backend": "tsfresh.extract_features", "library": "tsfresh",
+        "library_version": result["library_version"]}, sample_size_sensitive=True)
+
+
 _EXTENDED_FEATURES: dict[str, Callable[..., _Outcome]] = {
     **{feature_name: _make_catch22_feature(feature_name) for feature_name in _CATCH22_FEATURE_NAMES},
+    **{feature_name: _make_catch24_feature(feature_name) for feature_name in _CATCH24_FEATURE_NAMES},
     "wavelet_energy": _feature_wavelet_energy,
     "wavelet_entropy": _feature_wavelet_entropy,
     "textdescriptives_check": _feature_textdescriptives_check,
+    "tsfresh": _feature_tsfresh,
 }
 
 #: Every valid ``feature_groups`` entry: the original 15 plus the 22 catch22
-#: features, the 2 wavelet features and the 1 textdescriptives cross-check.
-#: None of the 25 new ones are in ``DEFAULT_FEATURE_GROUPS`` -- see the
-#: module docstring's "Guarding the combinatorics" section for why.
+#: features, the 2 catch24 extras, the 2 wavelet features, the 1
+#: textdescriptives cross-check and the 1 (internally configurable) tsfresh
+#: group. None of the 28 new ones are in ``DEFAULT_FEATURE_GROUPS`` -- see
+#: the module docstring's "Guarding the combinatorics" section for why.
 FEATURE_NAMES = _BASE_FEATURE_NAMES + tuple(_EXTENDED_FEATURES)
 
 FEATURE_LABELS.update({
     **{name: f"catch22: {desc}" for name, (_, _, _, desc) in
        zip(_CATCH22_FEATURE_NAMES, _CATCH22_CATALOGUE)},
+    **{name: f"catch24: {label}" for _, name, label, _ in _CATCH24_EXTRAS},
     "wavelet_energy": "Wavelet energy concentration",
     "wavelet_entropy": "Wavelet entropy",
     "textdescriptives_check": "Agreement with textdescriptives",
+    "tsfresh": "tsfresh feature set (configurable preset)",
 })
 
 FEATURE_UNITS.update({
     **{f"catch22_{stable}": unit for _, stable, unit, _ in _CATCH22_CATALOGUE},
+    "catch24_raw_mean": None,  # falls back to the sequence's own unit, like dispersion
+    "catch24_raw_variance": "squared sequence unit",
     "wavelet_energy": "%", "wavelet_entropy": "ratio", "textdescriptives_check": "correlation",
+    "tsfresh": "% of requested tsfresh features returned a finite value",
 })
 
 DEFAULT_MIN_LENGTHS.update({
     **{name: _CATCH22_MIN_LENGTH for name in _CATCH22_FEATURE_NAMES},
+    **{name: _CATCH24_MIN_LENGTH for name in _CATCH24_FEATURE_NAMES},
     "wavelet_energy": _WAVELET_MIN_LENGTH, "wavelet_entropy": _WAVELET_MIN_LENGTH,
-    "textdescriptives_check": 5,
+    "textdescriptives_check": 5, "tsfresh": _TSFRESH_MIN_LENGTH,
 })
 
 # Wavelet decomposition depth (and so the number of bands the energy/entropy
 # is spread across) grows with sequence length, exactly the systematic,
 # length-linked dependence the module docstring's "Sample-size honesty"
-# section describes for hurst/dfa/spectral/runs/permutation_entropy.
+# section describes for hurst/dfa/spectral/runs/permutation_entropy. Several
+# tsfresh calculators (FFT bins, AR coefficients, agg_linear_trend chunks)
+# share that same dependence for the same reason.
 SAMPLE_SIZE_SENSITIVE_FEATURES = SAMPLE_SIZE_SENSITIVE_FEATURES | frozenset(
-    {"wavelet_energy", "wavelet_entropy"})
+    {"wavelet_energy", "wavelet_entropy", "tsfresh"})
 
 # A raw-value agreement check against another library's implementation;
 # detrending one side and not the other would make the comparison meaningless.
 _NEVER_DETREND = _NEVER_DETREND | frozenset({"textdescriptives_check"})
+
+# catch24_raw_mean would be forced to (numerically) zero by detrending -- an
+# OLS residual series always has mean ~0 by construction -- which is exactly
+# the circularity ``dispersion``/``rolling_dispersion`` are excluded from
+# detrending to avoid above; catch24_raw_variance is excluded alongside it so
+# the pair keeps behaving like the ``dispersion`` group it is designed to be
+# compared against, rather than one member of the pair reacting to `detrend`
+# and the other not.
+_NEVER_DETREND = _NEVER_DETREND | frozenset(_CATCH24_FEATURE_NAMES)
 
 assert set(_EXTENDED_FEATURES) == set(FEATURE_NAMES) - set(_BASE_FEATURE_NAMES)
 
@@ -1065,18 +1357,25 @@ assert set(_EXTENDED_FEATURES) == set(FEATURE_NAMES) - set(_BASE_FEATURE_NAMES)
 # ------------------------------------------------------------------- settings
 
 def _expand_feature_group_aliases(names: list[str]) -> list[str]:
-    """Expand the ``"catch22"`` shorthand into its 22 stable feature names.
+    """Expand the ``"catch22"``/``"catch24"`` shorthands into their stable feature names.
 
-    A convenience only: every catch22 feature is just as selectable by its
-    own name (``"catch22_histogram_mode_5bin"``, ...), and the expansion
-    happens before ``max_findings`` truncation, so this changes nothing about
-    what is computed or how it is bounded -- only how many characters a user
-    has to type to ask for all of it.
+    A convenience only: every catch22/catch24 feature is just as selectable
+    by its own name (``"catch22_histogram_mode_5bin"``,
+    ``"catch24_raw_mean"``, ...), and the expansion happens before
+    ``max_findings`` truncation, so this changes nothing about what is
+    computed or how it is bounded -- only how many characters a user has to
+    type to ask for all of it. ``"catch24"`` expands to all 24 (the 22 plus
+    both extras); ``"catch22"`` still expands to just the 22, unchanged.
     """
 
     expanded: list[str] = []
     for name in names:
-        candidates = _CATCH22_FEATURE_NAMES if name == _CATCH22_ALIAS else (name,)
+        if name == _CATCH22_ALIAS:
+            candidates = _CATCH22_FEATURE_NAMES
+        elif name == _CATCH24_ALIAS:
+            candidates = _CATCH22_FEATURE_NAMES + _CATCH24_FEATURE_NAMES
+        else:
+            candidates = (name,)
         for candidate in candidates:
             if candidate not in expanded:
                 expanded.append(candidate)
@@ -1107,6 +1406,12 @@ def _settings(config: Mapping[str, Any] | None) -> dict[str, Any]:
         "language": option(config, "language", "en"),
         "wavelet_name": str(option(config, "wavelet_name", "db4")),
         "wavelet_max_level": int(option(config, "wavelet_max_level", 5)),
+        # Which of tsfresh's three fixed presets the "tsfresh" feature group
+        # runs ("minimal", "efficient" or "comprehensive"); see the "tsfresh"
+        # section above for why the group itself stays one finding per
+        # sequence regardless of which preset this picks.
+        "tsfresh_feature_set": str(option(config, "tsfresh_feature_set", "minimal")),
+        "tsfresh_max_features": int(option(config, "tsfresh_max_features", 25)),
         "min_lengths": dict(option(config, "min_lengths", {})),
         "max_findings": int(option(config, "max_findings", 200)),
     }
