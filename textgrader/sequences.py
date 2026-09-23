@@ -70,16 +70,65 @@ corpus is built from. Both sequences are reachable only when a caller's
 :mod:`textgrader.metrics.semantic_adjacent` until one of them is actually
 requested.
 
-Not every sequence the task's "Source sequences" list asks for is here.
-Sentiment/emotion scoring would need a lexicon this environment does not have
-downloaded (``nltk``'s VADER data is not present and fetching it means a
-network call this pipeline should never make silently), and topic
-probability/topic-ID transitions would need a topic model fit per document,
-which is fragile on anything shorter than a full book and produces a
-*categorical* channel this module's numeric-sequence contract does not cover.
-Both are left out rather than faked; see the ``Deferred`` section of
-``timeseries_suite``'s module docstring, which is the actual feature consumer
-and the more useful place to read the full reasoning.
+**Sentiment, emotion and topic sequences.**  An earlier pass left these three
+out of the "Source sequences" list on reasoning that did not hold up once
+actually checked, per this project's rule that "not installed" is never a
+reason to defer something without proof: it said sentiment/emotion scoring
+needed a lexicon this environment could not download (true only of
+``nltk``'s VADER data, which this module never uses) and that topic
+transitions needed a *categorical* channel outside this module's numeric
+contract (true of the topic label itself, but not of the numeric features a
+suite can compute from it). All three are now real:
+
+* :data:`sentence_sentiment_compound` scores each sentence with
+  ``vaderSentiment``'s rule-based compound polarity in ``[-1, 1]``. Unlike
+  ``nltk``'s VADER integration, ``vaderSentiment`` ships its own lexicon
+  inside the wheel and needs no download or network call at all -- the
+  actual blocker named by the earlier pass simply does not apply to this
+  package.
+* :data:`sentence_emotion_valence` scores each sentence with the NRC
+  emotion lexicon (``nrclex``) as a positive-minus-negative affect balance
+  in ``[-1, 1]`` (0.0 when no sentence word is in the lexicon). ``nrclex``
+  likewise bundles its lexicon as a JSON file read via
+  ``importlib.resources``, so -- like ``vaderSentiment`` -- no download or
+  network call happens at runtime, even though the package declares
+  ``nltk``/``textblob`` as install-time dependencies for its optional
+  ``load_raw_text()`` convenience method; this module never calls that
+  method, tokenizing sentences itself and calling ``load_token_list()``
+  instead, so neither of those two packages' own data needs ever come into
+  play.
+* :data:`window_topic_id` fits one ``scikit-learn`` NMF (default) or LDA
+  topic model, seeded (``random_state``) for determinism, over every
+  document window's bag-of-words and reports each window's *dominant* topic
+  as a float index. That index is honestly a nominal label, not an ordered
+  quantity -- averaging or autocorrelating it directly is not generally
+  meaningful, which is exactly the "categorical channel" the earlier pass's
+  reasoning pointed at -- but three purpose-built numeric feature groups in
+  :mod:`textgrader.metrics.timeseries_suite` (``topic_transition_rate``,
+  ``topic_transition_entropy``, ``topic_dwell_time``) read this sequence and
+  report only well-defined numeric quantities derived from it (how often the
+  topic changes, how much information the previous topic gives about the
+  next one, how long a topic run lasts), never the raw nominal label as if
+  it meant something on its own. Nothing stops a caller from also pointing
+  this suite's generic ``acf``/``trend``/etc. feature groups at
+  ``window_topic_id`` -- that follows directly from this suite's own
+  documented design of running the same battery over every sequence in the
+  registry -- but the label's own docstring below says plainly that it is
+  nominal, so a reader is not misled into treating a difference between
+  topic 2 and topic 0 as a distance.
+
+All three stay out of every default the same way the two embedding sequences
+do (see "Why the embedding sequences are never on by default anywhere" above)
+and none is reachable unless a caller's ``sequences`` setting names it
+explicitly -- ``window_topic_id`` in particular never fits a topic model
+during corpus profiling for exactly that reason (see
+``timeseries_suite``'s own module docstring for the corpus-profiling gate
+this relies on).
+
+Recurrence-quantification sequences (``PyRQA``) are not here because
+recurrence quantification is its own task (Task 21), not a gap in this
+task's own "Source sequences" list -- left untouched rather than folded in
+here.
 """
 
 from __future__ import annotations
@@ -360,6 +409,112 @@ def _build_sentence_content_rarity(analysis: DocumentAnalysis, settings: Mapping
                     {"language": language})
 
 
+# ------------------------------------------------------------- sentiment / emotion builders
+
+def _build_sentence_sentiment_compound(analysis: DocumentAnalysis,
+                                        settings: Mapping[str, Any]) -> Sequence:
+    module, reason = require("vaderSentiment")
+    if module is None:
+        return _empty("sentence_sentiment_compound", "compound score", "sentence", reason, settings)
+    analyzer = module.SentimentIntensityAnalyzer()
+    values = [float(analyzer.polarity_scores(sentence)["compound"])
+             for sentence in analysis.sentences]
+    return Sequence("sentence_sentiment_compound", tuple(values), "compound score", "sentence",
+                    "VADER rule-based compound sentiment polarity of each sentence, in "
+                    "[-1, 1] (negative to positive; 0 is neutral). The lexicon ships inside "
+                    "the vaderSentiment package itself, so this needs no download.", settings)
+
+
+def _build_sentence_emotion_valence(analysis: DocumentAnalysis,
+                                     settings: Mapping[str, Any]) -> Sequence:
+    module, reason = require("nrclex")
+    if module is None:
+        return _empty("sentence_emotion_valence", "affect balance", "sentence", reason, settings)
+    values: list[float] = []
+    for sentence in analysis.sentences:
+        tokens = [word.lower() for word in textlib.words(sentence)]
+        lexicon = module.NRCLex()
+        lexicon.load_token_list(tokens)
+        frequencies = lexicon.affect_frequencies
+        values.append(float(frequencies.get("positive", 0.0) - frequencies.get("negative", 0.0)))
+    return Sequence("sentence_emotion_valence", tuple(values), "affect balance", "sentence",
+                    "NRC emotion-lexicon positive-minus-negative affect share of each sentence, "
+                    "in [-1, 1] (0.0 when no word in the sentence is in the lexicon). The "
+                    "lexicon ships inside the nrclex package itself, so this needs no download.",
+                    settings)
+
+
+# ------------------------------------------------------------- topic-transition builder
+
+#: Bounds on the one-time NMF/LDA fit this sequence needs: a small, capped
+#: topic count and vocabulary keep the fit fast and its cost independent of
+#: how long the book is (only the number of windows grows with length, and
+#: that is already the same window count every other ``window_*`` sequence
+#: pays for). Overridable per the settings this function receives, but always
+#: re-clamped into this range so a caller cannot accidentally ask for a
+#: combinatorial topic-model fit.
+_TOPIC_MIN_TOPICS, _TOPIC_MAX_TOPICS = 2, 20
+_TOPIC_MIN_VOCAB, _TOPIC_MAX_VOCAB = 50, 5000
+
+
+def _build_window_topic_id(analysis: DocumentAnalysis, settings: Mapping[str, Any]) -> Sequence:
+    window_words = max(200, int(settings.get("window_words", 2000)))
+    n_topics = min(_TOPIC_MAX_TOPICS, max(_TOPIC_MIN_TOPICS, int(settings.get("n_topics", 4))))
+    model_name = str(settings.get("topic_model", "nmf")).lower()
+    random_state = int(settings.get("random_state", 42))
+    max_features = min(_TOPIC_MAX_VOCAB, max(_TOPIC_MIN_VOCAB, int(settings.get("max_features", 2000))))
+    recorded_settings = {"window_words": window_words, "n_topics": n_topics,
+                         "topic_model": model_name, "random_state": random_state,
+                         "max_features": max_features}
+
+    module, reason = require("sklearn")
+    if module is None:
+        return _empty("window_topic_id", "topic index", "window", reason, recorded_settings)
+    if model_name not in ("nmf", "lda"):
+        return _empty("window_topic_id", "topic index", "window",
+                      f"unknown topic_model {model_name!r}; use 'nmf' or 'lda'", recorded_settings)
+
+    windows = analysis.windows(window_words)
+    # A topic model needs enough documents (windows) to have something to
+    # tell topics apart with; below twice the topic count it is not fitting
+    # topics so much as memorizing windows.
+    min_windows = n_topics * 2
+    if len(windows) < min_windows:
+        return _empty("window_topic_id", "topic index", "window",
+                      f"needs at least {min_windows} {window_words}-word windows to fit "
+                      f"{n_topics} topics, found {len(windows)}", recorded_settings)
+
+    texts = [" ".join(view.tokens) for view in windows]
+    try:
+        from sklearn.feature_extraction.text import CountVectorizer
+        vectorizer = CountVectorizer(max_features=max_features, stop_words="english")
+        counts = vectorizer.fit_transform(texts)
+        if counts.shape[1] == 0:
+            return _empty("window_topic_id", "topic index", "window",
+                          "no content words survived stop-word removal across the windows; "
+                          "too little distinct vocabulary to fit a topic model", recorded_settings)
+        if model_name == "lda":
+            from sklearn.decomposition import LatentDirichletAllocation
+            model = LatentDirichletAllocation(n_components=n_topics, random_state=random_state,
+                                              max_iter=50)
+        else:
+            from sklearn.decomposition import NMF
+            model = NMF(n_components=n_topics, random_state=random_state, max_iter=300,
+                       init="nndsvda")
+        doc_topic = model.fit_transform(counts)
+        labels = tuple(float(int(row.argmax())) for row in doc_topic)
+    except Exception as exc:  # pragma: no cover - library/runtime guard
+        return _empty("window_topic_id", "topic index", "window",
+                      f"{model_name} topic-model fit failed ({type(exc).__name__}: {exc})",
+                      recorded_settings)
+    return Sequence("window_topic_id", labels, "topic index", "window",
+                    f"Dominant {model_name.upper()} topic index of each {window_words}-word "
+                    f"window, fit once over all of this document's windows with "
+                    f"n_topics={n_topics}, random_state={random_state}. A nominal label, not "
+                    f"an ordered quantity: topic 3 is not 'more' than topic 1.",
+                    recorded_settings)
+
+
 # ------------------------------------------------------------- semantic builders
 
 def _sentence_vectors(analysis: DocumentAnalysis, model_name: str):
@@ -468,6 +623,15 @@ SEQUENCES: dict[str, SequenceSpec] = dict([
     _spec("sentence_distance_centroid", "sentence", "cosine distance", "sentence_rhythm",
           ("sentence_transformers",), "Semantic distance from the document's centroid sentence.",
           _build_sentence_distance_centroid),
+    _spec("sentence_sentiment_compound", "sentence", "compound score", "sentence_rhythm",
+          ("vaderSentiment",), "VADER compound sentiment polarity per sentence.",
+          _build_sentence_sentiment_compound),
+    _spec("sentence_emotion_valence", "sentence", "affect balance", "sentence_rhythm",
+          ("nrclex",), "NRC emotion-lexicon positive-minus-negative affect balance per sentence.",
+          _build_sentence_emotion_valence),
+    _spec("window_topic_id", "window", "topic index", "book_drift", ("sklearn",),
+          "Dominant NMF/LDA topic index per fixed-size window (nominal label).",
+          _build_window_topic_id),
 ])
 
 

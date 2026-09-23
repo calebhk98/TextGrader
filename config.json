@@ -494,6 +494,11 @@
       "wavelet_max_level": 5,
       "tsfresh_feature_set": "minimal",
       "tsfresh_max_features": 25,
+      "adwin_delta": 0.002,
+      "topic_n_topics": 4,
+      "topic_model": "nmf",
+      "topic_random_state": 42,
+      "topic_max_features": 2000,
       "min_lengths": {},
       "max_findings": 200,
       "_requires_catch22_and_catch24": "pycatch22 (pip install pycatch22). Without it, every catch22_* feature group and both catch24_raw_mean/catch24_raw_variance report 'unavailable' with an install hint instead of a number.",
@@ -501,7 +506,10 @@
       "_requires_stationarity": "statsmodels (pip install statsmodels) for a real Augmented Dickey-Fuller test. Without it, the 'stationarity' feature group does NOT go unavailable: it falls back to a labelled, weaker half-split standardized mean-gap proxy and says so in its warning.",
       "_requires_change_points": "ruptures (pip install ruptures) for real PELT change-point search. Without it, the 'change_points' feature group does NOT go unavailable: it falls back to a labelled single-split maximum-mean-shift scan (at most one change point can ever be found) and says so in its warning.",
       "_requires_embedding_sequences": "sentence-transformers (pip install sentence-transformers, in requirements-embeddings.txt) plus a downloaded sentence-embedding model (embedding_model above, default all-MiniLM-L6-v2, fetched on first use). Needed only if 'sequences' explicitly names sentence_similarity_prev or sentence_distance_centroid -- neither is ever selected by default. Without it, both sequences fall back to a TF-IDF lexical-overlap proxy, a different quantity, labelled as such (backend=lexical) in every finding's warning.",
-      "_requires_tsfresh": "tsfresh (pip install tsfresh). Needed only if 'feature_groups' explicitly names 'tsfresh' -- it is never selected by default. Without it, the 'tsfresh' feature group reports 'unavailable' with an install hint instead of a number."
+      "_requires_tsfresh": "tsfresh (pip install tsfresh). Needed only if 'feature_groups' explicitly names 'tsfresh' -- it is never selected by default. Without it, the 'tsfresh' feature group reports 'unavailable' with an install hint instead of a number.",
+      "_requires_adwin": "river (pip install river). Needed only if 'feature_groups' explicitly names 'adwin' -- it is never selected by default. Without it, the 'adwin' feature group reports 'unavailable' with an install hint instead of a number. Runs beside, not instead of, the dependency-free 'page_hinkley' detector.",
+      "_requires_sentiment_and_emotion_sequences": "vaderSentiment (pip install vaderSentiment) for sentence_sentiment_compound, and NRCLex (pip install NRCLex) for sentence_emotion_valence. Needed only if 'sequences' explicitly names one of them -- neither is ever selected by default. Both packages bundle their own lexicon and need no separate download. Without the relevant package, that sequence's findings report 'unavailable' with an install hint instead of a number.",
+      "_requires_topic_sequence": "scikit-learn (pip install scikit-learn) for window_topic_id's one-time NMF/LDA topic-model fit (settings: topic_n_topics, topic_model, topic_random_state, topic_max_features above). Needed only if 'sequences' explicitly names window_topic_id -- it is never selected by default, and its fit never runs during corpus profiling. Without scikit-learn, or with fewer windows than 2x topic_n_topics, that sequence's findings report 'unavailable' naming why."
     },
     "stylometry_suite": {
       "enabled": false,

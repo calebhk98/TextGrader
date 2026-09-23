@@ -219,6 +219,109 @@ def test_change_points_and_page_hinkley_stay_quiet_on_flat_noise():
     assert ph_out.value < 20.0
 
 
+def test_adwin_finds_a_synthetic_level_shift():
+    if not optional.have("river"):
+        pytest.skip("river not installed in this environment")
+    shift_index = 50
+    values = [1.0] * shift_index + [10.0] * (100 - shift_index)
+    out = FEATURES["adwin"](values, SETTINGS)
+    assert out.distribution["event_count"] >= 1
+    # ADWIN needs some data past the shift to accumulate evidence before it
+    # fires, so it lags Page-Hinkley's tighter tolerance; still expected to
+    # land well inside the second half rather than drifting off entirely.
+    assert abs(out.distribution["first_event_index"] - shift_index) <= 25
+
+
+def test_adwin_stays_relatively_quiet_on_flat_noise():
+    if not optional.have("river"):
+        pytest.skip("river not installed in this environment")
+    out = FEATURES["adwin"](_noise(150, seed=7), SETTINGS)
+    assert out.value < 20.0
+
+
+def test_adwin_degrades_without_river(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "river")
+    optional.reset_cache()
+    try:
+        out = FEATURES["adwin"]([1.0] * 30, SETTINGS)
+        assert out.value is None
+        assert "river" in out.warning
+    finally:
+        optional.reset_cache()
+
+
+def test_adwin_runs_beside_page_hinkley_as_an_independent_channel():
+    # Two detectors disagreeing about where a book changes is data this
+    # suite reports, not redundancy to eliminate -- see the module docstring.
+    if not optional.have("river"):
+        pytest.skip("river not installed in this environment")
+    analysis = _analysis(_long_text(paragraphs=60))
+    findings = ts.measure(analysis, config={
+        "sequences": ["sentence_words"], "feature_groups": ["adwin", "page_hinkley"]})
+    ids = {item["metric_id"] for item in findings}
+    assert "rhythm.timeseries_sentence_words_adwin" in ids
+    assert "rhythm.timeseries_sentence_words_page_hinkley" in ids
+
+
+# --------------------------------------------------------- topic-transition features
+
+def test_topic_transition_rate_is_maximal_for_alternation_zero_for_constant():
+    alternating = [0.0, 1.0] * 10
+    constant = [2.0] * 20
+    high = FEATURES["topic_transition_rate"](alternating, SETTINGS)
+    low = FEATURES["topic_transition_rate"](constant, SETTINGS)
+    assert high.value == 100.0
+    assert low.value == 0.0
+
+
+def test_topic_transition_entropy_is_zero_for_constant_maximal_for_alternation():
+    constant = [2.0] * 20
+    # 21 points, 20 transitions, split evenly 10/10 between (0,1) and (1,0)
+    # so the transition distribution is exactly uniform over two outcomes.
+    alternating = ([0.0, 1.0] * 10) + [0.0]
+    low = FEATURES["topic_transition_entropy"](constant, SETTINGS)
+    high = FEATURES["topic_transition_entropy"](alternating, SETTINGS)
+    assert low.value == pytest.approx(0.0, abs=1e-9)
+    assert high.value == pytest.approx(1.0, abs=1e-9)
+
+
+def test_topic_dwell_time_matches_known_run_lengths():
+    # Runs of length 3, 2 and 1 -- mean dwell time is exactly their average.
+    values = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0]
+    out = FEATURES["topic_dwell_time"](values, SETTINGS)
+    assert out.value == pytest.approx((3 + 2 + 1) / 3)
+    assert sorted(out.distribution["dwell_times"]) == [1, 2, 3]
+
+
+def test_topic_features_through_the_suite_over_a_real_alternating_topic_sequence():
+    if not optional.have("sklearn"):
+        pytest.skip("scikit-learn not installed in this environment")
+    import random
+    space = "rocket astronaut orbit spacecraft galaxy planet moon launch satellite nebula".split()
+    cooking = "recipe kitchen oven bake flour sugar butter simmer roast whisk".split()
+    rng = random.Random(2)
+    blocks = []
+    # Each paragraph alone exceeds the sequence's 200-word window floor, so
+    # every window is exactly one paragraph (one topic), never a blend of
+    # both -- the blend is what made an earlier draft of this test flaky.
+    for index in range(20):
+        vocab = space if index % 2 == 0 else cooking
+        blocks.append(" ".join(rng.choice(vocab) for _ in range(220)).capitalize() + ".")
+    analysis = _analysis("\n\n".join(blocks))
+    findings = ts.measure(analysis, config={
+        "sequences": ["window_topic_id"],
+        "feature_groups": ["topic_transition_rate", "topic_transition_entropy", "topic_dwell_time"],
+        "window_words": 200, "topic_n_topics": 2})
+    rate = next(item for item in findings if item["metric_id"].endswith("topic_transition_rate"))
+    assert rate["value"] is not None and rate["value"] > 50.0
+    entropy = next(item for item in findings if item["metric_id"].endswith("topic_transition_entropy"))
+    assert entropy["value"] is not None and entropy["value"] > 0.5
+    dwell = next(item for item in findings if item["metric_id"].endswith("topic_dwell_time"))
+    assert dwell["value"] is not None
+    assert dwell["distribution"]["sequence_settings"]["n_topics"] == 2
+    assert dwell["distribution"]["sequence_settings"]["topic_model"] == "nmf"
+
+
 def test_stationarity_degrades_to_a_labelled_proxy_without_statsmodels(monkeypatch):
     monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "statsmodels")
     optional.reset_cache()
@@ -893,6 +996,21 @@ def test_new_feature_groups_are_all_opt_in():
     assert new_groups == set(ts.FEATURE_NAMES) - set(ts._BASE_FEATURE_NAMES)
 
 
+def test_this_passes_new_feature_groups_and_sequences_are_all_opt_in():
+    # adwin and the three topic-transition features are ordinary _FEATURES
+    # entries (not _EXTENDED_FEATURES), so the disjointness check above does
+    # not see them; check them here instead, alongside the three new
+    # sequences (sentiment, emotion, topic id) sequences.py gained.
+    new_feature_groups = {"adwin", "topic_transition_rate", "topic_transition_entropy",
+                          "topic_dwell_time"}
+    new_sequences = {"sentence_sentiment_compound", "sentence_emotion_valence", "window_topic_id"}
+    assert new_feature_groups <= set(ts._BASE_FEATURE_NAMES)
+    assert new_feature_groups.isdisjoint(ts.DEFAULT_FEATURE_GROUPS)
+    assert new_sequences.isdisjoint(ts.DEFAULT_SEQUENCES)
+    from textgrader import sequences as seq
+    assert new_sequences <= set(seq.SEQUENCES)
+
+
 def test_every_feature_name_has_a_label_unit_and_minimum_length():
     for name in ts.FEATURE_NAMES:
         assert name in ts.FEATURE_LABELS, name
@@ -928,7 +1046,7 @@ def test_worst_case_selection_is_still_bounded_by_max_findings():
     # max_findings still hard-caps it regardless of how large it grows.
     from textgrader import sequences as seq
     worst_case = len(seq.SEQUENCES) * len(ts.FEATURE_NAMES)
-    assert worst_case == 688
+    assert worst_case == 893
     analysis = _analysis(_long_text(paragraphs=150))
     findings = ts.measure(analysis, config={
         "sequences": list(seq.SEQUENCES), "feature_groups": list(ts.FEATURE_NAMES)})
@@ -973,6 +1091,45 @@ def test_embedding_sequences_are_reachable_only_when_explicitly_selected(monkeyp
     assert calls == ["all-MiniLM-L6-v2"]
 
 
+def test_default_configuration_never_fits_a_topic_model_or_scores_sentiment(monkeypatch):
+    # window_topic_id's NMF/LDA fit, and the sentiment/emotion lexicon
+    # lookups, must never run just because a book gets profiled with this
+    # suite's default configuration -- same rule as the embedding sequences
+    # above, checked the same way: patch the exact optional-package lookup
+    # each new builder calls and assert it is never reached.
+    from textgrader import sequences as seq_module
+    real_require = seq_module.require
+    calls: list[str] = []
+
+    def tracking(name):
+        calls.append(name)
+        return real_require(name)
+
+    monkeypatch.setattr(seq_module, "require", tracking)
+    analysis = _analysis(_long_text())
+    ts.measure(analysis, config={})  # exactly what corpus profiling would run
+    assert "sklearn" not in calls
+    assert "vaderSentiment" not in calls
+    assert "nrclex" not in calls
+
+
+def test_topic_sequence_is_reachable_only_when_explicitly_selected(monkeypatch):
+    from textgrader import sequences as seq_module
+    real_require = seq_module.require
+    calls: list[str] = []
+
+    def tracking(name):
+        calls.append(name)
+        return real_require(name)
+
+    monkeypatch.setattr(seq_module, "require", tracking)
+    analysis = _analysis(_long_text(paragraphs=100))
+    ts.measure(analysis, config={
+        "sequences": ["window_topic_id"], "feature_groups": ["topic_transition_rate"],
+        "topic_n_topics": 2, "window_words": 300})
+    assert "sklearn" in calls
+
+
 def test_embedding_backend_differs_from_the_lexical_fallback_on_a_paraphrase():
     if not optional.have("sentence_transformers"):
         pytest.skip("sentence_transformers not installed in this environment")
@@ -1002,6 +1159,24 @@ def test_registered_in_the_metric_registry_off_by_default():
     spec = REGISTRY["timeseries_suite"]
     assert spec.cost == "moderate"
     assert spec.module == "timeseries_suite"
+
+
+def test_registry_defaults_and_config_json_stay_mirrored():
+    # Every switchable setting -- including this pass's adwin_delta/
+    # topic_n_topics/topic_model/topic_random_state/topic_max_features --
+    # must be mirrored in both MetricSpec.defaults and config.json, per this
+    # suite's own hard requirement.
+    import json
+    from pathlib import Path
+    spec = REGISTRY["timeseries_suite"]
+    config = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
+    configured = config["metrics"]["timeseries_suite"]
+    new_keys = {"adwin_delta", "topic_n_topics", "topic_model", "topic_random_state",
+               "topic_max_features"}
+    assert new_keys <= set(spec.defaults)
+    assert new_keys <= set(configured)
+    for key in spec.defaults:
+        assert configured[key] == spec.defaults[key], key
 
 
 def test_off_by_default_through_grade(tmp_path, base_config):
@@ -1055,5 +1230,27 @@ def test_degrades_fully_with_every_optional_package_disabled(monkeypatch, manusc
         depth = next(item for item in report.results
                     if item.metric_id == "rhythm.timeseries_sentence_parse_depth_dispersion")
         assert depth.value is None and depth.warning
+    finally:
+        optional.reset_cache()
+
+
+def test_new_sequences_and_features_degrade_fully_without_their_packages(monkeypatch, manuscript,
+                                                                          base_config):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "all")
+    optional.reset_cache()
+    try:
+        config = {**base_config, "metrics": {**base_config["metrics"], "timeseries_suite": {
+            "enabled": True,
+            "sequences": ["sentence_sentiment_compound", "sentence_emotion_valence",
+                        "window_topic_id"],
+            "feature_groups": ["dispersion", "adwin", "topic_transition_rate"]}}}
+        report = grade.analyze(manuscript, config)
+        from textgrader.results import StatusType
+        errors = [item for item in report.results if item.status_type is StatusType.INTERNAL_ERROR]
+        assert not errors, [(item.metric_id, item.error) for item in errors]
+        ts_results = [item for item in report.results if "timeseries" in item.metric_id
+                     and item.metric_id not in ("rhythm.timeseries_config", "rhythm.timeseries_truncated")]
+        assert ts_results
+        assert all(item.value is None and item.warning for item in ts_results)
     finally:
         optional.reset_cache()

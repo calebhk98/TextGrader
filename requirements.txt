@@ -42,7 +42,10 @@ regex>=2023.0
 # Change-point detection for book-level style drift.
 ruptures>=1.1.9
 
-# Multivariate style distance and robust covariance.
+# Multivariate style distance and robust covariance. Also fits the seeded
+# NMF/LDA topic model behind textgrader.sequences' optional, off-by-default
+# "window_topic_id" sequence (timeseries_suite's "topic_transition_rate"/
+# "topic_transition_entropy"/"topic_dwell_time" feature groups draw on it).
 scikit-learn>=1.3
 
 # Entity co-occurrence graphs (density, components, clustering) for the
@@ -130,6 +133,27 @@ PyWavelets>=1.4
 # feature group. Heavy -- pulls in a large dependency tree -- but stays
 # torch-free, so it lives here rather than in requirements-embeddings.txt.
 tsfresh>=0.20
+
+# Streaming ADWIN drift detector, used by timeseries_suite's optional,
+# off-by-default "adwin" feature group -- run beside, not instead of, that
+# suite's own dependency-free Page-Hinkley detector. Pure Python/C wheel, no
+# model download, torch-free.
+river>=0.21
+
+# Rule-based VADER sentiment scoring, used by textgrader.sequences' optional
+# "sentence_sentiment_compound" sequence (timeseries_suite draws on it, off
+# by default). Bundles its own lexicon in the wheel, unlike nltk's VADER
+# integration, so it needs no separate download or network call.
+vaderSentiment>=3.3
+
+# NRC emotion-lexicon scoring, used by textgrader.sequences' optional
+# "sentence_emotion_valence" sequence (timeseries_suite draws on it, off by
+# default). Also bundles its own lexicon (a JSON file read via
+# importlib.resources), so -- like vaderSentiment above -- no download or
+# network call happens at runtime, even though it declares nltk/textblob as
+# install-time dependencies for an optional convenience method this codebase
+# never calls.
+NRCLex>=4.0
 
 # Date parsing for logic_suite's "temporal_ordering" feature (which of two
 # differing dates on the same subject+predicate is earlier).  Lightweight and

@@ -225,3 +225,169 @@ def test_embedding_backend_catches_a_paraphrase_the_lexical_fallback_misses(monk
     near_zero_lexical = sum(1 for v in lexical.values if v < 0.05)
     assert near_zero_lexical >= len(lexical.values) - 2
     assert statistics.fmean(embedding.values) > statistics.fmean(lexical.values)
+
+
+# --------------------------------------------------------------- sentiment / emotion
+
+def test_sentiment_sequence_degrades_without_vadersentiment(monkeypatch, analysis):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "vaderSentiment")
+    optional.reset_cache()
+    try:
+        sequence = seq.get_sequence(analysis, "sentence_sentiment_compound")
+        assert sequence.values == ()
+        assert "vaderSentiment" in (sequence.warning or "")
+    finally:
+        optional.reset_cache()
+
+
+def test_sentiment_sequence_scores_known_polarity():
+    if not optional.have("vaderSentiment"):
+        pytest.skip("vaderSentiment not installed in this environment")
+    text = ("This is a wonderful, joyful, delightful day. "
+            "This is a terrible, awful, dreadful disaster. "
+            "The table has four legs.")
+    sequence = seq.get_sequence(DocumentAnalysis.from_text(text), "sentence_sentiment_compound")
+    assert sequence.length == 3
+    assert sequence.values[0] > 0.5
+    assert sequence.values[1] < -0.5
+    assert abs(sequence.values[2]) < 0.3
+
+
+def test_sentiment_sequence_is_flat_for_constant_sentiment_text():
+    # A synthetic validation with a known answer: sentences carrying the same
+    # sentiment, worded identically apart from a harmless swap, must produce
+    # a near-flat compound sequence, not spurious drift.
+    if not optional.have("vaderSentiment"):
+        pytest.skip("vaderSentiment not installed in this environment")
+    text = ". ".join(["This is a wonderful and happy day"] * 6) + "."
+    sequence = seq.get_sequence(DocumentAnalysis.from_text(text), "sentence_sentiment_compound")
+    assert sequence.length == 6
+    assert max(sequence.values) - min(sequence.values) < 1e-9
+    assert statistics.pstdev(sequence.values) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_emotion_valence_degrades_without_nrclex(monkeypatch, analysis):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "nrclex")
+    optional.reset_cache()
+    try:
+        sequence = seq.get_sequence(analysis, "sentence_emotion_valence")
+        assert sequence.values == ()
+        assert "nrclex" in (sequence.warning or "")
+    finally:
+        optional.reset_cache()
+
+
+def test_emotion_valence_scores_known_valence():
+    if not optional.have("nrclex"):
+        pytest.skip("nrclex not installed in this environment")
+    text = ("I am happy and joyful and cheerful. "
+            "I am angry and sad and afraid. "
+            "The chair is made of wood.")
+    sequence = seq.get_sequence(DocumentAnalysis.from_text(text), "sentence_emotion_valence")
+    assert sequence.length == 3
+    assert sequence.values[0] > 0.0
+    assert sequence.values[1] < 0.0
+    assert sequence.values[2] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_emotion_valence_is_flat_for_constant_sentiment_text():
+    if not optional.have("nrclex"):
+        pytest.skip("nrclex not installed in this environment")
+    text = ". ".join(["She felt happy and joyful and glad"] * 5) + "."
+    sequence = seq.get_sequence(DocumentAnalysis.from_text(text), "sentence_emotion_valence")
+    assert sequence.length == 5
+    assert max(sequence.values) - min(sequence.values) < 1e-9
+
+
+# --------------------------------------------------------------------- topic id
+
+_SPACE_VOCAB = ("rocket astronaut orbit spacecraft galaxy planet moon launch "
+               "satellite nebula").split()
+_COOKING_VOCAB = ("recipe kitchen oven bake flour sugar butter simmer roast "
+                  "whisk").split()
+
+
+#: 220 words per paragraph, comfortably over ``window_topic_id``'s 200-word
+#: window-size floor (matching every other ``window_*`` sequence's own
+#: floor), so every window is exactly one paragraph -- and so exactly one
+#: topic -- never a same-window blend of both vocabularies that would dilute
+#: the very signal these tests check for.
+def _alternating_topic_text(paragraphs: int = 20, words_per_paragraph: int = 220,
+                            seed: int = 1) -> str:
+    import random
+    rng = random.Random(seed)
+    blocks = []
+    for index in range(paragraphs):
+        vocab = _SPACE_VOCAB if index % 2 == 0 else _COOKING_VOCAB
+        sentence = " ".join(rng.choice(vocab) for _ in range(words_per_paragraph))
+        blocks.append(sentence.capitalize() + ".")
+    return "\n\n".join(blocks)
+
+
+def test_topic_sequence_degrades_without_sklearn(monkeypatch, analysis):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "sklearn")
+    optional.reset_cache()
+    try:
+        sequence = seq.get_sequence(analysis, "window_topic_id", {"n_topics": 2})
+        assert sequence.values == ()
+        assert "sklearn" in (sequence.warning or "")
+    finally:
+        optional.reset_cache()
+
+
+def test_topic_sequence_needs_a_minimum_number_of_windows():
+    if not optional.have("sklearn"):
+        pytest.skip("scikit-learn not installed in this environment")
+    tiny = DocumentAnalysis.from_text("One short paragraph of text here.")
+    sequence = seq.get_sequence(tiny, "window_topic_id", {"n_topics": 4})
+    assert sequence.values == ()
+    assert "windows" in (sequence.warning or "")
+
+
+def test_topic_sequence_records_its_own_settings():
+    if not optional.have("sklearn"):
+        pytest.skip("scikit-learn not installed in this environment")
+    analysis = DocumentAnalysis.from_text(_alternating_topic_text())
+    sequence = seq.get_sequence(analysis, "window_topic_id",
+                                {"window_words": 200, "n_topics": 2, "random_state": 7})
+    assert sequence.settings["n_topics"] == 2
+    assert sequence.settings["topic_model"] == "nmf"
+    assert sequence.settings["random_state"] == 7
+
+
+def test_topic_sequence_is_deterministic_for_a_fixed_seed():
+    if not optional.have("sklearn"):
+        pytest.skip("scikit-learn not installed in this environment")
+    text = _alternating_topic_text()
+    first = seq.get_sequence(DocumentAnalysis.from_text(text), "window_topic_id",
+                             {"window_words": 200, "n_topics": 2})
+    second = seq.get_sequence(DocumentAnalysis.from_text(text), "window_topic_id",
+                              {"window_words": 200, "n_topics": 2})
+    assert first.values == second.values
+
+
+def test_topic_sequence_separates_alternating_topics():
+    # Synthetic validation with a known answer: a document that strictly
+    # alternates between two disjoint vocabularies, one paragraph (and one
+    # window) at a time, must produce a topic-id sequence that changes on
+    # most window-to-window steps.
+    if not optional.have("sklearn"):
+        pytest.skip("scikit-learn not installed in this environment")
+    analysis = DocumentAnalysis.from_text(_alternating_topic_text())
+    sequence = seq.get_sequence(analysis, "window_topic_id", {"window_words": 200, "n_topics": 2})
+    assert sequence.length >= 8
+    transitions = sum(1 for i in range(1, sequence.length)
+                      if sequence.values[i] != sequence.values[i - 1])
+    rate = transitions / (sequence.length - 1)
+    assert rate > 0.5  # far more alternation than a single-topic document would show
+    assert len(set(sequence.values)) == 2  # both topics actually got used
+
+
+def test_topic_sequence_unknown_model_name_degrades_cleanly():
+    if not optional.have("sklearn"):
+        pytest.skip("scikit-learn not installed in this environment")
+    analysis = DocumentAnalysis.from_text(_alternating_topic_text())
+    sequence = seq.get_sequence(analysis, "window_topic_id",
+                                {"window_words": 200, "n_topics": 2, "topic_model": "not_a_model"})
+    assert sequence.values == ()
+    assert "unknown topic_model" in (sequence.warning or "")
