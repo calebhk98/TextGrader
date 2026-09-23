@@ -390,6 +390,17 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   # Off by default: a heavier, more specialized analysis, only
                   # meaningful with author-labelled corpus data.
                   "impostors": False,
+                  # Off by default: needs a corpus profile built with
+                  # embedding_style ALSO enabled at profiling time (so
+                  # feature_profiles['stylometry_suite'] holds per-book
+                  # embedding vectors) plus sentence-transformers at grading
+                  # time. See the module docstring's "How to get embedding
+                  # vectors into a profile".
+                  "embedding_reference": False,
+                  # Off by default: the one measurement in this suite that
+                  # reads the corpus FOLDER (not the cached profile) at
+                  # grading time; needs ncd_corpus_dirs configured.
+                  "ncd_against_corpus": False,
               },
               "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_orders": [2],
               "word_ngram_orders": [1, 2, 3], "pos_ngram_orders": [1, 2, 3, 4],
@@ -406,15 +417,27 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "impostors_k": 10, "impostors_iterations": 25,
               "impostors_feature_fraction": 0.5, "impostors_min_authors": 2,
               "impostors_target_author": None,
+              # "function_words" (default) or "embedding" -- see the module
+              # docstring's "Impostors-style verification".
+              "impostors_representation": "function_words",
+              # ncd_against_corpus: directories of reference .txt/.md files,
+              # read fresh from disk at grading time (see the module
+              # docstring's "True NCD against reference documents"), plus how
+              # many of them and how many bytes of each to bound the cost.
+              "ncd_corpus_dirs": [], "ncd_max_reference_documents": 10,
+              "ncd_max_bytes": 100000,
           },
           summary="Stylometry/authorship suite: character/word/POS/punctuation n-gram entropy, "
                   "lexical-richness statistics (plus a lexicalrichness cross-check), Heaps/Zipf "
                   "fits, section-to-section style stability, compression-based measures, "
-                  "nearest/centroid/OOD distances against a reference corpus, a word-frequency "
-                  "distance family, per-author unigram cross-entropy, a bounded distance-based "
-                  "impostors approximation, and an off-by-default sentence-embedding "
-                  "section-drift representation. Every measurement group is independently "
-                  "switchable; see the module docstring for what remains deferred."),
+                  "nearest/centroid/OOD distances against a reference corpus (both function-word "
+                  "and, once a profile caches per-book embedding vectors, sentence-embedding), a "
+                  "word-frequency distance family, per-author unigram cross-entropy, a bounded "
+                  "distance-based impostors approximation (function-word or embedding "
+                  "representation), an off-by-default sentence-embedding section-drift "
+                  "representation, and an off-by-default true NCD against real reference "
+                  "documents read from disk at grading time. Every measurement group is "
+                  "independently switchable; see the module docstring for what remains deferred."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
