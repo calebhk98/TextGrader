@@ -55,7 +55,7 @@ Add independent mechanical-correctness sensors for grammar, agreement, spelling,
 
 | Library/tool | Add/use it for |
 | --- | --- |
-| **LanguageTool / language_tool_python** | Grammar, spelling, punctuation, capitalization, style and rule-category diagnostics. |
+| **LanguageTool / language_tool_python** | **Not used: LanguageTool is a Java server, and TextGrader is Python only.** Grammar, spelling, punctuation, capitalization, style and rule-category diagnostics. |
 | **Hunspell / pyenchant** | Independent dictionary-based spelling. |
 | **SymSpellPy** | Edit-distance spelling/segmentation anomalies. |
 | **pyspellchecker** | Another independent dictionary/frequency spell checker. |
@@ -124,7 +124,7 @@ These rules are repeated here as a final checklist, but each issue above is inte
 3. **Do not silently create a “quality” aggregate inside one task.** Preserve raw measurements first. A future quality score can learn or explicitly weight them later.
 4. **Reuse `DocumentAnalysis`.** No metric should independently decide what counts as a word, sentence, paragraph, quotation, dialogue or cleaned manuscript.
 5. **Cache expensive shared representations in `analysis._shared`.** This includes parses, embeddings, coreference chains, feature vectors, graph structures and ordered sequences.
-6. **Everything optional must degrade locally.** Add Python libraries to `textgrader.optional.PACKAGES`; external binaries/R/Java tools need equivalent availability/error handling.
+6. **Everything optional must degrade locally, and must be Python.** Add Python libraries to `textgrader.optional.PACKAGES`. TextGrader is Python only: do not add a tool that needs R, a JVM, or another language runtime, even where a table below names one. A compiled helper a Python package calls (a KenLM binary, say) still needs the same availability/error handling.
 7. **Keep new metrics off by default.** They are experimental until benchmarked.
 8. **Stable metric IDs matter.** Corpus profiles depend on them. Do not expose library-generated random/positional names without a stable mapping.
 9. **Store settings/version metadata.** A metric computed with different model, corpus, window, n-gram order or library version may not be comparable.
