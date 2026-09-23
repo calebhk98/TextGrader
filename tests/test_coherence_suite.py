@@ -543,13 +543,22 @@ def test_corpus_profile_round_trip_carries_entity_grid_transition_tables(tmp_pat
 # ------------------------------------------------------------------ runtime
 
 def test_large_document_stays_within_a_runtime_budget(prose):
+    """A regression guard against an accidentally-quadratic pass over a big
+    document, not a portable wall-clock benchmark: it measures this
+    process's own CPU time (``time.process_time()``), which is what a stray
+    O(n^2) loop actually inflates, rather than wall-clock elapsed time, which
+    a busy shared machine inflates for reasons that have nothing to do with
+    this suite's own complexity - this repo's test suite is explicitly run on
+    a 4-core machine shared with several other agents, where wall-clock time
+    for a fixed amount of work is not a stable signal."""
+
     text = "\n\n".join(prose(seed, paragraphs=40) for seed in range(6))
     analysis = _analysis(text)
-    started = time.monotonic()
+    started = time.process_time()
     findings = coherence_suite.measure(analysis, config={"permutations": 30})
-    elapsed = time.monotonic() - started
+    elapsed = time.process_time() - started
     assert findings
-    assert elapsed < 90.0, f"coherence_suite took {elapsed:.1f}s on a large document"
+    assert elapsed < 90.0, f"coherence_suite used {elapsed:.1f}s of CPU time on a large document"
 
 
 def test_every_registered_id_runs_without_raising_via_grade(manuscript, base_config):
