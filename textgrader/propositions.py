@@ -32,16 +32,22 @@ caller opts into :func:`resolve_coreference`, which is off by default. That
 default exclusion is a real recall loss on its own -- most contradiction pairs
 in ordinary prose are exactly "Alice was tired... She wasn't, though" -- and
 it is the reason :func:`resolve_coreference` exists: ``fastcoref`` is now
-installed, and when it loads cleanly a pronoun's resolved antecedent is keyed
-the same way a directly-named subject would be, so "she" and "Alice" land in
-the same bucket. It stays opt-in because it is another neural model on top of
-the spaCy parse this module already pays for, its resolution is only
-sampled over the first ``coreference_max_chars`` characters (not the whole
-book), and -- found by actually trying it in this environment, not assumed --
-the installed ``fastcoref`` release does not load cleanly against the
-installed ``transformers`` release here; see ``_load_coref_model`` for the
-exact failure and :mod:`textgrader.metrics.logic_suite` for how that surfaces
-as an ``unavailable`` reason rather than a crash.
+installed and loads and predicts cleanly here, through
+:func:`textgrader.optional.shim_fastcoref_transformers`, and a pronoun's
+resolved antecedent is keyed the same way a directly-named subject would be
+(see :func:`_coref_representative`), so "she" and "Alice" land in the same
+bucket -- exercised against the real model, not only a fake one, on exactly
+that "Alice was tired... She wasn't" case; recall on it goes from 0 candidates
+with the feature off to 1 with it on. It stays opt-in because it is another
+neural model on top of the spaCy parse this module already pays for, its
+resolution is only sampled over the first ``coreference_max_chars`` characters
+(not the whole book), and every resolution it produces is the model's own
+judgement, never a verified reading -- not because it fails to load. See
+``_load_coref_model`` for how a genuine load or runtime failure (a missing
+package, a future incompatible ``transformers`` release, ...) still degrades
+to an actionable ``unavailable`` reason rather than a crash, and
+:mod:`textgrader.metrics.logic_suite` for how that reason surfaces in a
+finding's warning.
 
 **No named-entity recognition required.** The shared spaCy pipeline disables
 ``ner`` by default (:class:`textgrader.document.NlpSettings`) because it
@@ -373,18 +379,28 @@ def bucketed_pairs(propositions: list[Proposition], *, window_sentences: int,
     have matched. Nothing here is O(propositions^2): every pair considered
     shares a bucket, and every bucket is capped before its pairs are counted.
 
-    Buckets are visited in first-seen order, not by size or interest, so
-    ``max_comparisons`` is spent on whichever bucket the document happens to
-    fill first. A pathological document with one enormous, never-matching
-    bucket early on (the same harmless sentence repeated thousands of times,
-    for instance) can exhaust the whole comparison budget before a later,
-    much smaller bucket that actually contains a conflict is ever reached --
-    found by hand-testing this function against a deliberately repetitive
-    synthetic book, not merely suspected. Ordinary prose rarely repeats one
-    exact clause often enough to trigger this, and reordering the scan to be
-    fair across buckets would change the candidate set every existing caller
-    of this function already depends on, so it is documented here rather than
-    changed.
+    Buckets are visited smallest-first, not in document order. A pathological
+    document with one enormous, never-matching bucket early on (the same
+    harmless sentence repeated thousands of times, for instance) used to
+    exhaust the whole comparison budget before a later, much smaller bucket
+    that actually contains a conflict was ever reached -- found by
+    hand-testing this function against a deliberately repetitive synthetic
+    book, not merely suspected (see
+    ``test_bucket_ordering_reaches_a_small_conflict_before_a_huge_uninteresting_bucket``).
+    A small bucket is the cheap case regardless of what it contains: it is
+    fully compared (or ruled out by the window/paragraph check) in only a few
+    comparisons, so visiting every small bucket before spending the budget on
+    a large one costs almost nothing and buys every document a real chance at
+    its small buckets, no matter where they sit in the text. Ties (equal
+    bucket size) keep their first-seen order, via a stable sort on the
+    dict's own insertion order, so the result is still deterministic run to
+    run for the same input. This does change which pairs a large, heavily
+    capped document surfaces relative to visiting buckets in document order --
+    a real, intentional behaviour change, not a side effect -- because the
+    old order's only property was "whichever bucket the text happens to fill
+    first," which is not a property worth preserving over actually finding
+    the small, informative buckets a book-length ``max_comparisons`` would
+    otherwise never reach.
     """
 
     buckets: dict[tuple[str, str], list[Proposition]] = defaultdict(list)
@@ -392,11 +408,13 @@ def bucketed_pairs(propositions: list[Proposition], *, window_sentences: int,
         if prop.subject_key:
             buckets[(prop.subject_key, prop.predicate_lemma)].append(prop)
 
+    ordered_buckets = sorted(buckets.values(), key=len)
+
     pairs: list[tuple[Proposition, Proposition, str]] = []
     comparisons = 0
     buckets_sampled = False
     window = max(0, int(window_sentences))
-    for items in buckets.values():
+    for items in ordered_buckets:
         if len(items) < 2:
             continue
         if len(items) > _BUCKET_SAMPLE_CAP:
@@ -577,13 +595,18 @@ def wordnet_hypernym_related(a: Proposition, b: Proposition) -> bool:
 
 # --------------------------------------------------------------- coreference
 #
-# fastcoref is now installed, but loading it is expensive (another neural
-# model) and, at the time of writing, its packaged version predates the
-# installed transformers release by enough that construction itself can raise
-# before a single document is ever resolved (see ``_load_coref_model``'s own
-# try/except, which is what turns that into an actionable "unavailable"
-# rather than a crash). Both are real reasons this stays optional and off by
-# default, not merely caution for its own sake.
+# fastcoref is now installed and, through
+# ``textgrader.optional.shim_fastcoref_transformers``, loads and predicts
+# cleanly against the installed transformers release -- verified by exercising
+# the real model, not assumed (see tests/test_logic_suite.py's
+# ``test_coreference_resolution_against_a_real_fastcoref_model``). It stays
+# optional and off by default anyway, because loading it is expensive (another
+# neural model on top of the spaCy parse this module already pays for) and its
+# resolution is only sampled over a document's first ``coreference_max_chars``
+# characters, not a claim that it is unusable. ``_load_coref_model``'s own
+# try/except still turns a genuine load or runtime failure -- a missing
+# package, a future incompatible transformers release -- into an actionable
+# "unavailable" reason rather than a crash.
 
 _PRONOUN_WORDS = frozenset({
     "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them",
@@ -621,23 +644,38 @@ def _load_coref_model() -> tuple[Any, str | None]:
     return outcome
 
 
-def _coref_representative(text: str) -> tuple[str, str] | None:
+def _coref_representative(nlp: Any, text: str) -> tuple[str, str] | None:
     """``(bucket_key, display_text)`` for a cluster's antecedent mention text.
 
-    Formatted the same way :func:`_normalize_key` formats a directly-mentioned
-    subject (``propn:name`` / ``lemma:noun``) so a coreference-resolved "she"
-    lands in the *same* subject+predicate bucket as a sentence that names the
-    character outright, rather than a bucket only pronouns ever reach.
+    Keyed with :func:`_normalize_key` on the mention's own head token -- the
+    same function a directly-mentioned subject is keyed with -- so a
+    coreference-resolved "she" lands in the *same* subject+predicate bucket as
+    a sentence that names the character outright, rather than a bucket only
+    pronouns ever reach.
+
+    This reparses the short mention text through the shared spaCy pipeline
+    rather than lower-casing its last word directly, which is worth the extra
+    (very small) parse: a plural or inflected mention keeps its surface form
+    ("the men", "the children") while a directly-named subject is keyed off
+    spaCy's lemma ("man", "child"). Found wrong by exercising this against a
+    real fastcoref model, not assumed -- "The men were tired. They were not
+    tired at all" resolved the pronoun (``resolved_count`` was 1) but the
+    resolved key was ``lemma:men`` against the directly-extracted sentence's
+    ``lemma:man``, so the two never shared a bucket and coreference bought
+    nothing on exactly the case it exists for. Tagging a two-or-three word
+    phrase in isolation, with no surrounding sentence, is itself an
+    approximation -- POS-tagging a bare noun phrase is easier than a full
+    sentence and rarely wrong, but not guaranteed to match how the same words
+    would have been tagged in context.
     """
 
-    words_ = text.strip().split()
-    if not words_:
+    stripped = text.strip()
+    if not stripped:
         return None
-    last = words_[-1].strip(".,;:!?\"'’”")
-    if not last:
+    tokens = [token for token in nlp(stripped) if not token.is_space and not token.is_punct]
+    if not tokens:
         return None
-    key = f"propn:{last.lower()}" if last[:1].isupper() else f"lemma:{last.lower()}"
-    return key, text.strip()
+    return _normalize_key(tokens[-1]), stripped
 
 
 def _spans_overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
@@ -695,7 +733,7 @@ def _resolve_coreference(analysis: DocumentAnalysis, propositions: list[Proposit
                 best = (start, end, mention)
         if best is None:
             continue
-        keyed = _coref_representative(best[2])
+        keyed = _coref_representative(analysis.nlp, best[2])
         if keyed is None:
             continue
         key, display = keyed

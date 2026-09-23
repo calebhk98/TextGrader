@@ -28,6 +28,9 @@ requires_wordnet = pytest.mark.skipif(not WORDNET_READY, reason="nltk wordnet co
 DATEUTIL_READY = optional.have("dateutil")
 requires_dateutil = pytest.mark.skipif(not DATEUTIL_READY, reason="python-dateutil not available")
 
+FASTCOREF_READY = optional.have("fastcoref")
+requires_fastcoref = pytest.mark.skipif(not FASTCOREF_READY, reason="fastcoref not available")
+
 
 def _findings(text, config=None, **doc_kwargs):
     analysis = DocumentAnalysis.from_text(text, comparison_unit="book", **doc_kwargs)
@@ -152,6 +155,72 @@ def test_pair_cap_is_obeyed_on_a_pathological_repeat():
     assert len(item["evidence"]) <= 5
     assert item["distribution"]["candidate_count"] <= 5
     assert item["distribution"]["settings"]["pairs_capped"] is True
+
+
+@requires_spacy
+def test_bucket_ordering_reaches_a_small_conflict_before_a_huge_uninteresting_bucket():
+    """A small, real conflict must not be starved by a huge bucket ahead of it.
+
+    The pathological case the module docstring used to only document, not
+    fix: one enormous bucket of an identical, never-negated sentence sits at
+    the front of the document, and a tiny two-sentence negation-flip conflict
+    sits at the very end. A comparison budget far too small to ever finish
+    the huge bucket (200 items is up to 19,900 pairs) must still reach the
+    small bucket's conflict, because buckets are now visited smallest-first,
+    not in document order.
+    """
+
+    sentences = ["The cat sat on the mat."] * 200
+    sentences.append("The vault was sealed.")
+    sentences.append("The vault was not sealed.")
+    text = " ".join(sentences)
+    found = _findings(text, config={"max_comparisons": 50, "window_sentences": 500, "max_pairs": 10})
+    item = found["discourse.logic_negation_flip_candidates"]
+    assert item["distribution"]["candidate_count"] == 1
+    assert item["distribution"]["settings"]["comparisons_examined"] <= 50
+
+
+def test_bucketed_pairs_orders_buckets_by_size_with_stable_ties():
+    """Unit-level check on the ordering itself, independent of any metric.
+
+    Two singleton-sized-pair buckets (size 2) must keep their document order
+    relative to each other (a stable sort on equal keys), while a much larger
+    bucket -- wherever it sits in the input -- is always visited last.
+    """
+
+    def make(sentence_index, subject_key, predicate, negated):
+        return prop_lib.Proposition(
+            sentence_index=sentence_index, paragraph_index=0, offset=0, text=f"s{sentence_index}",
+            channel="narration", subject_text=subject_key, subject_key=subject_key,
+            subject_is_pronoun=False, predicate_lemma=predicate, negated=negated,
+            object_text=None, object_key=None, object_is_numeric=False, object_number=None,
+            entity_labels=())
+
+    props = []
+    # A huge bucket ("big", "go") first in document order.
+    for i in range(10):
+        props.append(make(i, "big", "go", False))
+    # Two small buckets after it, each size 2.
+    props.append(make(20, "alpha", "be", False))
+    props.append(make(21, "alpha", "be", True))
+    props.append(make(30, "beta", "be", False))
+    props.append(make(31, "beta", "be", True))
+
+    seen_order = []
+
+    def test(a, b):
+        seen_order.append((a.subject_key, b.subject_key))
+        return "negation" if a.negated != b.negated else None
+
+    scan = prop_lib.bucketed_pairs(props, window_sentences=100, max_pairs=100,
+                                   max_comparisons=100, test=test)
+    # Every comparison from the small buckets happens before any from "big".
+    big_first_index = next(i for i, (a, b) in enumerate(seen_order) if a == "big")
+    small_indices = [i for i, (a, b) in enumerate(seen_order) if a != "big"]
+    assert all(i < big_first_index for i in small_indices)
+    # And the two same-sized small buckets keep their first-seen order.
+    assert seen_order.index(("alpha", "alpha")) < seen_order.index(("beta", "beta"))
+    assert len(scan.pairs) == 2
 
 
 # --------------------------------------------------------- graceful degradation
@@ -486,6 +555,84 @@ def test_coreference_resolution_off_by_default_is_documented_as_excluded():
     found = _findings(text)  # config=None
     item = found["discourse.logic_negation_flip_candidates"]
     assert "coreference_resolution is off" in item["warning"]
+
+
+@requires_spacy
+@requires_fastcoref
+def test_coreference_resolution_against_a_real_fastcoref_model():
+    """The whole coreference path, exercised against the real model, not a fake.
+
+    This is the exact case the module docstring names as coreference
+    resolution's reason to exist: a pronoun-referenced contradiction that is
+    invisible with the feature off and recovered with it on. Kept to two short
+    sentences so this stays fast; the model itself (biu-nlp/f-coref via
+    fastcoref) genuinely loads and predicts here, through the same
+    transformers-5.x compatibility shim the coherence suite uses.
+    """
+
+    text = "Alice was tired. She was not tired at all, though."
+    off = _findings(text, config={"features": {"coreference_resolution": False}})
+    on = _findings(text, config={"features": {"coreference_resolution": True}})
+    off_item = off["discourse.logic_negation_flip_candidates"]
+    on_item = on["discourse.logic_negation_flip_candidates"]
+    # Recall before: the pronoun subject is excluded entirely, so the
+    # negation-flip pair sharing "Alice"/"she" as its subject is never found.
+    assert off_item["distribution"]["candidate_count"] == 0
+    # Recall after: a real model resolves "she" to "Alice" and the pair is found.
+    assert on_item["distribution"]["candidate_count"] == 1
+    assert on_item["evidence"][0]["sentence_a"]["text"] == "Alice was tired."
+    assert on_item["evidence"][0]["sentence_b"]["negated"] is True
+    assert "resolved 1 pronoun-subject" in on_item["warning"]
+
+
+@requires_spacy
+@requires_fastcoref
+def test_coreference_resolution_keys_a_plural_mention_by_lemma_not_surface_form():
+    """Regression: a resolved plural mention must land in the same bucket as a
+    directly-named singular-lemma subject, not a separate ``lemma:<plural>`` one.
+
+    Found by running coreference resolution against the real model for the
+    first time (see the module docstring): ``_coref_representative`` used to
+    key a resolved mention off its raw, un-lemmatized last word, so "They"
+    resolved to "the men" landed in ``lemma:men`` while the directly-extracted
+    sentence's subject "men" was keyed ``lemma:man`` (spaCy's lemma) -- the two
+    never shared a bucket and coreference bought nothing on exactly the
+    contradiction it was meant to surface.
+    """
+
+    text = "The men were tired. They were not tired at all, though."
+    found = _findings(text, config={"features": {"coreference_resolution": True}})
+    item = found["discourse.logic_negation_flip_candidates"]
+    assert item["distribution"]["candidate_count"] == 1
+
+
+@requires_spacy
+def test_coreference_representative_keys_a_resolved_mention_by_lemma(monkeypatch):
+    """Same regression as above, pinned with a fake model so it stays fast and
+    deterministic regardless of what a future fastcoref/model version does.
+    """
+
+    text = "The men were tired. They were not tired at all, though."
+
+    class FakeResult:
+        def __init__(self, clusters):
+            self._clusters = clusters
+
+        def get_clusters(self, as_strings=False):
+            return self._clusters
+
+    class FakeModel:
+        def predict(self, texts):
+            they_at = texts.index("They")
+            return FakeResult([[(0, 7), (they_at, they_at + 4)]])  # "The men" / "They"
+
+    monkeypatch.setitem(prop_lib._COREF_MODEL_CACHE, "model", (FakeModel(), None))
+    try:
+        found = _findings(text, config={"features": {"coreference_resolution": True}})
+        item = found["discourse.logic_negation_flip_candidates"]
+        assert item["distribution"]["candidate_count"] == 1
+    finally:
+        prop_lib._COREF_MODEL_CACHE.pop("model", None)
 
 
 # ---------------------------------------------------------- hand-checked prose
