@@ -180,8 +180,9 @@ Deferred
 
 Permanently out of scope -- not a matter of what happens to be installed:
 
-* **OpenIE / Stanford CoreNLP / AllenNLP SRL.** No such service or legacy
-  model is installed or reachable. ``textgrader/propositions.py`` extracts a
+* **Stanford CoreNLP / Stanford OpenIE.** Not used: both are Java, and
+  TextGrader is Python only by decision.
+* **AllenNLP SRL / OpenIE.** Not yet integrated. ``textgrader/propositions.py`` extracts a
   dependency-parse proxy instead (documented there), which is narrower:
   single subject, single object, no semantic roles, no nested clauses.
 * **Argument mining (claim/premise/support/attack extraction).** No

@@ -131,10 +131,9 @@ than a number that mostly encodes their difference in length.
 
 **Deferred** (named, not silently skipped):
 
-* MALLET stays out of scope: it is a separate Java toolchain, not a Python
-  package this suite can degrade cleanly around, and the user has separately
-  been asked whether a JVM dependency is wanted at all before one is added
-  anywhere in this codebase.
+* MALLET is not used: it is a Java toolchain, and TextGrader is Python only
+  by decision.  Every language-model and compression channel here is either
+  the standard library or a Python package.
 * Every compressor named in the original brief - zlib, gzip, bz2, lzma,
   zstandard, brotli, lz4, snappy, pyppmd - is installed, exercised, and used
   for real, including pyppmd as an actual PPM predictive-model channel

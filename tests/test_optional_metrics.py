@@ -94,16 +94,28 @@ def test_mismatched_metric_options_are_not_compared(tmp_path, base_config):
     assert "different" in item.warning
 
 
-def test_nlp_metric_without_a_model_is_a_visible_warning(tmp_path, base_config):
-    source = tmp_path / "story.txt"
-    source.write_text("The door was opened.", encoding="utf-8")
-    report = grade.analyze(source, {**base_config,
-                                    "metrics": {**base_config["metrics"],
-                                                "passive_voice": {"enabled": True}},
-                                    "nlp": {"model": "certainly_missing_model"}})
-    item = next(item for item in report.results if item.metric_id == "nlp.passive_voice")
-    assert item.value is None
-    assert item.warning and "certainly_missing_model" in item.warning
+def test_nlp_metric_without_a_model_is_a_visible_warning(monkeypatch, tmp_path, base_config):
+    # The premise is "spaCy is installed but the configured model is not", so
+    # the test sets that up rather than inheriting it.  Under a global
+    # TEXTGRADER_DISABLE_OPTIONAL the package itself is disabled and the
+    # warning is, correctly, about the package; without spaCy installed at all
+    # there is no model to be missing, and the test says so instead of failing.
+    monkeypatch.delenv("TEXTGRADER_DISABLE_OPTIONAL", raising=False)
+    optional.reset_cache()
+    try:
+        if not optional.have("spacy"):
+            pytest.skip("spaCy is not installed, so there is no model to be missing")
+        source = tmp_path / "story.txt"
+        source.write_text("The door was opened.", encoding="utf-8")
+        report = grade.analyze(source, {**base_config,
+                                        "metrics": {**base_config["metrics"],
+                                                    "passive_voice": {"enabled": True}},
+                                        "nlp": {"model": "certainly_missing_model"}})
+        item = next(item for item in report.results if item.metric_id == "nlp.passive_voice")
+        assert item.value is None
+        assert item.warning and "certainly_missing_model" in item.warning
+    finally:
+        optional.reset_cache()
 
 
 def test_a_missing_optional_package_degrades_one_metric(monkeypatch, manuscript, base_config):

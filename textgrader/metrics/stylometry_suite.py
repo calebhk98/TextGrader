@@ -291,17 +291,14 @@ True NCD against reference documents
 
 Still deferred (named here rather than faked):
 
-* **pystylometry, PyDelta, MOWEN, JGAAP, stylo (R), stylometry-cli, fastText,
-  Vowpal Wabbit, MALLET, KenLM, pyppmd/PPM.** Permanently out of scope: none
-  are installed in the reference environment, several require an R or JVM
-  runtime this project does not shell out to, and a from-scratch
-  reimplementation of any of them well enough to trust its numbers is a
-  larger project than any pass can responsibly deliver. Their standard-
-  library-reachable *ideas* are kept (Delta-style distances, NCD, n-gram
-  cross-entropy, growth-curve fits, an embedding representation, a
-  distance-based impostors approximation, and now real NCD against reference
-  documents); their specific implementations, and KenLM's actual
-  language-model machinery, are not.
+* **R `stylo`, JGAAP, MALLET.** Not used: `stylo` is R and the other two are
+  Java, and TextGrader is Python only by decision.  Their ideas that are
+  reachable in Python are kept (Delta-style distances, NCD, n-gram
+  cross-entropy, growth-curve fits, an embedding representation, real NCD
+  against reference documents).
+* **pystylometry, PyDelta, MOWEN, stylometry-cli, fastText, Vowpal Wabbit.**
+  All Python packages on PyPI; not yet integrated.  (KenLM and pyppmd, once
+  listed here too, are used for real by ``randomness_suite``.)
 * **Full impostors/unmasking with a real classifier and a large,
   independently-sampled impostor pool.** ``impostors`` (above, in either
   representation) is a bounded approximation over the corpus profile's own
@@ -310,10 +307,6 @@ Still deferred (named here rather than faked):
   richer *representation* available (per-book embeddings, not just
   function-word rates); it did not make the *technique* any more citable,
   and neither representation claims otherwise.
-* **A real R-`stylo`/JGAAP/MOWEN backend.** Explicitly out of scope for this
-  pass: each requires an R or JVM runtime this project does not shell out
-  to, and that choice is being made separately from this suite's own work
-  (see this pass's task description).
 * **Byte n-grams beyond order 2, POS n-grams beyond order 4, more than one
   dependency n-gram order at once.** Available as ``byte_ngram_orders``,
   ``pos_ngram_orders`` and ``dependency_ngram_order`` options for a user who
