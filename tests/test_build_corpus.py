@@ -192,3 +192,28 @@ def test_checked_in_example_config_enables_all_sources() -> None:
     assert set(settings.providers) == set(PROVIDER_TYPES)
     assert settings.genres == ["science_fiction"]
     assert settings.work_types == ["fiction"]
+
+
+def test_standard_ebooks_downloads_the_file_rather_than_the_download_page():
+    """Standard Ebooks answers a plain .epub link with an HTML "your download
+    has started" page; only the ?source=download URL returns the EPUB."""
+
+    from corpus_builder.providers.public import StandardEbooksProvider, direct_download_url
+
+    plain = ("https://standardebooks.org/ebooks/h-g-wells/the-wheels-of-chance/"
+             "downloads/h-g-wells_the-wheels-of-chance.epub")
+    assert direct_download_url(plain) == plain + "?source=download"
+    assert direct_download_url(plain + "?source=download") == plain + "?source=download"
+    assert direct_download_url("https://example.org/book.epub") == "https://example.org/book.epub"
+
+    fetched = []
+    provider = StandardEbooksProvider()
+    candidate = Candidate("standard_ebooks", "the-wheels-of-chance", "The Wheels of Chance",
+                          ["H. G. Wells"],
+                          download_options=[{"url": plain, "media_type": "application/epub+zip"}])
+    with patch.object(StandardEbooksProvider, "_get",
+                      side_effect=lambda url: fetched.append(url) or b"payload"), \
+         patch("corpus_builder.providers.public.extract", return_value="text " * 2000):
+        document = provider.fetch(candidate)
+    assert fetched == [plain + "?source=download"]
+    assert document.source_url == plain + "?source=download"

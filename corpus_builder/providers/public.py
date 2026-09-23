@@ -53,7 +53,23 @@ class StandardEbooksProvider(HTTPProvider):
 
     def fetch(self, candidate: Candidate) -> Document:
         option = candidate.download_options[0]
-        return Document(extract(self._get(option["url"]), option["media_type"], option["url"]), option["url"], option["media_type"])
+        url = direct_download_url(option["url"])
+        return Document(extract(self._get(url), option["media_type"], url), url, option["media_type"])
+
+
+def direct_download_url(url: str) -> str:
+    """The URL that returns the file itself rather than a download page.
+
+    Standard Ebooks answers its plain ``.epub`` link with an HTML "Your
+    download has started" page whose meta refresh points at the same path
+    plus ``?source=download``; only that second URL returns the EPUB.
+    Extracting the page instead fails as "not a zip file", so without this
+    every Standard Ebooks book in a corpus fails to download.
+    """
+
+    if "standardebooks.org" in url and url.endswith(".epub"):
+        return f"{url}?source=download"
+    return url
 
 
 class InternetArchiveProvider(HTTPProvider):
