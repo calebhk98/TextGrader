@@ -246,7 +246,7 @@ of it, so a slow run always says what was slow.
 | `sentence_length_entropy` | fast | - | no | Entropy of the sentence-length distribution, normalized for range. |
 | `sentence_run_lengths` | fast | - | no | Run-length distribution of short/medium/long sentence bands. |
 | `sentence_segmentation` | fast | pysbd | no | Which segmenter was used, and how much it disagrees with the built-in one. |
-| `timeseries_suite` | moderate | statsmodels, ruptures, pycatch22, PyWavelets | no | Trend, autocorrelation, spectral, catch22 and wavelet features over named linguistic sequences; every sequence and feature group is selected in config. |
+| `timeseries_suite` | moderate | statsmodels, ruptures, pycatch22, PyWavelets, tsfresh | no | Trend, autocorrelation, spectral, catch24 and wavelet features over named linguistic sequences; pick the sequences and the feature groups separately in config. |
 
 ### paragraph rhythm
 
@@ -278,7 +278,7 @@ of it, so a slow run always says what was slow.
 | `mattr` | moderate | - | yes | Moving-average type-token ratio, length-resistant lexical diversity. |
 | `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
 | `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
-| `randomness_suite` | moderate | wordfreq, zstandard, brotli, lz4, pyppmd | no | Language-likeness, multi-codec compression and entropy channels: how predictable the text is, and how far it sits from English. |
+| `randomness_suite` | moderate | wordfreq, zstandard, brotli, lz4, snappy, pyppmd, kenlm | no | Language-likeness, multi-codec compression and entropy channels, including a KenLM model trained on the text itself. |
 | `word_rarity` | moderate | wordfreq | no | Zipf word-rarity distribution from general-language frequencies. |
 
 ### repetition
@@ -319,9 +319,9 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `causal_connectives` | fast | - | no | Causal and explanatory connective rates. |
-| `coherence_suite` | parse | spacy, networkx, nltk, sentence-transformers, fastcoref | no | Lexical, WordNet and semantic adjacency, surface *and* coreference-resolved entity grids kept side by side, connective families, and order-permutation baselines. |
+| `coherence_suite` | parse | spacy, networkx, nltk, sentence-transformers, fastcoref | no | Lexical, WordNet and semantic adjacency, surface *and* coreference-resolved entity grids kept side by side, and a corpus-referenced entity-grid transition table. |
 | `hedges_boosters` | fast | - | no | Hedge, booster and modal rates. |
-| `logic_suite` | parse | spacy, transformers, fastcoref, nltk, python-dateutil | no | Candidate contradictions from surface heuristics and proposition triples, cross-checked against an NLI model when one is installed. |
+| `logic_suite` | parse | spacy, transformers, fastcoref, nltk, python-dateutil | no | Surface contradiction candidates and proposition triples, cross-checked against an NLI model and coreference when installed. |
 | `rhetorical_constructions` | moderate | - | no | Repeated rhetorical templates, discovered rather than listed. |
 | `sentence_initial_connectives` | fast | - | no | Rate of sentences opening on However, Indeed, Moreover and the like. |
 
@@ -356,18 +356,27 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `function_words` | fast | - | no | Burrows's Delta against the corpus function-word profiles. |
-| `stylometry_suite` | moderate | lexicalrichness, sentence-transformers | no | Authorship channels kept separate on purpose: n-gram profiles, lexical-richness statistics, Heaps/Zipf fits, section stability, impostors verification and corpus-reference distances. |
+| `stylometry_suite` | moderate | lexicalrichness, sentence-transformers | no | Authorship channels kept separate on purpose: n-gram profiles, lexical richness, section stability, impostors, and nearest-reference distances over cached per-book embeddings. |
 
 Every switch in the five `*_suite` rows above is off by default, and each one
-takes a `features` map so individual measurement groups can be turned on and
-off separately from the suite itself.  Their `needs` column lists what a suite
-*can* use, not what it declares in the registry: the neural channels (an NLI
-model, coreference, a causal language model, sentence embeddings) are off by
-default and are deliberately kept out of each suite's `requires`, because
-`needs_model` is what decides whether the corpus builder profiles a metric, and
-widening it would drop a suite's dozens of cheap channels out of corpus
-profiling to gate one expensive one.  Turning a neural channel on is therefore
-always an explicit act in `config.json`.
+takes a `features` map (or, for `timeseries_suite`, separate `sequences` and
+`feature_groups` lists) so individual measurement groups can be turned on and
+off without the others.  `config.json` carries a `_..._requires` note beside
+each group saying what it needs installed and what it does without it: some
+degrade to a labelled weaker backend, some report `unavailable`.
+
+Their `needs` column lists what a suite *can* use, not what it declares in the
+registry.  The neural channels (an NLI model, coreference, a causal language
+model, sentence embeddings) are off by default and deliberately kept out of
+each suite's `requires`, because `needs_model` is what decides whether the
+corpus builder profiles a metric at all, and widening it to gate one expensive
+channel would drop dozens of cheap ones out of corpus profiling.  Turning a
+neural channel on is always an explicit act in `config.json`.
+
+Two channels need something pip cannot install: `randomness_suite`'s KenLM
+channel needs the `lmplz` binary built from source (the wheel only queries a
+model), and any WordNet channel needs the nltk corpus downloaded, not just the
+package.  Both say so when they cannot run.
 
 ## What these measurements do not claim
 
