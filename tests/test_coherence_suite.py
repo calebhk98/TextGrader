@@ -79,6 +79,7 @@ def test_features_are_independently_switchable(sample_text):
             "entity_grid_transition_entropy")
     expected = {f"discourse.coherence_{stem}{tag}" for stem in stems for tag in channels}
     expected.add("discourse.coherence_entity_graph_density")
+    expected.add("discourse.coherence_entity_grid_transition_corpus_delta")
     assert entity_ids == expected
     # coreference is off by default even when entity is on, and it is a
     # wholly separate feature flag: no "_coref" id leaks in here.
@@ -104,6 +105,13 @@ def test_config_and_registry_declare_the_same_option_surface():
     config = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
     configured = dict(config["metrics"]["coherence_suite"])
     configured.pop("enabled")
+    # "_"-prefixed keys are documentation for whoever reads config.json (what
+    # a feature needs installed, what happens without it) -- grade.py's
+    # metric_options() and options_match_profile() strip them before they
+    # reach a metric or affect profile comparability, so they are not part of
+    # the tunable option surface this test is otherwise checking parity on.
+    for key in [key for key in configured if key.startswith("_")]:
+        assert configured.pop(key)  # every note must actually say something
     assert set(configured) == set(spec.defaults)
     assert configured["features"] == spec.defaults["features"]
 
@@ -398,6 +406,46 @@ def test_wordnet_lexical_chain_is_reported_alongside_the_identity_chain():
     assert wordnet["value"] > identity["value"]
 
 
+def test_hypernym_chain_catches_a_recurring_category_the_stricter_chains_miss():
+    """The disagreement this channel exists to show: "car" and "truck" never
+    repeat a word (defeats the identity chain) and are not each other's
+    first-sense synonym either (defeats the WordNet synonym chain), but they
+    are both close hyponyms of "motor vehicle" -- exactly the kind of
+    category repetition only the hypernym-proximity chain can see."""
+
+    wn, reason = coh.require_wordnet()
+    if wn is None:
+        pytest.skip(f"WordNet is not available in this environment: {reason}")
+    sentences = ["The old car rattled down the lane.",
+                "A battered truck rumbled past soon after.",
+                "Overhead a hawk circled once in silence.",
+                "A different truck honked twice near the corner."]
+    analysis = _analysis(_paragraph_of(sentences))
+    findings = {item["metric_id"]: item for item in coherence_suite.measure(
+        analysis, config={"features": {"lexical": True, "lexical_wordnet": True,
+                                       "lexical_wordnet_hypernym": True, "semantic": False,
+                                       "entity": False, "connectives": False,
+                                       "order_permutation": False}})}
+    identity = findings["discourse.coherence_lexical_chain_coverage"]
+    wordnet = findings["discourse.coherence_lexical_chain_coverage_wordnet"]
+    hypernym = findings["discourse.coherence_lexical_chain_coverage_hypernym"]
+    assert hypernym["value"] is not None
+    assert hypernym["distribution"]["backend"] == "wordnet_hypernym"
+    assert hypernym["distribution"]["mean_link_hypernym_distance"] is not None
+    # "car" and "truck" (twice) link only under the loose, hypernym-proximity
+    # criterion, so this channel covers strictly more of the fixture than
+    # either stricter chain, which is the whole point of reporting it
+    # separately rather than folding it into one of them.
+    assert hypernym["value"] > identity["value"]
+    assert hypernym["value"] > wordnet["value"]
+
+
+def test_hypernym_chain_is_off_by_default_even_with_lexical_wordnet_on(sample_text):
+    ids = _ids(coherence_suite.measure(
+        _analysis(sample_text), config={"features": {"lexical_wordnet": True}}))
+    assert "discourse.coherence_lexical_chain_coverage_hypernym" not in ids
+
+
 def test_lexical_wordnet_is_off_by_default(sample_text):
     ids = _ids(coherence_suite.measure(_analysis(sample_text)))
     assert "discourse.coherence_lexical_chain_coverage_wordnet" not in ids
@@ -421,6 +469,75 @@ def test_findings_record_the_settings_that_produced_the_number(sample_text):
     if not findings["discourse.coherence_entity_grid_transition_entropy"]["warning"]:
         entropy = findings["discourse.coherence_entity_grid_transition_entropy"]
         assert entropy["distribution"]["role_schema"]
+
+
+# ---------------------------------------------------- corpus profile round trip
+
+_TRANSITION_ONLY_FEATURES = {"lexical": False, "lexical_wordnet": False,
+                            "lexical_wordnet_hypernym": False, "semantic": False,
+                            "entity": True, "coreference": False, "connectives": False,
+                            "order_permutation": False}
+
+
+def test_profile_vector_caches_the_surface_entity_grid_transition_table(sample_text):
+    analysis = _analysis(sample_text)
+    if analysis.nlp_unavailable:
+        pytest.skip("spaCy is not available in this environment")
+    vector = coherence_suite.profile_vector(analysis, {"entity_max_tracked": 150})
+    assert vector
+    assert set(vector) == set(coh.TRANSITION_KEYS)
+    assert sum(vector.values()) == pytest.approx(1.0)
+
+
+def test_corpus_profile_round_trip_carries_entity_grid_transition_tables(tmp_path, base_config,
+                                                                         prose):
+    """The round trip is the point: build a profile with the suite enabled and
+    both the parse and model flags on (this suite needs both - see the module
+    docstring), confirm ``feature_profiles`` actually gained a per-book
+    transition-frequency row via ``profile_vector``, then confirm a grading
+    run's corpus-delta finding uses those cached rows rather than reporting
+    "no corpus profile available"."""
+
+    from textgrader.corpus import build_profile, write_profile
+
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    book_count = 5
+    for index in range(book_count):
+        (corpus_dir / f"book{index}.txt").write_text(prose(400 + index, paragraphs=20),
+                                                      encoding="utf-8")
+    metrics_config = {"coherence_suite": {"enabled": True, "features": _TRANSITION_ONLY_FEATURES}}
+    # metric_selection="auto" would fall back to "all" here because ``metrics``
+    # is not None it already IS supplied, so this also exercises the ordinary
+    # "enabled" selection path grade.py's own corpus builder uses.
+    profile = build_profile([corpus_dir], metrics=metrics_config,
+                            include_parse_metrics=True, include_model_metrics=True)
+    if analysis_unavailable := not profile["feature_profiles"].get("coherence_suite"):
+        pytest.skip(f"spaCy is not available in this environment "
+                   f"(metric_errors={profile['metric_errors']})")
+
+    rows = profile["feature_profiles"]["coherence_suite"]
+    assert len(rows) == book_count
+    for row in rows:
+        assert row, "every book in this fixture has recurring entities"
+        assert set(row) <= set(coh.TRANSITION_KEYS)
+        assert sum(row.values()) == pytest.approx(1.0)
+
+    write_profile(profile, tmp_path / "profile.json")
+    manuscript_path = tmp_path / "manuscript.txt"
+    manuscript_path.write_text(prose(999, paragraphs=20), encoding="utf-8")
+    config = {**base_config, "corpus_profile": "profile.json",
+              "metrics": {**base_config["metrics"], **metrics_config}}
+    report = grade.analyze(manuscript_path, config)
+    errors = [item for item in report.results if item.status_type is StatusType.INTERNAL_ERROR]
+    assert not errors, [(item.metric_id, item.error) for item in errors]
+
+    delta = next(item for item in report.results
+                if item.metric_id == "discourse.coherence_entity_grid_transition_corpus_delta")
+    assert delta.value is not None, delta.warning
+    assert delta.distribution["corpus_size"] == book_count
+    assert delta.distribution["backend"] == "surface_lemma"
+    assert delta.distribution["role_schema"] == coh.ROLE_SCHEMA_VERSION
 
 
 # ------------------------------------------------------------------ runtime

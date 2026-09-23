@@ -205,6 +205,97 @@ def wordnet_concept_key(word: str, wn_module: Any) -> str:
     return synsets[0].name() if synsets else word
 
 
+def wordnet_best_synset(word: str, wn_module: Any) -> Any | None:
+    """The same first-sense call as :func:`wordnet_concept_key`, but returning
+    the synset object itself rather than its name, for callers (see
+    :func:`hypernym_lexical_chains`) that need to measure a DISTANCE between
+    two words' senses rather than test them for exact equality."""
+
+    try:
+        synsets = wn_module.synsets(word)
+    except Exception:  # pragma: no cover - defensive against a corrupt corpus
+        synsets = []
+    return synsets[0] if synsets else None
+
+
+def hypernym_lexical_chains(units: Sequence[str], wn_module: Any, *, gap: int = 3,
+                            min_len: int = 3, max_distance: int = 3
+                           ) -> list[dict[str, Any]]:
+    """Chains linked by WordNet hypernym-tree PROXIMITY, not identity.
+
+    :func:`lexical_chains` (identity) and its ``key_fn=wordnet_concept_key``
+    mode (synonymy) both require two mentions to resolve to the exact same
+    concept before they count as "the same idea recurring" - a chain of "car"
+    and "sedan" only forms if both happen to share their very first WordNet
+    sense.  This chain is deliberately looser: two words link if their
+    first-sense synsets sit within ``max_distance`` hops of each other in
+    WordNet's hypernym tree (``car`` -> ``motor vehicle`` <- ``truck`` is
+    distance 2), which catches "the same broad idea keeps coming up" even
+    when no single word or sense is ever repeated. That looseness is exactly
+    why this is reported as its OWN finding next to the identity- and
+    synonym-based ones rather than replacing either: a document can score
+    high here and low on both of the stricter chains, and that gap is itself
+    the finding (repetition of a *category*, not of a word or a sense).
+
+    Cost is bounded the same way :func:`lexical_chains` bounds it: only
+    chains still inside the ``gap``-sentence window are ever compared
+    against, so a chain that fell silent is moved to ``finished`` and stops
+    costing anything, keeping this roughly linear in the number of content
+    words actually in play at once rather than in the whole document's
+    length. ``shortest_path_distance`` is still the expensive part per
+    comparison (a bounded hypernym-tree walk), which is the reason this
+    channel is opt-in (``features.lexical_wordnet_hypernym``) rather than
+    folded into the identity chain that always runs.
+
+    Returns a list of ``{"indices": [...], "distances": [...]}`` dicts (one
+    per chain; ``distances`` has one entry per link after the first mention),
+    not the bare index lists :func:`lexical_chains` returns, because a
+    hypernym chain's own distance is data a caller needs to report (how
+    loose was the concept this chain tracked), not something implied by
+    membership the way exact-match chains imply distance zero.
+    """
+
+    open_chains: list[dict[str, Any]] = []
+    finished: list[dict[str, Any]] = []
+    synset_cache: dict[str, Any] = {}
+    for index, unit in enumerate(units):
+        still_open = []
+        for chain in open_chains:
+            (finished if index - chain["last_index"] > gap else still_open).append(chain)
+        open_chains = still_open
+        seen_this_unit: set[str] = set()
+        for word in content_words(unit, min_len):
+            if word in seen_this_unit:
+                continue
+            seen_this_unit.add(word)
+            if word not in synset_cache:
+                synset_cache[word] = wordnet_best_synset(word, wn_module)
+            synset = synset_cache[word]
+            if synset is None:
+                continue
+            best_chain, best_distance = None, None
+            for chain in open_chains:
+                if chain["last_index"] == index:
+                    continue  # already extended by another word this unit
+                try:
+                    distance = synset.shortest_path_distance(chain["synset"])
+                except Exception:  # pragma: no cover - cross-POS/disconnected synsets
+                    distance = None
+                if distance is None or distance > max_distance:
+                    continue
+                if best_distance is None or distance < best_distance:
+                    best_chain, best_distance = chain, distance
+            if best_chain is not None:
+                best_chain["indices"].append(index)
+                best_chain["last_index"] = index
+                best_chain["distances"].append(best_distance)
+            else:
+                open_chains.append({"synset": synset, "last_index": index,
+                                    "indices": [index], "distances": []})
+    finished.extend(open_chains)
+    return [{"indices": chain["indices"], "distances": chain["distances"]} for chain in finished]
+
+
 # ----------------------------------------------------------------- entities
 
 def chunk_role(dep: str) -> str:
@@ -311,6 +402,36 @@ def transition_counts(rows: Mapping[str, Sequence[str]]) -> dict[tuple[str, str]
             key = (a, b)
             counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+#: The closed four-way role schema's 16 ordered transitions, as the fixed,
+#: JSON-safe string keys :func:`transition_frequency_vector` always emits (one
+#: entry per pair, present even at 0.0), so two documents' vectors -- or a
+#: document's and a corpus's pooled mean -- are always directly comparable
+#: term by term without either side guessing which keys the other has.
+ROLES: tuple[str, ...] = ("S", "O", "X", "-")
+TRANSITION_KEYS: tuple[str, ...] = tuple(f"{a}->{b}" for a in ROLES for b in ROLES)
+
+
+def transition_frequency_vector(counts: Mapping[tuple[str, str], int]) -> dict[str, float]:
+    """The 16-way entity-grid transition table as a probability vector.
+
+    This is the table :func:`transition_counts` already produces, reshaped
+    into the one form a corpus profile can actually cache: a flat, fixed-key
+    ``dict[str, float]`` summing to 1.0, suitable for
+    :func:`textgrader.corpus.build_profile`'s ``profile_vector`` hook (which
+    stores one such row per book) exactly the way
+    :func:`textgrader.metrics.function_words.vector` already does for
+    function-word rates.  Returns ``{}`` (falsy, so a caller can treat it the
+    same as "nothing to cache") when there were no transitions at all, rather
+    than a vector of sixteen zeros that would silently pull a corpus mean
+    toward zero for a book that simply had no entity grid.
+    """
+
+    total = sum(counts.values())
+    if not total:
+        return {}
+    return {f"{a}->{b}": counts.get((a, b), 0) / total for a in ROLES for b in ROLES}
 
 
 def entropy_of_counts(counts: Mapping[Any, int]) -> float | None:
@@ -611,9 +732,11 @@ def order_score_from_overlap(units: Sequence[str], min_len: int = 3) -> float:
 
 __all__ = [
     "ROLE_SCHEMA_VERSION", "content_words", "jaccard", "adjacent_overlap",
-    "lexical_chains", "require_wordnet", "wordnet_concept_key", "chunk_role",
+    "lexical_chains", "require_wordnet", "wordnet_concept_key", "wordnet_best_synset",
+    "hypernym_lexical_chains", "chunk_role",
     "entity_mentions_by_sentence", "channel_indices", "project_rows", "entity_frequency",
-    "grid_rows", "transition_counts", "entropy_of_counts", "build_entity_graph",
+    "grid_rows", "transition_counts", "entropy_of_counts", "ROLES", "TRANSITION_KEYS",
+    "transition_frequency_vector", "build_entity_graph",
     "graph_stats", "DEFAULT_COREF_MODEL", "mention_role", "coref_mentions_by_sentence",
     "resolve_coreference", "permutation_percentile", "order_score_from_overlap",
 ]
