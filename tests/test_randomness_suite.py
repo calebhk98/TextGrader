@@ -9,8 +9,12 @@ pinning exact numbers, which would make the suite brittle for no benefit.
 
 from __future__ import annotations
 
+import os
 import random
+import shutil
 import string
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -214,6 +218,7 @@ def test_missing_optional_compressors_degrade_without_crashing(monkeypatch):
 @pytest.mark.parametrize("text", ["", "Hi.", "A\n\nB\n\nC", "word " * 5])
 def test_degenerate_documents_never_crash(text):
     findings = _measure(text, features={**rs.DEFAULT_FEATURES, "pos_dependency": True,
+                                        "kenlm_language_model": True,
                                         "neural_language_model": True,
                                         "textdescriptives_cross_check": True})
     assert findings
@@ -304,6 +309,58 @@ def test_compression_ratio_finding_records_the_effective_setting(all_findings):
     if item["value"] is None:
         pytest.skip("pyppmd not installed in this environment")
     assert item["distribution"]["effective_setting"] == {"max_order": rs.DEFAULTS["compression_level"]}
+
+
+# --------------------------------------------------------------------- snappy
+#
+# snappy was previously kept unavailable on purpose ("proving the degradation
+# path works") even once libsnappy-dev made it importable; the user rejected
+# that reasoning ("We don't need to prove degradation"), so it is wired up as
+# a real channel like every other compressor. It is NOT held to the same
+# "same ballpark as zlib" bound as the other newly-available compressors
+# above: Snappy trades compression ratio for speed by design, so a
+# meaningfully weaker ratio than zlib on the same text is its correct,
+# honest behaviour, not a bug.
+
+def test_snappy_is_a_real_channel_not_a_permanent_unavailable(all_findings):
+    if not optional.have("snappy"):
+        pytest.skip("python-snappy not installed in this environment")
+    item = all_findings["real_prose"][f"{rs.ID}compression_ratio_snappy"]
+    zlib_item = all_findings["real_prose"][f"{rs.ID}compression_ratio_zlib"]
+    assert item["value"] is not None and item["warning"] is None
+    assert item["value"] > 1.0  # a genuine compression, not a pass-through bug
+    # Loose bound: catches a real bug (compressing zero bytes, double
+    # compression) without asserting snappy matches zlib's strength, which it
+    # is not designed to.
+    assert 0.05 * zlib_item["value"] < item["value"] < 3 * zlib_item["value"]
+
+
+def test_snappy_has_no_compression_level_and_says_so():
+    """python-snappy's compress() takes no level/quality parameter at all;
+    reporting the shared ``compression_level`` knob as though it had been
+    used would misrepresent what actually happened."""
+
+    setting_name, setting_value = rs._effective_setting("snappy", 6)
+    assert setting_value is None
+    if optional.have("snappy"):
+        # And the finding itself must say the same thing, not just the helper.
+        item = _measure(REAL_PROSE)[f"{rs.ID}compression_ratio_snappy"]
+        assert item["distribution"]["effective_setting"] == {setting_name: None}
+
+
+def test_snappy_ranks_repeated_lowest_entropy_and_random_highest(all_findings):
+    if not optional.have("snappy"):
+        pytest.skip("python-snappy not installed in this environment")
+
+    def value(name):
+        return all_findings[name][f"{rs.ID}compression_ratio_snappy"]["value"]
+
+    repeated, real = value("repeated_phrase"), value("real_prose")
+    shuffled_chars, random_letters = value("shuffled_chars"), value("random_letters")
+    # Higher ratio = more compressible = less random, same reading as zlib's
+    # channel above.
+    assert repeated > real > shuffled_chars
+    assert repeated > real > random_letters
 
 
 # ------------------------------------------------------- corruption ordering
@@ -483,6 +540,201 @@ def test_ppm_cross_entropy_is_distinct_from_the_compression_ratio_channel(all_fi
         pytest.skip("pyppmd not installed in this environment")
     assert ppm["unit"] == "bits/char"
     assert ratio["unit"] == "ratio"
+
+
+# ------------------------------------------------------- KenLM language model
+#
+# kenlm (the query-time Python bindings) is installed in this environment,
+# and so is a compiled lmplz trainer - but never assumed to be on PATH, since
+# pip cannot install it and a build toolchain's own temporary path is not
+# durable or portable to another install. _discover_lmplz_for_tests looks on
+# PATH first and only falls back to the one specific location this task's
+# own environment is known to have built it in, purely so this suite's own
+# test run exercises the real training path when it can; every test below
+# still skips cleanly when neither is found.
+
+def _discover_lmplz_for_tests() -> str | None:
+    found = shutil.which("lmplz")
+    if found:
+        return found
+    fallback = Path("/tmp/kenlm-src/build/bin/lmplz")
+    return str(fallback) if fallback.is_file() else None
+
+
+_KENLM_LMPLZ_PATH = _discover_lmplz_for_tests()
+_HAVE_KENLM = optional.have("kenlm") and _KENLM_LMPLZ_PATH is not None
+
+
+def test_kenlm_language_model_is_off_by_default():
+    assert rs.DEFAULT_FEATURES["kenlm_language_model"] is False
+    findings = _measure(REAL_PROSE)
+    assert f"{rs.ID}kenlm_cross_entropy" not in findings
+
+
+def test_kenlm_language_model_spawns_no_subprocess_under_default_config(monkeypatch):
+    """The hard requirement: measuring with MetricSpec.defaults must never
+    even ask optional.require for kenlm, let alone run lmplz - so corpus
+    profiling (which uses exactly these defaults) cannot spawn a training
+    subprocess no matter what is installed."""
+
+    requested: list[str] = []
+    real_require = optional.require
+
+    def _tracking_require(name):
+        requested.append(name)
+        return real_require(name)
+
+    ran: list[list[str]] = []
+    real_run = subprocess.run
+
+    def _tracking_run(command, *args, **kwargs):
+        ran.append(list(command))
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(rs, "require", _tracking_require)
+    monkeypatch.setattr(rs.subprocess, "run", _tracking_run)
+    _measure(REAL_PROSE)  # rs.DEFAULTS: kenlm_language_model is False
+    assert "kenlm" not in requested
+    assert not ran
+
+
+def test_kenlm_language_model_degrades_visibly_without_the_kenlm_package(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "kenlm")
+    optional.reset_cache()
+    try:
+        findings = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "kenlm_language_model": True})
+        item = findings[f"{rs.ID}kenlm_cross_entropy"]
+        assert item["value"] is None
+        assert "pip install kenlm" in item["warning"] or "kenlm" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+def test_kenlm_language_model_reports_which_build_step_is_missing_when_lmplz_is_absent(monkeypatch):
+    """The honesty constraint: 'lmplz not found' must name the actual missing
+    piece (a compiled trainer pip cannot provide) and where it looked, not a
+    bare 'kenlm unavailable' that would send someone to a pip install that
+    cannot fix this."""
+
+    if not optional.have("kenlm"):
+        pytest.skip("kenlm python bindings not installed in this environment")
+    monkeypatch.setattr(rs.shutil, "which", lambda name: None)
+    findings = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "kenlm_language_model": True},
+                        kenlm_lmplz_path="")
+    item = findings[f"{rs.ID}kenlm_cross_entropy"]
+    assert item["value"] is None
+    assert "lmplz" in item["warning"]
+    assert "build" in item["warning"].lower() or "compil" in item["warning"].lower()
+    assert "pip install kenlm" in item["warning"]
+
+
+def test_find_lmplz_binary_prefers_a_configured_path_over_path(tmp_path, monkeypatch):
+    fake = tmp_path / "lmplz"
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(rs.shutil, "which", lambda name: "/should/not/be/used")
+    found, checked = rs._find_lmplz_binary(str(fake))
+    assert found == str(fake)
+    assert checked == [str(fake)]  # PATH is never even consulted once the configured path works
+
+
+def test_find_lmplz_binary_falls_back_to_path_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(rs.shutil, "which", lambda name: "/usr/local/bin/lmplz")
+    found, checked = rs._find_lmplz_binary(None)
+    assert found == "/usr/local/bin/lmplz"
+    assert checked == ["PATH"]
+
+
+def test_find_lmplz_binary_reports_none_when_nowhere_is_found(monkeypatch):
+    monkeypatch.setattr(rs.shutil, "which", lambda name: None)
+    found, checked = rs._find_lmplz_binary("/does/not/exist")
+    assert found is None
+    assert checked == ["/does/not/exist", "PATH"]
+
+
+@pytest.mark.skipif(not _HAVE_KENLM, reason="kenlm python bindings or a compiled lmplz not available")
+def test_kenlm_language_model_trains_and_scores_real_text_when_enabled():
+    findings = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "kenlm_language_model": True},
+                        kenlm_lmplz_path=_KENLM_LMPLZ_PATH)
+    item = findings[f"{rs.ID}kenlm_cross_entropy"]
+    if item["value"] is None:
+        pytest.skip(f"kenlm unavailable in this environment: {item['warning']}")
+    assert item["value"] > 0
+    assert item["unit"] == "bits/word"
+    assert item["sample_size_sensitive"] is True
+    assert item["distribution"]["algorithm"] == "kenlm"
+    assert item["distribution"]["smoothing"] == "modified Kneser-Ney"
+    assert item["distribution"]["order"] == rs.DEFAULTS["kenlm_order"]
+
+
+@pytest.mark.skipif(not _HAVE_KENLM, reason="kenlm python bindings or a compiled lmplz not available")
+def test_kenlm_cross_entropy_ranks_repeated_lowest_and_random_letters_highest():
+    """Same reading as the from-scratch word/char n-gram channels: a real,
+    Kneser-Ney-smoothed word model should find repeated text trivially
+    predictable and an unfamiliar-vocabulary string the least predictable,
+    with word-order shuffling and character shuffling landing in between."""
+
+    def score(text):
+        findings = _measure(text, features={**rs.DEFAULT_FEATURES, "kenlm_language_model": True},
+                            kenlm_lmplz_path=_KENLM_LMPLZ_PATH)
+        return findings[f"{rs.ID}kenlm_cross_entropy"]["value"]
+
+    values = {name: score(text) for name, text in CORRUPTIONS.items()}
+    if any(value is None for value in values.values()):
+        pytest.skip("kenlm unavailable in this environment")
+    # This is a word-level model, so word-order shuffling (which keeps every
+    # whole-word token but destroys its context) is expected to hurt it more
+    # than the two most extreme corruptions below - the actual, measured
+    # behaviour, not an assumption: character shuffling and random letters
+    # both mostly destroy whole words themselves, so KenLM's fixed,
+    # training-derived vocabulary finds almost none of the "words" in either
+    # of them recognisable at all, which costs even more than a familiar
+    # vocabulary in a bizarre order.
+    assert values["repeated_phrase"] < values["real_prose"] < values["shuffled_words"]
+    assert values["shuffled_words"] < values["shuffled_chars"]
+    assert values["shuffled_words"] < values["random_letters"]
+
+
+@pytest.mark.skipif(not _HAVE_KENLM, reason="kenlm python bindings or a compiled lmplz not available")
+def test_kenlm_language_model_uses_build_binary_when_available_for_quiet_loading():
+    """Not a hard requirement (the ARPA file alone is a usable model), but
+    when build_binary is findable this channel should use it: loading a
+    KenLM binary model is silent, while loading the ARPA text file directly
+    prints a progress notice straight to the process's own stderr on every
+    single grading run."""
+
+    findings = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "kenlm_language_model": True},
+                        kenlm_lmplz_path=_KENLM_LMPLZ_PATH)
+    item = findings[f"{rs.ID}kenlm_cross_entropy"]
+    if item["value"] is None:
+        pytest.skip(f"kenlm unavailable in this environment: {item['warning']}")
+    build_binary = Path(_KENLM_LMPLZ_PATH).with_name("build_binary")
+    if not (build_binary.is_file() and os.access(build_binary, os.X_OK)) and not shutil.which("build_binary"):
+        pytest.skip("build_binary not available alongside lmplz or on PATH in this environment")
+    assert item["distribution"]["model_format"] == "binary"
+
+
+def test_kenlm_language_model_degrades_visibly_with_too_little_text():
+    """No crash regardless of whether kenlm/lmplz happen to be available in
+    this environment: too little text to build a held-out split degrades the
+    same way "unavailable" always does elsewhere in this module."""
+
+    findings = _measure("Hi.", features={**rs.DEFAULT_FEATURES, "kenlm_language_model": True})
+    item = findings[f"{rs.ID}kenlm_cross_entropy"]
+    assert item["value"] is None and item["warning"]
+
+
+@pytest.mark.skipif(not _HAVE_KENLM, reason="kenlm python bindings or a compiled lmplz not available")
+def test_kenlm_language_model_names_the_too_little_text_reason_specifically():
+    """With kenlm and lmplz both genuinely available, the specific reason for
+    a short document must be the held-out-split one, not a masked lmplz/kenlm
+    availability problem."""
+
+    findings = _measure("Hi.", features={**rs.DEFAULT_FEATURES, "kenlm_language_model": True},
+                        kenlm_lmplz_path=_KENLM_LMPLZ_PATH)
+    item = findings[f"{rs.ID}kenlm_cross_entropy"]
+    assert item["value"] is None
+    assert "sentences" in item["warning"]
 
 
 # ----------------------------------------------------- corruption baselines

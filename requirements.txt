@@ -84,16 +84,30 @@ pytest>=7.0
 # Extra compression channels for the randomness/compression/entropy suite
 # (textgrader.metrics.randomness_suite).  zlib, gzip, bz2 and lzma need none of
 # these; each package below backs exactly one additional compressor and
-# degrades to a visible "unavailable" finding, never a crash, if it is absent.
-# pyppmd additionally backs a real PPM predictive-model channel
-# (ppm_cross_entropy), not only a compression ratio. python-snappy needs the
-# system libsnappy-dev package; without it, its one finding degrades visibly,
-# which is the point - it is left in compression_algorithms on purpose.
+# degrades to a visible "unavailable" finding, never a crash, on an install
+# that genuinely lacks it. pyppmd additionally backs a real PPM
+# predictive-model channel (ppm_cross_entropy), not only a compression
+# ratio. python-snappy also needs the system libsnappy-dev package (apt/brew,
+# not something pip can install) to build against; without it, that one
+# compressor degrades visibly, same as any of the others here would without
+# their own native dependency.
 zstandard>=0.21
 brotli>=1.1
 lz4>=4.3
 python-snappy>=0.6
 pyppmd>=1.1
+
+# Query-time bindings for randomness_suite's optional "kenlm_language_model"
+# feature (off by default). This wheel provides kenlm.Model for scoring but
+# NOT the trainer: lmplz is a separate C++ program built from KenLM's own
+# source tree (a C++ compiler and Boost, at minimum -- see
+# https://github.com/kpu/kenlm#compiling), which pip cannot build. Put the
+# resulting `lmplz` on PATH, or point
+# metrics.randomness_suite.kenlm_lmplz_path at it directly; without either,
+# this one channel reports "unavailable" naming that exact build step, and
+# every other measurement in this suite is unaffected.
+kenlm>=0.2
+
 # Augmented Dickey-Fuller stationarity test, used by the experimental
 # timeseries_suite metric's "stationarity" feature.  Everything else in that
 # suite (ACF, trend, spectral, Hurst, DFA, permutation entropy, change points,

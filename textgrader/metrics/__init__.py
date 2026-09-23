@@ -310,8 +310,8 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "language_model": True, "punctuation_sequence": True,
                   "pos_dependency": False, "corruption_baselines": True,
                   "lexical_gibberish": True, "ppm_language_model": True,
-                  "letter_bigram_divergence": True, "neural_language_model": False,
-                  "textdescriptives_cross_check": False,
+                  "letter_bigram_divergence": True, "kenlm_language_model": False,
+                  "neural_language_model": False, "textdescriptives_cross_check": False,
               },
               "language": "en",
               "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_order": 3,
@@ -329,17 +329,19 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "corruption_sentence_fraction": 0.3, "corruption_char_order": 4,
               "corruption_word_order": 2, "corruption_max_chars": 20000,
               "consonant_cluster_min": 4, "ppm_max_order": 6,
+              "kenlm_lmplz_path": "", "kenlm_order": 3, "kenlm_memory": "50M",
+              "kenlm_max_train_chars": 200000, "kenlm_timeout_seconds": 30,
               "neural_lm_model": "distilgpt2", "neural_lm_max_chars": 6000,
               "textdescriptives_max_chars": 50000,
           },
           summary="Character/word/POS/punctuation language-likeness, multi-algorithm "
-                  "compression ratios (zlib/gzip/bz2/lzma/zstd/brotli/lz4/pyppmd) and NCD, "
-                  "a real PPM predictive-model cross-entropy, entropy/complexity families "
+                  "compression ratios (zlib/gzip/bz2/lzma/zstd/brotli/lz4/snappy/pyppmd) and "
+                  "NCD, a real PPM predictive-model cross-entropy, entropy/complexity families "
                   "(Shannon, Renyi, Tsallis, permutation, spectral, SVD, ApEn/SampEn, LZ), "
                   "single-letter and corpus-derived letter-bigram divergence from English, "
-                  "seeded shuffle-corruption baselines, and two opt-in external cross-checks "
-                  "(a pretrained causal-LM perplexity, and textdescriptives). Off by "
-                  "default; experimental."),
+                  "seeded shuffle-corruption baselines, and three opt-in external cross-checks "
+                  "(a real KenLM Kneser-Ney n-gram model, a pretrained causal-LM perplexity, "
+                  "and textdescriptives). Off by default; experimental."),
     _spec("timeseries_suite", "timeseries_suite", "sentence_rhythm", "moderate",
           defaults={
               "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],

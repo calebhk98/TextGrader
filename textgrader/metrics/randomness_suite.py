@@ -20,12 +20,14 @@ toggle plus its own named tunables, because a suite this broad has no single
 **Language models are trained on a held-out split of the document being
 graded, never on the whole thing - except the one channel that says
 otherwise.** Every n-gram channel here (char, byte, word, POS, dependency,
-punctuation) and the PPM channel work the same way: hold back a suffix of the
-document's own sentences, fit a model with additive smoothing (or, for PPM,
-an adaptive context model) on everything before it, and score the held-out
-suffix. This is a legitimate, testable, leave-one-out measurement of how
-internally predictable a text is at several linguistic levels; it is NOT a
-claim about English in general, and every one of these findings says so in
+punctuation), the PPM channel, and the KenLM channel work the same way: hold
+back a suffix of the document's own sentences, fit a model on everything
+before it (additive smoothing for the from-scratch n-gram channels; an
+adaptive context model for PPM; a real Kneser-Ney-smoothed n-gram model,
+trained by KenLM's own ``lmplz``, for the KenLM channel), and score the
+held-out suffix. This is a legitimate, testable, leave-one-out measurement of
+how internally predictable a text is at several linguistic levels; it is NOT
+a claim about English in general, and every one of these findings says so in
 its ``distribution``. The corruption-baseline group reuses the exact same
 trained model to score a corrupted version of the same held-out text, which
 is what turns "predictable to itself" into "sensitive to word order /
@@ -102,6 +104,21 @@ than a number that mostly encodes their difference in length.
   finding's own ``distribution`` note for the full explanation; the character
   n-gram and compression channels above remain this module's gibberish
   sensors.
+* The KenLM channel (``features.kenlm_language_model``, off by default)
+  needs a compiled ``lmplz`` binary that ``pip install kenlm`` does not and
+  cannot provide - that package is query-time bindings only. This channel
+  never assumes a build toolchain's own temporary path (a specific
+  environment's ``/tmp/kenlm-src/build/bin`` is not durable and is not this
+  environment's ``/tmp``): it looks for ``lmplz`` at a configured
+  ``kenlm_lmplz_path`` first, then on ``PATH``, and degrades to a single
+  "unavailable" finding naming exactly that build step (source, Boost, and
+  everywhere it looked) when neither is found, rather than pretending KenLM
+  itself is unavailable. Training always writes to a fresh
+  ``tempfile.TemporaryDirectory()``, never anywhere inside this repository or
+  a fixed path, and that directory (the trained ``.arpa`` model included) is
+  removed before the channel returns: a trained language model is exactly
+  the kind of large, environment-specific artifact this codebase does not
+  check in.
 * The ``textdescriptives`` cross-check (``features.textdescriptives_cross_check``,
   off by default) reports that package's ``information_theory`` component
   numbers (entropy/perplexity from spaCy's static lexeme-probability table)
@@ -114,17 +131,34 @@ than a number that mostly encodes their difference in length.
 
 **Deferred** (named, not silently skipped):
 
-* KenLM and MALLET are not used and stay out of scope: KenLM needs a compiled
-  binary this environment has no build toolchain for, and MALLET is a
-  separate Java toolchain, not a Python package this suite can degrade
-  cleanly around. ``snappy`` (needs the system ``libsnappy-dev`` package, not
-  installable from a Python wheel here) stays unavailable for the same
-  reason and is left in ``compression_algorithms`` on purpose, so its
-  "unavailable" finding keeps proving the degradation path works. Every
-  *other* compressor named in the original brief - zstandard, brotli, lz4,
-  pyppmd - is installed, exercised, and used for real, including pyppmd as an
-  actual PPM predictive-model channel (``ppm_cross_entropy``), not only a
-  compression ratio.
+* MALLET stays out of scope: it is a separate Java toolchain, not a Python
+  package this suite can degrade cleanly around, and the user has separately
+  been asked whether a JVM dependency is wanted at all before one is added
+  anywhere in this codebase.
+* Every compressor named in the original brief - zlib, gzip, bz2, lzma,
+  zstandard, brotli, lz4, snappy, pyppmd - is installed, exercised, and used
+  for real, including pyppmd as an actual PPM predictive-model channel
+  (``ppm_cross_entropy``), not only a compression ratio. ``snappy`` needed
+  the system ``libsnappy-dev`` package in an earlier environment; that
+  package is installed now, ``python-snappy`` imports and compresses, and it
+  is wired up as a real channel like every other compressor, not kept
+  artificially unavailable to demonstrate the degradation path -- that path
+  is still exercised for real by ``TEXTGRADER_DISABLE_OPTIONAL=all`` and by
+  whichever of these packages a given install genuinely lacks.
+* KenLM is now used for real (``features.kenlm_language_model``, off by
+  default): the ``kenlm`` Python wheel provides query-time bindings
+  (``kenlm.Model``), and this channel trains a real Kneser-Ney-smoothed
+  n-gram model on the document's own held-out split, exactly like the
+  from-scratch Lidstone-smoothed channels above, then scores the held-out
+  suffix with it. What pip cannot provide is the *trainer*: ``lmplz`` is a
+  separate C++ binary (needs Boost) that has to be built from KenLM's
+  source, so this channel looks for it via ``kenlm_lmplz_path`` or ``PATH``
+  and reports a clear, actionable "unavailable" naming exactly that build
+  step when it cannot find it -- it does not claim KenLM is impossible, only
+  that the trainer is not installed in a given environment, which is a
+  different and much narrower claim. See ``_group_kenlm_language_model``'s
+  docstring for the discovery order and the honesty constraint this channel
+  is held to.
 * The NLTK language-model module is not used. NLTK's own smoothing classes
   were skipped in favor of one Lidstone-smoothed implementation shared by
   every from-scratch n-gram channel here (char, byte, word, POS, dependency,
@@ -153,6 +187,22 @@ than a number that mostly encodes their difference in length.
   and seeded corruptions of itself (word/char/sentence shuffles), which
   answers a related, self-contained question: how much does compressibility
   change when this specific kind of structure is destroyed.
+* A ``profile_vector(analysis, config)`` for this suite - which would get a
+  per-book vector cached under ``feature_profiles["randomness_suite"]`` the
+  next time the shipped corpus profile is rebuilt - was considered and not
+  added. Two things would have to both be true for it to earn its keep: some
+  channel here needs a genuine per-book *distribution* (not a scalar, which
+  already has a slot in ``distributions``) to compare against, and this
+  worktree would need to be able to rebuild ``data/prose_reference.json`` to
+  actually ship it, which it cannot (that file is out of scope for this
+  pass, and rebuilding it needs the raw reference books, not present here).
+  Neither channel added in this pass wants one anyway: a compression ratio
+  and a KenLM cross-entropy are both properties of one document against
+  itself (or a corruption of itself), not a distribution over books the way
+  ``feature_profiles["function_words"]`` is. The letter-bigram reference
+  table already gets its corpus-wide table from a *pooled* count
+  (``word_frequency``), which is the right shape for "one frequency table
+  for the whole corpus" and does not need a per-book vector either.
 * Byte n-gram cross-entropy is reported at one configurable order rather
   than swept across orders like the character channel: for UTF-8 English
   prose the byte and character streams are almost identical past order 2,
@@ -184,10 +234,15 @@ import importlib
 import json
 import lzma
 import math
+import os
 import random
+import shutil
+import subprocess
+import tempfile
 import threading
 import zlib
 from collections import Counter
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .. import optional
@@ -219,6 +274,7 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "lexical_gibberish": True,
     "ppm_language_model": True,  # pyppmd is a real predictive model, not just a ratio.
     "letter_bigram_divergence": True,  # derived reference table; see module docstring.
+    "kenlm_language_model": False,  # needs a compiled lmplz binary; opt-in, see module docstring.
     "neural_language_model": False,  # downloads/runs a pretrained model; opt-in, see module docstring.
     "textdescriptives_cross_check": False,  # needs its own spaCy pipeline; opt-in for parse cost.
 }
@@ -260,6 +316,11 @@ DEFAULTS: dict[str, Any] = {
     "corruption_max_chars": 20_000,
     "consonant_cluster_min": 4,
     "ppm_max_order": 6,
+    "kenlm_lmplz_path": "",  # empty = search PATH for lmplz; see module docstring.
+    "kenlm_order": 3,
+    "kenlm_memory": "50M",  # lmplz's -S sorting-memory cap; its own default (80%) is wasteful here.
+    "kenlm_max_train_chars": 200_000,
+    "kenlm_timeout_seconds": 30,
     "neural_lm_model": "distilgpt2",
     "neural_lm_max_chars": 6_000,
     "textdescriptives_max_chars": 50_000,
@@ -543,7 +604,12 @@ def _build_corruption_texts(analysis: DocumentAnalysis, fraction: float, cap: in
     test_text = " ".join(test_sents).lower()[:cap]
     if len(train_text) < 200 or len(test_text) < 50:
         return None
-    return {"train_text": train_text, "test_text": test_text, "test_sentences": test_sents}
+    # ``train_sentences`` is the un-joined, un-capped list of training
+    # sentences (original case), kept alongside ``train_text`` because
+    # KenLM trains on one sentence per line, not on one undifferentiated
+    # blob of text the way the from-scratch Lidstone n-gram channels do.
+    return {"train_text": train_text, "test_text": test_text, "test_sentences": test_sents,
+            "train_sentences": train_sents}
 
 
 def _shuffled(rng: random.Random, items: Sequence[Any]) -> list[Any]:
@@ -554,7 +620,7 @@ def _shuffled(rng: random.Random, items: Sequence[Any]) -> list[Any]:
 
 # --------------------------------------------------------------- compression
 
-def _effective_setting(name: str, level: int) -> tuple[str, int]:
+def _effective_setting(name: str, level: int) -> tuple[str, int | None]:
     """The (parameter name, clamped value) each codec actually receives.
 
     Every codec here shares the one ``compression_level`` knob, but each has
@@ -588,7 +654,13 @@ def _effective_setting(name: str, level: int) -> tuple[str, int]:
         # crashed straight into _compress's except-and-degrade path instead
         # of compressing.
         return "max_order", max(2, min(level, 16))
-    return "level", level  # zlib, gzip, snappy: pass the configured level through.
+    if name == "snappy":
+        # python-snappy's compress() takes no level/quality parameter at
+        # all -- Snappy trades ratio for speed by design and simply has no
+        # such knob. Reporting the configured ``compression_level`` here
+        # would misrepresent it as having been used when it was not.
+        return "level", None
+    return "level", level  # zlib, gzip: pass the configured level through.
 
 
 def _compress(name: str, data: bytes, level: int) -> tuple[bytes | None, str | None]:
@@ -1313,6 +1385,184 @@ def _group_ppm_language_model(analysis: DocumentAnalysis, opts: Mapping[str, Any
                              "finding"})]
 
 
+# ------------------------------------------------------------- KenLM language model
+
+def _find_lmplz_binary(configured: str | None) -> tuple[str | None, list[str]]:
+    """Where this process looked for KenLM's ``lmplz`` trainer, and what it found.
+
+    Returns ``(path, checked)``: ``path`` is a usable, executable binary or
+    ``None``; ``checked`` is every location actually tried, in the order
+    tried, so an "unavailable" reason can name them instead of gesturing at
+    "somewhere". ``pip install kenlm`` supplies only the query-time Python
+    bindings (``kenlm.Model``); ``lmplz`` is a separate C++ program built
+    from KenLM's own source tree (a C++ compiler and Boost, at minimum) that
+    nothing in this codebase can install, so finding it is a config-or-PATH
+    search, never an assumption about where a particular build happened to
+    put it - a build toolchain's own temporary directory is not a location
+    this function, or any other user's environment, can rely on.
+    """
+
+    checked: list[str] = []
+    if configured:
+        checked.append(configured)
+        candidate = Path(configured).expanduser()
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate), checked
+    checked.append("PATH")
+    found = shutil.which("lmplz")
+    return found, checked
+
+
+def _group_kenlm_language_model(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Cross-entropy of the held-out suffix under a real, KenLM-trained,
+    modified-Kneser-Ney-smoothed n-gram model.
+
+    Every from-scratch n-gram channel elsewhere in this module (char, byte,
+    word, POS, dependency, punctuation) shares one Lidstone-smoothed
+    implementation on purpose (see the module docstring's "Deferred" section
+    on why NLTK's smoothing classes were skipped in favor of that). This
+    channel is different in kind, not just in smoothing constant: it trains
+    an actual KenLM model - the modified Kneser-Ney estimator used by
+    production speech-recognition and machine-translation systems - on the
+    document's own held-out training split (one sentence per line, exactly
+    like KenLM expects, not the single undifferentiated blob the from-scratch
+    channels train on), then scores the held-out suffix with it. That makes
+    it directly comparable to ``word_ngram_cross_entropy`` (same held-out
+    split, same unit, different smoothing) without being the same
+    measurement restated: the two are expected to differ by whatever
+    Kneser-Ney's back-off buys over flat additive smoothing, and a large gap
+    between them is itself informative.
+
+    **Honesty about what is and is not installable.** ``pip install kenlm``
+    gives only the query-time Python bindings (``kenlm.Model``); it does not
+    and cannot give the trainer, ``lmplz``, which is a separate C++ program
+    built from KenLM's own source (see https://github.com/kpu/kenlm#compiling).
+    This channel looks for that binary at a configured ``kenlm_lmplz_path``
+    first, then on ``PATH`` (see :func:`_find_lmplz_binary`), and if neither
+    has it, reports a clear, actionable "unavailable" naming exactly the
+    missing build step and everywhere it looked - never a bare "kenlm
+    unavailable", which would send someone straight to (and no further than)
+    a ``pip install`` that cannot fix this. Training always writes to a
+    freshly created, then removed, ``tempfile.TemporaryDirectory()`` -
+    never this repository, never a path a build toolchain happened to use -
+    so no trained model ever lands anywhere durable, let alone in git.
+    """
+
+    mid = f"{ID}kenlm_cross_entropy"
+    name = "KenLM (modified Kneser-Ney) cross-entropy of held-out text"
+    module, reason = require("kenlm")
+    if module is None:
+        return [unavailable(mid, name, reason, family=FAMILY)]
+
+    configured_path = option(opts, "kenlm_lmplz_path", "") or None
+    lmplz_path, checked = _find_lmplz_binary(configured_path)
+    if lmplz_path is None:
+        return [unavailable(
+            mid, name,
+            f"KenLM's 'lmplz' trainer was not found (checked: {', '.join(checked)}). "
+            "'pip install kenlm' provides only the query-time Python bindings, not the "
+            "trainer: build KenLM from source (a C++ compiler and Boost; see "
+            "https://github.com/kpu/kenlm#compiling) and either put the resulting 'lmplz' "
+            "on PATH or set metrics.randomness_suite.kenlm_lmplz_path to its full path.",
+            family=FAMILY)]
+
+    prep = _corruption_texts(analysis, opts)
+    if prep is None:
+        return [unavailable(mid, name, "fewer than 12 sentences to build a train/held-out split",
+                            family=FAMILY)]
+
+    order = max(2, min(option(opts, "kenlm_order", 3), 6))
+    memory = option(opts, "kenlm_memory", "50M")
+    timeout = option(opts, "kenlm_timeout_seconds", 30)
+    max_train_chars = option(opts, "kenlm_max_train_chars", 200_000)
+
+    train_lines: list[str] = []
+    total_chars = 0
+    for sentence in prep["train_sentences"]:
+        line = sentence.lower().strip()
+        if not line:
+            continue
+        train_lines.append(line)
+        total_chars += len(line)
+        if total_chars >= max_train_chars:
+            break
+    test_sentences = [sentence.lower().strip() for sentence in prep["test_sentences"] if sentence.strip()]
+    if len(train_lines) < 20 or not test_sentences:
+        return [unavailable(mid, name, "not enough held-out sentences to train and score a "
+                            "KenLM model", family=FAMILY)]
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="textgrader-kenlm-") as tmp_dir:
+            train_path = Path(tmp_dir) / "train.txt"
+            arpa_path = Path(tmp_dir) / "model.arpa"
+            train_path.write_text("\n".join(train_lines) + "\n", encoding="utf-8")
+            command = [lmplz_path, "-o", str(order), "-S", str(memory), "-T", tmp_dir,
+                      "--discount_fallback"]
+            with train_path.open("rb") as stdin_file, arpa_path.open("wb") as stdout_file:
+                completed = subprocess.run(command, stdin=stdin_file, stdout=stdout_file,
+                                           stderr=subprocess.PIPE, timeout=timeout, check=False)
+            if completed.returncode != 0:
+                stderr_tail = completed.stderr.decode("utf-8", errors="replace").strip()[-400:]
+                return [unavailable(mid, name, f"lmplz exited {completed.returncode}: "
+                                    f"{stderr_tail or 'no error output'}", family=FAMILY)]
+            # build_binary is optional polish, not a prerequisite: it converts the
+            # ARPA text file KenLM just wrote into its compact binary format, which
+            # loads faster and without KenLM's own "reading ARPA" progress notice on
+            # stderr. Looked for next to lmplz (the common case: one build tree) and
+            # then on PATH; the ARPA file itself is a perfectly usable model on its
+            # own, so a missing build_binary is never reported as "unavailable".
+            model_path, model_format = arpa_path, "arpa"
+            build_binary = Path(lmplz_path).with_name("build_binary")
+            if not (build_binary.is_file() and os.access(build_binary, os.X_OK)):
+                found = shutil.which("build_binary")
+                build_binary = Path(found) if found else None
+            if build_binary is not None:
+                binary_path = Path(tmp_dir) / "model.binary"
+                converted = subprocess.run([str(build_binary), str(arpa_path), str(binary_path)],
+                                           capture_output=True, timeout=timeout, check=False)
+                if converted.returncode == 0 and binary_path.is_file():
+                    model_path, model_format = binary_path, "binary"
+            model = module.Model(str(model_path))
+            total_log10, total_words = 0.0, 0
+            for sentence in test_sentences:
+                total_log10 += model.score(sentence, bos=True, eos=True)
+                total_words += len(sentence.split()) + 1  # +1 for </s>, matching kenlm's own convention
+    except subprocess.TimeoutExpired:
+        return [unavailable(mid, name, f"lmplz did not finish within {timeout}s; try a smaller "
+                            "kenlm_max_train_chars or a lower kenlm_order", family=FAMILY)]
+    except OSError as exc:
+        return [unavailable(mid, name, f"could not run lmplz at {lmplz_path!r} "
+                            f"({type(exc).__name__}: {exc})", family=FAMILY)]
+    except Exception as exc:  # kenlm.Model raises its own RuntimeError/OSError subclasses
+        return [unavailable(mid, name, f"KenLM training or scoring failed "
+                            f"({type(exc).__name__}: {exc})", family=FAMILY)]
+
+    if total_words <= 0:
+        return [unavailable(mid, name, "no held-out words to score", family=FAMILY)]
+
+    perplexity = 10 ** (-total_log10 / total_words)
+    if not math.isfinite(perplexity) or perplexity <= 0:
+        return [unavailable(mid, name, "KenLM produced a non-finite perplexity", family=FAMILY)]
+    cross_entropy_bits = math.log2(perplexity)
+
+    return [finding(
+        mid, name, cross_entropy_bits, "bits/word", family=FAMILY, sample_size=total_words,
+        min_sample=MIN_SAMPLE, sample_size_sensitive=True,
+        distribution={"algorithm": "kenlm", "order": order, "smoothing": "modified Kneser-Ney",
+                     "memory": memory, "discount_fallback": True, "lmplz_path": lmplz_path,
+                     "model_format": model_format,
+                     "train_sentences": len(train_lines), "train_chars": total_chars,
+                     "test_sentences": len(test_sentences), "perplexity": perplexity,
+                     "method": "trained lmplz on the document's own held-out training split "
+                               "(one sentence per line), scored the held-out suffix with "
+                               "kenlm.Model.score(..., bos=True, eos=True), converted the "
+                               "resulting corpus perplexity to bits/word",
+                     "note": "a real, externally-implemented Kneser-Ney n-gram model, not this "
+                             "module's own additive-smoothed n-gram channels; compare it "
+                             "against word_ngram_cross_entropy (same held-out split, different "
+                             "smoothing) rather than expecting the two to agree"})]
+
+
 def _group_letter_bigram_divergence(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Jensen-Shannon divergence of this text's letter-bigram frequencies from
     a reference table derived from the shipped corpus profile.
@@ -1898,6 +2148,8 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_group_lexical_gibberish(analysis, config or {}))
     if features.get("letter_bigram_divergence", True):
         out.extend(_group_letter_bigram_divergence(analysis, config or {}))
+    if features.get("kenlm_language_model", False):
+        out.extend(_group_kenlm_language_model(analysis, config or {}))
     if features.get("neural_language_model", False):
         out.extend(_group_neural_language_model(analysis, config or {}))
     if features.get("textdescriptives_cross_check", False):

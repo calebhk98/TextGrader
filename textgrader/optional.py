@@ -50,17 +50,28 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # Compression channels for textgrader.metrics.randomness_suite. Every one
     # of these is optional: the stdlib zlib/gzip/bz2/lzma channels cover the
     # suite's acceptance criteria on their own, and each of these degrades to
-    # one "unavailable" finding rather than to a missing suite. All four -
-    # zstandard, brotli, lz4, pyppmd - are installed and exercised for real;
-    # pyppmd additionally backs a genuine PPM predictive-model channel
+    # one "unavailable" finding rather than to a missing suite, on an
+    # install that genuinely lacks it. All five - zstandard, brotli, lz4,
+    # snappy, pyppmd - are installed and exercised for real here; pyppmd
+    # additionally backs a genuine PPM predictive-model channel
     # (cross-entropy, not only a compression ratio). snappy needs the system
-    # libsnappy-dev package, which this environment does not have, so it
-    # stays unavailable, proving the degradation path still works.
+    # libsnappy-dev package (not a pip install), which this environment now
+    # has.
     "zstandard": ("zstandard", "pip install zstandard"),
     "brotli": ("brotli", "pip install brotli"),
     "lz4": ("lz4.frame", "pip install lz4"),
-    "snappy": ("snappy", "pip install python-snappy"),
+    "snappy": ("snappy", "pip install python-snappy (also needs the system libsnappy-dev "
+                         "package)"),
     "pyppmd": ("pyppmd", "pip install pyppmd"),
+    # Query-time bindings for randomness_suite's optional "kenlm_language_model"
+    # feature (off by default). The kenlm wheel gives kenlm.Model but NOT the
+    # trainer, lmplz, which is a separate C++ program built from KenLM's own
+    # source (a C++ compiler and Boost); that channel finds lmplz itself, via
+    # config or PATH, and reports its own actionable "unavailable" when it
+    # cannot -- this hint only covers the Python side.
+    "kenlm": ("kenlm", "pip install kenlm (query-time bindings only; the lmplz trainer "
+                       "must be built from source, see "
+                       "https://github.com/kpu/kenlm#compiling)"),
     # A pretrained causal language model for randomness_suite's neural-LM
     # perplexity channel (features.neural_language_model, off by default).
     # Heavy (torch is a multi-gigabyte install) and only imported when that
