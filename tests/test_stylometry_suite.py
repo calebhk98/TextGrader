@@ -107,7 +107,9 @@ def test_every_default_option_is_mirrored_in_the_registry_and_config_json():
         "word_frequency_vocab_cap", "embedding_model", "embedding_primary_distance",
         "impostors_k", "impostors_iterations", "impostors_feature_fraction",
         "impostors_min_authors", "impostors_target_author", "impostors_representation",
+        "impostors_classifier_iterations", "impostors_classifier_type",
         "ncd_corpus_dirs", "ncd_max_reference_documents", "ncd_max_bytes",
+        "pystylometry_max_reference_documents", "pystylometry_max_bytes", "pystylometry_mfw",
     }
     assert set(spec.defaults["features"]) == set(m.DEFAULT_FEATURES)
     # sentence_transformers must never appear here: it would flip needs_model
@@ -742,7 +744,7 @@ def test_ncd_against_corpus_reads_real_reference_files_from_disk(tmp_path):
     assert mean_ncd["value"] is not None
     assert 0.0 <= mean_ncd["value"] <= 1.5
     assert nearest["distribution"]["reference_documents_compared"] == 4
-    assert nearest["distribution"]["algorithm"] == "zlib"
+    assert nearest["distribution"]["algorithm"] == "lzma"
     assert nearest["evidence"][0]["reference"].endswith(".txt")
 
 
@@ -762,3 +764,294 @@ def test_ncd_against_corpus_caps_bytes_and_document_count(tmp_path):
     assert nearest["distribution"]["reference_documents_read"] == 2
     assert nearest["distribution"]["reference_documents_available"] == 6
     assert nearest["distribution"]["max_bytes_per_document"] == 5000
+
+
+# ------------------------------------------------------ newly-closed gaps (phase 4)
+#
+# The Delta family beyond plain Burrows (hand-implemented, section P, and
+# pystylometry-backed, section Q) and a real classifier-based general-
+# impostors score (section K2).
+
+def test_delta_family_on_by_default_and_degrades_without_a_profile():
+    found = _findings(_prose(STYLE_A_VOCAB, 900, paragraphs=60))
+    for variant in m.DELTA_FAMILY_VARIANTS:
+        item = found[f"style.stylometry_delta_{variant}_nearest"]
+        assert item["value"] is None
+        assert "corpus profile" in item["warning"]
+
+    off = _findings(_prose(STYLE_A_VOCAB, 900, paragraphs=60),
+                    config={"features": {"delta_family": False}})
+    assert "style.stylometry_delta_burrows_nearest" not in off
+
+
+def test_delta_family_finds_the_same_author_nearest(tmp_path):
+    """Same shape as test_same_author_is_nearer_than_different_author: the
+    Delta family's nearest-reference-document distance, in EVERY variant,
+    should point at a same-author reference book, not a different-author one
+    -- exactly what Delta is used for in the literature."""
+
+    profile = _corpus_profile(tmp_path, [
+        (30, STYLE_A_VOCAB, "alice"), (31, STYLE_A_VOCAB, "alice"),
+        (32, STYLE_A_VOCAB, "alice"), (33, STYLE_A_VOCAB, "alice"),
+        (40, STYLE_B_VOCAB, "bob"), (41, STYLE_B_VOCAB, "bob"),
+        (42, STYLE_B_VOCAB, "bob"), (43, STYLE_B_VOCAB, "bob"),
+    ])
+    alice_query = _analysis(_prose(STYLE_A_VOCAB, 1999, paragraphs=60))
+    found = {f["metric_id"]: f for f in m.measure(alice_query, config=None, profile=profile)}
+    id_to_author = {book["source_id"]: (book.get("metadata") or {}).get("author")
+                   for book in profile["books"]}
+    for variant in m.DELTA_FAMILY_VARIANTS:
+        item = found[f"style.stylometry_delta_{variant}_nearest"]
+        assert item["value"] is not None
+        nearest_id = item["evidence"][0]["source_id"]
+        assert id_to_author[nearest_id] == "alice", variant
+
+
+def test_delta_family_is_a_different_code_path_from_function_word_delta(tmp_path):
+    """The two are expected to disagree in general (different framing: nearest
+    reference DOCUMENT in z-space vs distance from the corpus MEAN); this only
+    asserts both are independently computed and present, not that they match."""
+
+    profile = _corpus_profile(tmp_path, [
+        (50, STYLE_A_VOCAB, "alice"), (51, STYLE_A_VOCAB, "alice"),
+        (60, STYLE_B_VOCAB, "bob"), (61, STYLE_B_VOCAB, "bob"),
+    ])
+    found = _findings(_prose(STYLE_A_VOCAB, 2999, paragraphs=60), profile=profile)
+    assert found["style.stylometry_delta_burrows_nearest"]["value"] is not None
+    from textgrader.metrics import function_words
+    classic = function_words.measure(_analysis(_prose(STYLE_A_VOCAB, 2999, paragraphs=60)),
+                                     profile=profile)
+    assert classic[0]["value"] is not None
+
+
+def test_impostors_classifier_off_by_default_and_degrades_without_authors():
+    off = _findings(_prose(STYLE_A_VOCAB, 910, paragraphs=60))
+    assert "style.stylometry_impostors_classifier_score" not in off
+
+    on = _findings(_prose(STYLE_A_VOCAB, 910, paragraphs=60),
+                   config={"features": {"impostors_classifier": True}})
+    item = on["style.stylometry_impostors_classifier_score"]
+    assert item["value"] is None
+    assert item["warning"]
+
+
+def test_impostors_classifier_fits_a_real_classifier_and_scores_the_document(tmp_path):
+    sk, reason = optional.require("sklearn")
+    if sk is None:
+        pytest.skip(f"scikit-learn not usable in this environment: {reason}")
+    profile = _corpus_profile(tmp_path, [
+        (110, STYLE_A_VOCAB, "alice"), (111, STYLE_A_VOCAB, "alice"), (112, STYLE_A_VOCAB, "alice"),
+        (120, STYLE_B_VOCAB, "bob"), (121, STYLE_B_VOCAB, "bob"), (122, STYLE_B_VOCAB, "bob"),
+    ])
+    found = _findings(_prose(STYLE_A_VOCAB, 911, paragraphs=60),
+                      config={"features": {"impostors_classifier": True},
+                              "impostors_classifier_iterations": 6, "impostors_k": 5,
+                              "impostors_min_authors": 1, "min_documents_per_author": 1, "seed": 7},
+                      profile=profile)
+    score = found["style.stylometry_impostors_classifier_score"]
+    variance = found["style.stylometry_impostors_classifier_score_variance"]
+    assert score["value"] is not None
+    assert 0.0 <= score["value"] <= 1.0
+    assert variance["value"] is not None
+    assert score["distribution"]["candidate_author"] == "alice"
+    assert score["distribution"]["classifier"] == "logistic_regression"
+    assert "classifier" in score["warning"]
+
+
+def test_impostors_classifier_is_deterministic_given_a_seed(tmp_path):
+    sk, reason = optional.require("sklearn")
+    if sk is None:
+        pytest.skip(f"scikit-learn not usable in this environment: {reason}")
+    profile = _corpus_profile(tmp_path, [
+        (130, STYLE_A_VOCAB, "alice"), (131, STYLE_A_VOCAB, "alice"),
+        (140, STYLE_B_VOCAB, "bob"), (141, STYLE_B_VOCAB, "bob"),
+        (150, STYLE_A_VOCAB, "carol"), (151, STYLE_A_VOCAB, "carol"),
+    ])
+    text = _prose(STYLE_A_VOCAB, 912, paragraphs=60)
+    config = {"features": {"impostors_classifier": True}, "seed": 99,
+             "min_documents_per_author": 1, "impostors_classifier_iterations": 6}
+    first = _findings(text, config=config, profile=profile)
+    second = _findings(text, config=config, profile=profile)
+    assert (first["style.stylometry_impostors_classifier_score"]["value"]
+           == second["style.stylometry_impostors_classifier_score"]["value"])
+
+
+def test_impostors_classifier_embedding_representation_degrades_without_cached_embeddings(tmp_path):
+    profile = _corpus_profile(tmp_path, [
+        (160, STYLE_A_VOCAB, "alice"), (161, STYLE_A_VOCAB, "alice"),
+        (170, STYLE_B_VOCAB, "bob"), (171, STYLE_B_VOCAB, "bob"),
+    ])
+    found = _findings(_prose(STYLE_A_VOCAB, 913, paragraphs=60),
+                      config={"features": {"impostors_classifier": True},
+                              "impostors_representation": "embedding"},
+                      profile=profile)
+    item = found["style.stylometry_impostors_classifier_score"]
+    assert item["value"] is None
+    assert "embedding" in item["warning"] or "embedding_style" in item["warning"]
+
+
+def test_impostors_classifier_never_fits_during_corpus_profiling(tmp_path, monkeypatch):
+    """profile=None while a book is being profiled (see textgrader.corpus's
+    profiling loop): a classifier must never actually be fit in that path,
+    even if a user enables impostors_classifier in the profiling config."""
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("a classifier must not be fit during corpus profiling")
+
+    monkeypatch.setattr(m, "_fit_classifier_and_predict", _boom)
+    corpus_dir = tmp_path / "profiling_corpus"
+    corpus_dir.mkdir()
+    manifest = {"sources": {}}
+    for index, (seed, vocab, author) in enumerate(
+            [(180, STYLE_A_VOCAB, "alice"), (181, STYLE_A_VOCAB, "alice"),
+             (190, STYLE_B_VOCAB, "bob"), (191, STYLE_B_VOCAB, "bob")]):
+        name = f"book{index}.txt"
+        (corpus_dir / name).write_text(_prose(vocab, seed, paragraphs=30), encoding="utf-8")
+        manifest["sources"][name] = {"author": author}
+    profile = build_profile([corpus_dir], manifest=manifest,
+                            metrics={"stylometry_suite":
+                                    {"enabled": True,
+                                     "features": {"impostors_classifier": True},
+                                     "min_documents_per_author": 1}})
+    assert profile["book_count"] == 4
+
+
+def test_pystylometry_reference_off_by_default_and_names_the_missing_config():
+    off = _findings(_prose(STYLE_A_VOCAB, 920, paragraphs=60))
+    assert "style.stylometry_pystylometry_burrows_nearest" not in off
+
+    on = _findings(_prose(STYLE_A_VOCAB, 920, paragraphs=60),
+                   config={"features": {"pystylometry_reference": True}})
+    item = on["style.stylometry_pystylometry_burrows_nearest"]
+    assert item["value"] is None
+    assert item["warning"]
+
+
+def test_pystylometry_reference_reads_real_reference_files_and_computes_every_technique(tmp_path):
+    pystylometry, reason = optional.require("pystylometry")
+    if pystylometry is None:
+        pytest.skip(f"pystylometry not usable in this environment: {reason}")
+    corpus_dir = tmp_path / "pystylometry_corpus"
+    corpus_dir.mkdir()
+    for i in range(3):
+        (corpus_dir / f"ref{i}.txt").write_text(_prose(STYLE_A_VOCAB, 921 + i, paragraphs=40),
+                                                encoding="utf-8")
+    (corpus_dir / "other.txt").write_text(_prose(STYLE_B_VOCAB, 930, paragraphs=40),
+                                          encoding="utf-8")
+
+    found = _findings(_prose(STYLE_A_VOCAB, 940, paragraphs=60),
+                      config={"features": {"pystylometry_reference": True},
+                              "ncd_corpus_dirs": [str(corpus_dir)],
+                              "pystylometry_max_reference_documents": 4,
+                              "pystylometry_max_bytes": 20000, "pystylometry_mfw": 50})
+    for technique, _name in m.PYSTYLOMETRY_TECHNIQUES:
+        nearest = found[f"style.stylometry_pystylometry_{technique}_nearest"]
+        mean = found[f"style.stylometry_pystylometry_{technique}_mean"]
+        assert nearest["value"] is not None, technique
+        assert mean["value"] is not None, technique
+        assert nearest["distribution"]["library"] == "pystylometry"
+        assert nearest["evidence"][0]["reference"].endswith(".txt")
+
+
+def test_pystylometry_reference_degrades_when_the_package_is_disabled(monkeypatch, tmp_path):
+    corpus_dir = tmp_path / "pystylometry_corpus_disabled"
+    corpus_dir.mkdir()
+    (corpus_dir / "ref0.txt").write_text(_prose(STYLE_A_VOCAB, 950, paragraphs=40), encoding="utf-8")
+
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "pystylometry")
+    optional.reset_cache()
+    try:
+        found = _findings(_prose(STYLE_A_VOCAB, 951, paragraphs=60),
+                          config={"features": {"pystylometry_reference": True},
+                                  "ncd_corpus_dirs": [str(corpus_dir)]})
+    finally:
+        optional.reset_cache()
+    item = found["style.stylometry_pystylometry_burrows_nearest"]
+    assert item["value"] is None
+    assert "pystylometry" in item["warning"]
+    # Only this group is affected; everything else still ran.
+    assert found["style.stylometry_yules_k"]["value"] is not None
+
+
+# ----------------------------------------------------- NCD compressor-window bug
+#
+# zlib's fixed 32 KiB LZ77 window cannot see far enough back to detect a real
+# match once either side of a joint compression is much bigger than half
+# that -- ordinary for a book-length manuscript -- which used to make every
+# NCD channel report a number close to "unrelated" regardless of whether the
+# two sides were identical or different. lzma is now the default; zlib is
+# guarded instead of silently returning a meaningless number.
+
+def test_ncd_open_close_default_lzma_discriminates_at_book_length():
+    # Opening half literally equal to the closing half: at book length, a
+    # REAL NCD must find this near 0, not merely "not clearly unrelated".
+    block = _prose(STYLE_A_VOCAB, 5000, paragraphs=700)
+    assert len(block.encode("utf-8")) > 50_000
+    identical_halves = _analysis(block + "\n\n" + block)
+    same = {f["metric_id"]: f for f in m.measure(identical_halves, config=None, profile=None)}
+    same_ncd = same["style.stylometry_ncd_open_close"]
+    assert same_ncd["distribution"]["algorithm"] == "lzma"
+    assert same_ncd["value"] is not None
+    assert same_ncd["value"] < 0.2
+
+    different_halves = _analysis(_prose(STYLE_A_VOCAB, 5001, paragraphs=700) + "\n\n"
+                                 + _prose(STYLE_B_VOCAB, 5002, paragraphs=700))
+    different = {f["metric_id"]: f for f in m.measure(different_halves, config=None, profile=None)}
+    different_ncd = different["style.stylometry_ncd_open_close"]
+    assert different_ncd["value"] is not None
+    assert different_ncd["value"] > 0.8
+    assert same_ncd["value"] < different_ncd["value"]
+
+
+def test_ncd_open_close_zlib_refuses_rather_than_reporting_a_meaningless_number():
+    block = _prose(STYLE_A_VOCAB, 5010, paragraphs=700)
+    identical_halves = _analysis(block + "\n\n" + block)
+    found = {f["metric_id"]: f for f in m.measure(
+        identical_halves, config={"compression_algorithm": "zlib"}, profile=None)}
+    item = found["style.stylometry_ncd_open_close"]
+    assert item["value"] is None
+    assert "window" in item["warning"]
+    assert "32768" in item["warning"] or "zlib" in item["warning"]
+
+
+def test_ncd_against_corpus_default_lzma_discriminates_identical_from_different(tmp_path):
+    query_text = _prose(STYLE_A_VOCAB, 5020, paragraphs=700)
+    # "Realistic size": comfortably over both zlib's 32 KiB window and the
+    # 16 KiB-per-side point at which it stops discriminating (see
+    # _ncd_window_guard's docstring for the measured evidence this mirrors).
+    assert len(query_text.encode("utf-8")) > 80_000
+
+    corpus_dir = tmp_path / "ncd_realistic"
+    corpus_dir.mkdir()
+    (corpus_dir / "same.txt").write_text(query_text, encoding="utf-8")
+    (corpus_dir / "different.txt").write_text(_prose(STYLE_B_VOCAB, 5021, paragraphs=700),
+                                              encoding="utf-8")
+
+    found = _findings(query_text, config={"features": {"ncd_against_corpus": True},
+                                          "ncd_corpus_dirs": [str(corpus_dir)],
+                                          "ncd_max_reference_documents": 2,
+                                          "ncd_max_bytes": 150_000})
+    nearest = found["style.stylometry_ncd_nearest_reference"]
+    mean = found["style.stylometry_ncd_reference_mean"]
+    assert nearest["distribution"]["algorithm"] == "lzma"
+    by_reference = {row["reference"]: row["ncd"] for row in mean["evidence"] or []}
+    same_ncd = next(v for k, v in by_reference.items() if k.endswith("same.txt"))
+    different_ncd = next(v for k, v in by_reference.items() if k.endswith("different.txt"))
+    assert nearest["evidence"][0]["reference"].endswith("same.txt")
+    assert same_ncd < 0.2
+    assert different_ncd > 0.8
+
+
+def test_ncd_against_corpus_zlib_skips_oversized_pairs_with_an_actionable_reason(tmp_path):
+    query_text = _prose(STYLE_A_VOCAB, 5030, paragraphs=700)
+    corpus_dir = tmp_path / "ncd_realistic_zlib"
+    corpus_dir.mkdir()
+    (corpus_dir / "same.txt").write_text(query_text, encoding="utf-8")
+
+    found = _findings(query_text, config={"features": {"ncd_against_corpus": True},
+                                          "ncd_corpus_dirs": [str(corpus_dir)],
+                                          "compression_algorithm": "zlib",
+                                          "ncd_max_bytes": 150_000})
+    item = found["style.stylometry_ncd_nearest_reference"]
+    assert item["value"] is None
+    assert "window" in item["warning"]

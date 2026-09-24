@@ -509,9 +509,13 @@
       "_embedding_reference_requires": "a corpus profile built with THIS SAME suite's features.embedding_style also enabled at profiling time (rebuild it with textgrader.corpus so feature_profiles['stylometry_suite'] holds per-book embedding vectors), plus sentence-transformers available at grading time to embed the manuscript the same way. Enabling embedding_reference alone, without rebuilding the profile, degrades to unavailable().",
       "_ncd_against_corpus_requires": "ncd_corpus_dirs pointed at one or more directories of readable reference .txt/.md files, present on disk at GRADING time (not just when the corpus profile was built -- this measurement reads the folder directly, it is never served from the cached profile). Without a reachable directory this degrades to unavailable() naming what was missing.",
       "_impostors_requires": "a corpus profile with author metadata (metadata.author on at least impostors_min_authors+1 books). impostors_representation='embedding' additionally needs the same profile rebuilt with features.embedding_style enabled (see _embedding_reference_requires).",
+      "_impostors_classifier_requires": "the same author-labelled corpus profile as impostors, PLUS scikit-learn (already a project dependency; this is the one feature in this suite that actually fits it, rather than just importing numpy/scipy-adjacent helpers). Fits a real classifier per iteration, refitted from scratch each time -- never during corpus profiling, only at grading time with a complete profile in hand. Degrades to unavailable() naming whichever of these is missing.",
       "_pos_dependency_requires": "spaCy (en_core_web_sm) for the shared parse this feature forces -- tens of seconds on a novel-length manuscript; off by default for cost, not because it needs an unusual package.",
       "_lexicalrichness_crosscheck_requires": "the lexicalrichness package; without it this degrades to unavailable() and every other group in the suite is unaffected.",
-      "_corpus_reference_dependent_features": "corpus_reference, word_frequency_distance, author_language_model, corpus_language_model and impostors all read the corpus_profile configured at the project level; without one configured (or reachable), each degrades to unavailable() rather than failing the run.",
+      "_delta_family_requires": "nothing beyond corpus_reference's own corpus profile (feature_profiles['function_words']); hand-implemented arithmetic, not a package -- see the module docstring's section P for why the actual 'PyDelta' package could not be added as a dependency (quoted install/build failures) and why pystylometry_reference (below) is the package-backed half of the same family instead.",
+      "_compression_algorithm_note": "compression_algorithm defaults to 'lzma', not 'zlib': zlib's dictionary is a fixed 32 KiB no matter the level, which is too small to compute a MEANINGFUL Normalized Compression Distance once either side of a comparison is much bigger than half that (ordinary for this suite's book-length inputs) -- ncd_open_close and ncd_against_corpus both refuse to report a number rather than silently give a meaningless one when this happens (see stylometry_suite.py's _ncd_window_guard for the measured evidence). Set compression_algorithm='zlib' only for short excerpts well under this limit.",
+      "_pystylometry_reference_requires": "the pystylometry package (pip install pystylometry) PLUS ncd_corpus_dirs pointed at real reference .txt/.md files reachable on disk at GRADING time (reused from ncd_against_corpus's option, since both features read real reference text the same way). Without either, degrades to unavailable() naming which is missing.",
+      "_corpus_reference_dependent_features": "corpus_reference, word_frequency_distance, author_language_model, corpus_language_model, impostors, impostors_classifier and delta_family all read the corpus_profile configured at the project level; without one configured (or reachable), each degrades to unavailable() rather than failing the run.",
       "features": {
         "character_ngrams": true,
         "byte_ngrams": true,
@@ -534,8 +538,11 @@
         "lexicalrichness_crosscheck": true,
         "embedding_style": false,
         "impostors": false,
+        "impostors_classifier": false,
         "embedding_reference": false,
-        "ncd_against_corpus": false
+        "ncd_against_corpus": false,
+        "delta_family": true,
+        "pystylometry_reference": false
       },
       "char_ngram_orders": [
         2,
@@ -574,7 +581,7 @@
         "jensen_shannon"
       ],
       "primary_distance": "cosine",
-      "compression_algorithm": "zlib",
+      "compression_algorithm": "lzma",
       "min_corpus_documents": 4,
       "min_documents_per_author": 2,
       "outlier_threshold": 3.5,
@@ -588,9 +595,14 @@
       "impostors_min_authors": 2,
       "impostors_target_author": null,
       "impostors_representation": "function_words",
+      "impostors_classifier_iterations": 15,
+      "impostors_classifier_type": "logistic_regression",
       "ncd_corpus_dirs": [],
       "ncd_max_reference_documents": 10,
-      "ncd_max_bytes": 100000
+      "ncd_max_bytes": 100000,
+      "pystylometry_max_reference_documents": 5,
+      "pystylometry_max_bytes": 200000,
+      "pystylometry_mfw": 200
     }
   },
   "allow_external_metric_commands": false,
