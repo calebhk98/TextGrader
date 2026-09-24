@@ -251,6 +251,42 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "stanza": ("stanza", "pip install stanza (in requirements-embeddings.txt; also needs "
                         "stanza.download('en', processors=...) models, ~320MB, never "
                         "triggered by this codebase itself)"),
+    # .xlsx reader for textgrader.lexicons: three of its cached norm tables
+    # (Brysbaert concreteness, Kuperman AoA, the Glasgow Norms) are
+    # distributed as Excel workbooks by their original authors; without it,
+    # those three resources report "unavailable" and every other lexicon
+    # (Warriner/NRC VAD, Lancaster sensorimotor, SUBTLEX-US, MRC) is
+    # unaffected, since those ship as csv/tsv/fixed-width text.
+    "openpyxl": ("openpyxl", "pip install openpyxl"),
+    # A real, independent lexical-diversity implementation (Kristopher Kyle's
+    # own lightweight package: MTLD/HD-D/MATTR/MSTTR/TTR/root-TTR/Maas)
+    # for lexical_norms_suite's "lexicalrichness_crosscheck" cross-check,
+    # alongside (not instead of) mattr.py/lexical_mtld.py/lexical_hdd.py and
+    # stylometry_suite's own lexicalrichness cross-check. Verified for real:
+    # imports as lexical_diversity.lex_div and exposes exactly those
+    # functions (see lexical_norms_suite's module docstring).
+    "lexical_diversity": ("lexical_diversity.lex_div", "pip install lexical-diversity"),
+    # TAALED (second generation), Kristopher Kyle's own reference
+    # implementation -- the actual "TAALED" the task spec names, confirmed by
+    # its docstring ("Underlying code for TAALED (second generation)",
+    # author kristopherkyle) and used as its own separate cross-check finding
+    # from lexical_diversity above. Depends on pylats (an unrelated small
+    # package this pulls in); a plotnine warning it prints on import
+    # ("plotnine has not been installed... advanced data visualization
+    # features") is harmless and about a plotting extra this module never
+    # calls (see lexical_norms_suite's module docstring).
+    "taaled": ("taaled.ld", "pip install taaled"),
+    # LFTK: a broad handcrafted lexical/surface/syntax/discourse feature
+    # extractor over a spaCy Doc, used for lexical_norms_suite's
+    # "lftk_crosscheck" feature. Verified for real: lftk.Extractor takes
+    # spaCy docs and lftk.search_features lists genuine linguistic feature
+    # keys (a_word_ps, a_kup_pw -- Kuperman AoA, a_bry_pw -- Brysbaert AoA,
+    # a_subtlex_us_zipf_pw, ...); LFTK bundles its own copies of several of
+    # the same norm tables this module downloads independently, which is
+    # exactly the kind of independent-implementation disagreement this
+    # project keeps rather than reconciles (see lexical_norms_suite's module
+    # docstring).
+    "lftk": ("lftk", "pip install lftk"),
 }
 
 _lock = threading.Lock()

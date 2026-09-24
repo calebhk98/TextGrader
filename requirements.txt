@@ -222,3 +222,44 @@ ftfy>=6.1
 # comparison (no other dependency beyond 'regex', already installed above).
 # Torch-free, unlike stanza/benepar below, so it lives here.
 syntok>=1.4
+
+# .xlsx reader for textgrader.lexicons: three of the experimental
+# lexical_norms_suite's cached norm tables (Brysbaert concreteness, Kuperman
+# AoA, the Glasgow Norms) are distributed as Excel workbooks by their
+# original authors. Lightweight, torch-free; without it those three
+# resources report "unavailable" and every csv/tsv/fixed-width resource in
+# that suite (Warriner/NRC VAD, Lancaster sensorimotor, SUBTLEX-US, MRC) is
+# unaffected.
+openpyxl>=3.1
+
+# A real, independent lexical-diversity implementation (Kristopher Kyle's own
+# lightweight package: MTLD/HD-D/MATTR/MSTTR/TTR/root-TTR/Maas) for
+# lexical_norms_suite's "lexdiv_crosscheck" feature, alongside -- never
+# replacing -- mattr.py/lexical_mtld.py/lexical_hdd.py and
+# stylometry_suite's own lexicalrichness cross-check. Verified for real: it
+# imports as lexical_diversity.lex_div and exposes exactly those functions
+# (see lexical_norms_suite's module docstring).
+lexical-diversity>=0.1
+
+# TAALED (second generation) itself -- the actual tool the task spec names,
+# confirmed by its own docstring ("Underlying code for TAALED (second
+# generation)", author kristopherkyle, the same researcher behind
+# lexical-diversity above) -- for the same suite's "taaled_crosscheck"
+# feature. Pulls in "pylats" as its own dependency and prints a harmless
+# "plotnine has not been installed" notice on import for a plotting extra
+# this codebase never triggers. Its own MATTR implementation is
+# O(tokens*window) and impractically slow at book length, so this suite
+# calls only its MTLD/HD-D/MSTTR/RTTR/Maas methods directly -- see
+# lexical_norms_suite's module docstring for the measured cost.
+taaled>=0.32
+
+# LFTK: a broad handcrafted lexical/surface/syntax/discourse feature
+# extractor over a spaCy Doc, for lexical_norms_suite's off-by-default
+# "lftk_crosscheck" feature (needs the shared spaCy parse, which this
+# suite's "moderate" cost class does not otherwise pay for). Verified for
+# real: lftk.Extractor takes spaCy docs and lftk.search_features lists
+# genuine linguistic feature keys, including its own bundled copies of
+# Kuperman AoA, a Brysbaert-sourced AoA and SUBTLEX-US Zipf -- kept beside,
+# never replacing, this suite's own independently-downloaded numbers for the
+# same concepts.
+lftk>=1.0

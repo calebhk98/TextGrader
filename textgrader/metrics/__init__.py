@@ -690,6 +690,45 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "where it loads). Every comparison is over a deterministic, seeded, "
                   "spread-across-the-book sample, never the whole book. Off by default; "
                   "experimental."),
+    _spec("lexical_norms_suite", "lexical_norms_suite", "lexical", "moderate",
+          requires=("wordfreq", "openpyxl", "lexical_diversity", "taaled", "lftk"),
+          defaults={
+              "features": {
+                  "concreteness": True, "age_of_acquisition": True, "warriner_vad": True,
+                  "nrc_vad": True, "sensorimotor": True, "subtlex": True, "glasgow": True,
+                  "mrc": True, "frequency_source_agreement": True, "lexdiv_crosscheck": True,
+                  "taaled_crosscheck": True,
+                  # Off by default: each forces the shared spaCy parse, which this suite's
+                  # "moderate" cost class does not otherwise pay for -- see the module
+                  # docstring's "Surface vs lemma" / "Cross-checks" sections.
+                  "lemma_lookup": False, "lftk_crosscheck": False,
+              },
+              "language": "en",
+              "resource_paths": {},
+              "diversity_crosscheck_max_tokens": 50_000,
+              "diversity_crosscheck_window": 50,
+              "lftk_max_chars": 200_000,
+          },
+          summary="Experimental lexical sophistication and psycholinguistic norm analysis: "
+                  "concreteness (Brysbaert), age of acquisition (Kuperman, surface and "
+                  "lemma-aggregated), Warriner and NRC valence/arousal/dominance (kept as "
+                  "independent resources), Lancaster sensorimotor perceptual/action strength, "
+                  "SUBTLEX-US Zipf frequency and contextual diversity, all nine Glasgow Norms "
+                  "scales and all six rated MRC Psycholinguistic Database dimensions -- each as "
+                  "a token-weighted and a type-weighted finding, both carrying coverage, "
+                  "quantiles, table-referenced low/high tail shares, sentence- and "
+                  "paragraph-level distributions, between-paragraph variance, early-vs-late "
+                  "drift and a dialogue-vs-narration difference. Plus a wordfreq-vs-SUBTLEX-US "
+                  "frequency agreement check, two independent lexical-diversity cross-checks "
+                  "(the lexical_diversity package and TAALED itself, alongside -- never "
+                  "replacing -- mattr.py/lexical_mtld.py/lexical_hdd.py), and two off-by-default, "
+                  "parse-requiring extras (a true lemma-normalized AoA lookup, and an LFTK "
+                  "cross-check against its own bundled Kuperman/Brysbaert/SUBTLEX-US tables). "
+                  "Every norm resource is downloaded, cached and versioned by "
+                  "textgrader.lexicons (see config.json's _requires_ notes and that module's "
+                  "docstring), never bundled in the repository; a resource that is not cached "
+                  "or not licensable (English Lexicon Project, CELEX) degrades only its own "
+                  "findings. Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
