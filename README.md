@@ -278,6 +278,7 @@ of it, so a slow run always says what was slow.
 | `mattr` | moderate | - | yes | Moving-average type-token ratio, length-resistant lexical diversity. |
 | `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
 | `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
+| `mechanical_quality_suite` | moderate | pyspellchecker, symspellpy, ftfy, confusable-homoglyphs | no | Typography, encoding, homoglyph, hyphenation and spelling checks with two independent spell checkers, invented names excluded as recurring vocabulary, and every dialect-sensitive rate split between narration and dialogue. |
 | `randomness_suite` | moderate | wordfreq, zstandard, brotli, lz4, snappy, pyppmd, kenlm | no | Language-likeness, multi-codec compression and entropy channels, including a KenLM model trained on the text itself. |
 | `word_rarity` | moderate | wordfreq | no | Zipf word-rarity distribution from general-language frequencies. |
 
@@ -319,9 +320,9 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `causal_connectives` | fast | - | no | Causal and explanatory connective rates. |
-| `coherence_suite` | parse | spacy, networkx, nltk, sentence-transformers, fastcoref | no | Lexical, WordNet and semantic adjacency, surface *and* coreference-resolved entity grids kept side by side, and a corpus-referenced entity-grid transition table. |
+| `coherence_suite` | parse | spacy, networkx, nltk, sentence-transformers, fastcoref, isanlp-rst | no | Lexical, WordNet and semantic adjacency, surface *and* coreference-resolved entity grids kept side by side, a corpus-referenced entity-grid transition table, and a sampled real RST parse (tree depth, segment length, nuclearity balance, relation-family entropy). |
 | `hedges_boosters` | fast | - | no | Hedge, booster and modal rates. |
-| `logic_suite` | parse | spacy, transformers, fastcoref, nltk, python-dateutil | no | Surface contradiction candidates and proposition triples, cross-checked against an NLI model and coreference when installed. |
+| `logic_suite` | parse | spacy, transformers, fastcoref, nltk, python-dateutil | no | Surface contradiction candidates and proposition triples, cross-checked against an NLI model and coreference when installed, plus opt-in semantic role labelling, REBEL relation extraction, an argument-relation classifier and WordNet/PropBank/VerbNet/FrameNet lexical checks. The REBEL and argument-mining models are CC BY-NC-SA 4.0 (non-commercial). |
 | `rhetorical_constructions` | moderate | - | no | Repeated rhetorical templates, discovered rather than listed. |
 | `sentence_initial_connectives` | fast | - | no | Rate of sentences opening on However, Indeed, Moreover and the like. |
 
@@ -358,7 +359,15 @@ of it, so a slow run always says what was slow.
 | `function_words` | fast | - | no | Burrows's Delta against the corpus function-word profiles. |
 | `stylometry_suite` | moderate | lexicalrichness, sentence-transformers | no | Authorship channels kept separate on purpose: n-gram profiles, lexical richness, section stability, impostors, and nearest-reference distances over cached per-book embeddings. |
 
-Every switch in the five `*_suite` rows above is off by default, and each one
+### distribution shape
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `anomaly_suite` | moderate | scikit-learn, pyod, hdbscan | no | Fifteen multivariate anomaly detectors over the document's core-metric vector against the corpus, each reported on its own, plus a consensus count and a cross-detector disagreement score. |
+| `distribution_distance_suite` | moderate | scipy | no | A two-sample distance battery (Wasserstein, energy, KS, Cramer-von Mises, Anderson-Darling, Jensen-Shannon, KL, Hellinger, MMD, tail mismatch and more) against the corpus's pooled sentence, paragraph, word and turn distributions, each distance kept apart from any p-value. |
+| `distribution_shape` | fast | - | yes | The text's sentence, paragraph, word and turn distributions held against the corpus's pooled ones. |
+
+Every switch in the `*_suite` rows above is off by default, and each one
 takes a `features` map (or, for `timeseries_suite`, separate `sequences` and
 `feature_groups` lists) so individual measurement groups can be turned on and
 off without the others.  `config.json` carries a `_..._requires` note beside
