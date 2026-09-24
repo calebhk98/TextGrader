@@ -1,6 +1,7 @@
 """Every optional metric must be off by default, independent, and honest."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -191,3 +192,21 @@ def test_speaker_metrics_work_when_attribution_is_dense():
     found = _speaker_findings(dense)
     assert found["dialogue.identified_speaker_count"]["value"] == 2
     assert found["dialogue.speaker_question_rate"]["value"] is not None
+
+
+def test_no_optional_package_is_registered_twice():
+    # A repeated key in a dict literal silently replaces the earlier entry.
+    # Merging suites that each add packages did exactly that once, leaving a
+    # hint that said benepar could not load in place of the one that worked.
+    import ast
+    import collections
+    import textgrader.optional as optional_module
+
+    tree = ast.parse(Path(optional_module.__file__).read_text(encoding="utf-8"))
+    for node in tree.body:
+        target = node.targets[0] if isinstance(node, ast.Assign) else getattr(node, "target", None)
+        if getattr(target, "id", None) == "PACKAGES" and isinstance(node.value, ast.Dict):
+            keys = [key.value for key in node.value.keys if isinstance(key, ast.Constant)]
+            assert [k for k, n in collections.Counter(keys).items() if n > 1] == []
+            return
+    raise AssertionError("PACKAGES dict literal not found")

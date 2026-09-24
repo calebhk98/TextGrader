@@ -103,17 +103,17 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # (a seq2seq PropBank SRL model), "relation_extraction" (a seq2seq
     # closed-schema relation extractor, REBEL) and "argument_mining" (a
     # RoBERTa argument-relation classifier) -- each its own Hugging Face hub
-    # checkpoint, no new package for any of them.
-    "transformers": ("transformers", "pip install transformers"),
+    # checkpoint, no new package for any of them.  (Shares the "transformers"
+    # entry above: a dict key can only appear once.)
     # Only transformers' own import is touched directly; this entry exists so
     # `installed()`/`requirements.txt` account for the CPU wheel transformers
     # needs, and so a broken torch build reports through the same channel as
-    # every other optional dependency instead of raising on import.
-    "torch": ("torch", "pip install torch"),
+    # every other optional dependency instead of raising on import.  (Shares
+    # the "torch" entry above.)
     # Coreference resolution for logic_suite's "coreference_resolution"
     # feature (off by default). See textgrader/propositions.py for why a
     # pronoun subject is otherwise dropped from every cross-sentence check.
-    "fastcoref": ("fastcoref", "pip install fastcoref"),
+    # (Shares the "fastcoref" entry above.)
     # WordNet antonym/hypernym relations for logic_suite's "lexical_opposition"
     # feature. The `nltk` package alone is not enough -- its corpus data is a
     # separate download; textgrader.propositions checks for that data itself
@@ -122,8 +122,8 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # features -- "propbank_argument_structure", "verbnet_class_consistency"
     # and "framenet_frame_consistency" -- each needing its own separately
     # downloaded corpus (propbank, verbnet, framenet_v17 respectively; none
-    # satisfies another), checked and reported the identical way.
-    "nltk": ("nltk", "pip install nltk"),
+    # satisfies another), checked and reported the identical way.  (Shares
+    # the "nltk" entry above, whose hint names the wordnet download.)
     # Date parsing for logic_suite's "temporal_ordering" feature: which of two
     # differing dates on the same subject+predicate is earlier, not just that
     # they differ.
@@ -282,6 +282,42 @@ PACKAGES: dict[str, tuple[str, str]] = {
                                    "pulls in an unused ~570MB tensorflow and upgrades numpy to "
                                    "2.x; see textgrader/optional.py's comment for why --no-deps "
                                    "is used instead)"),
+    # .xlsx reader for textgrader.lexicons: three of its cached norm tables
+    # (Brysbaert concreteness, Kuperman AoA, the Glasgow Norms) are
+    # distributed as Excel workbooks by their original authors; without it,
+    # those three resources report "unavailable" and every other lexicon
+    # (Warriner/NRC VAD, Lancaster sensorimotor, SUBTLEX-US, MRC) is
+    # unaffected, since those ship as csv/tsv/fixed-width text.
+    "openpyxl": ("openpyxl", "pip install openpyxl"),
+    # A real, independent lexical-diversity implementation (Kristopher Kyle's
+    # own lightweight package: MTLD/HD-D/MATTR/MSTTR/TTR/root-TTR/Maas)
+    # for lexical_norms_suite's "lexicalrichness_crosscheck" cross-check,
+    # alongside (not instead of) mattr.py/lexical_mtld.py/lexical_hdd.py and
+    # stylometry_suite's own lexicalrichness cross-check. Verified for real:
+    # imports as lexical_diversity.lex_div and exposes exactly those
+    # functions (see lexical_norms_suite's module docstring).
+    "lexical_diversity": ("lexical_diversity.lex_div", "pip install lexical-diversity"),
+    # TAALED (second generation), Kristopher Kyle's own reference
+    # implementation -- the actual "TAALED" the task spec names, confirmed by
+    # its docstring ("Underlying code for TAALED (second generation)",
+    # author kristopherkyle) and used as its own separate cross-check finding
+    # from lexical_diversity above. Depends on pylats (an unrelated small
+    # package this pulls in); a plotnine warning it prints on import
+    # ("plotnine has not been installed... advanced data visualization
+    # features") is harmless and about a plotting extra this module never
+    # calls (see lexical_norms_suite's module docstring).
+    "taaled": ("taaled.ld", "pip install taaled"),
+    # LFTK: a broad handcrafted lexical/surface/syntax/discourse feature
+    # extractor over a spaCy Doc, used for lexical_norms_suite's
+    # "lftk_crosscheck" feature. Verified for real: lftk.Extractor takes
+    # spaCy docs and lftk.search_features lists genuine linguistic feature
+    # keys (a_word_ps, a_kup_pw -- Kuperman AoA, a_bry_pw -- Brysbaert AoA,
+    # a_subtlex_us_zipf_pw, ...); LFTK bundles its own copies of several of
+    # the same norm tables this module downloads independently, which is
+    # exactly the kind of independent-implementation disagreement this
+    # project keeps rather than reconciles (see lexical_norms_suite's module
+    # docstring).
+    "lftk": ("lftk", "pip install lftk"),
 }
 
 _lock = threading.Lock()
