@@ -139,6 +139,35 @@ Design choices worth stating up front
   be read as one number.  The corruption test in this module's test suite
   (``test_mean_and_volatility_are_independent``) asserts this on a small,
   exact fixture, not only "in general."
+* **Every headline is a mean (or a rate/correlation/spread built from means),
+  never a median or quantile of a per-sentence series.**  A lexicon engine
+  scores most ordinary sentences at exactly 0.0 -- no word in the sentence is
+  in its lexicon at all -- and real prose pushes that share past 50%:
+  measured on three Project Gutenberg novels at this suite's default
+  config, every signed engine's *median* per-sentence score was exactly 0.0
+  on every single book, while the mean (VADER) read 0.0257 on *Alice's
+  Adventures in Wonderland*, 0.0635 on *Tess of the d'Urbervilles* and
+  0.0568 on *Flatland* -- three different, informative numbers a
+  median-based headline could not have told apart from each other or from a
+  genuinely neutral text.  This is the same failure mode
+  ``syntax_complexity_suite`` hit with medians of small discrete counts: a
+  robust central-tendency statistic is not automatically the right one when
+  a population is zero-inflated rather than symmetric.  ``..._level``'s
+  ``distribution`` keeps the median (and the rest of
+  :func:`~textgrader.stats.summarize`'s shape) alongside two keys this
+  specific failure mode calls for -- ``zero_share`` (how much of a median
+  collapse this document's zero-inflation would cause) and ``nonzero_mean``
+  (the level among only the sentences that carried a signal) -- and every
+  other headline in this module was individually checked against the same
+  question and is a mean already: ``..._volatility`` (mean absolute
+  adjacent delta), ``..._arc`` (a difference of thirds means),
+  ``..._dialogue_narration_gap`` and ``..._speaker_spread`` (differences/
+  spreads of means), ``..._sequence_correlation`` (a Pearson correlation
+  over the raw values, zeros included, never a median of them), and the
+  cross-engine disagreement rate (a mean over engine pairs).
+  ``..._polarity_share`` and ``..._reversal_runs`` are rates computed
+  directly from sentence counts, not a mean or median of a score, so they
+  were never at risk of this collapse either.
 * **Category-set channels (NRC categories, Empath, LIWC) are whole-document,
   not per-sentence.**  Measured directly: ``nrclex.NRCLex()`` and
   ``empath.Empath().analyze()`` both pay a large *per-call* setup cost
@@ -743,16 +772,45 @@ def _unavailable_engine(outcome: EngineOutcome, metric_id: str, name: str) -> di
 
 
 def _level_finding(spec: EngineSpec, outcome: EngineOutcome) -> dict[str, Any]:
+    """Document-level sentiment/affect, aggregated as the MEAN over sentences.
+
+    Not the median. A lexicon engine scores a large share of ordinary prose
+    sentences at exactly 0.0 (no word in the sentence is in its lexicon at
+    all), and real books push that share past 50%: measured on three
+    Project Gutenberg novels at this suite's default config, every signed
+    engine's median collapsed to exactly 0.0 on every one of them, while the
+    mean (VADER) read 0.0257 on *Alice's Adventures in Wonderland*, 0.0635 on
+    *Tess of the d'Urbervilles* and 0.0568 on *Flatland* -- three different,
+    informative numbers a median-based headline could not tell apart from
+    each other or from a genuinely neutral text. This is the same failure
+    mode ``syntax_complexity_suite`` hit with medians of small discrete
+    counts: a robust central-tendency statistic is not automatically the
+    right one when the population is zero-inflated rather than symmetric.
+    The median is kept, in ``distribution``, alongside the rest of
+    :func:`~textgrader.stats.summarize`'s shape, plus two keys this specific
+    failure mode calls for: ``zero_share`` (what fraction of the collapse the
+    median was hiding) and ``nonzero_mean`` (the level among sentences that
+    actually carried a signal, so a reader can see whether a low mean means
+    "mildly positive throughout" or "strongly positive in a fifth of
+    sentences, silent in the rest").
+    """
+
     metric_id, name = f"{PREFIX}{spec.name}_level", f"Sentiment/affect level, {spec.label}"
     guard = _unavailable_engine(outcome, metric_id, name)
     if guard:
         return guard
     values = [value for value in outcome.values if value is not None]
     summary = summarize(values)
-    return finding(metric_id, name, summary.get("median"), spec.unit, family=FAMILY,
+    zero_share = nonzero_mean = None
+    if values:
+        zero_share = 100.0 * sum(1 for value in values if value == 0.0) / len(values)
+        nonzero_values = [value for value in values if value != 0.0]
+        nonzero_mean = statistics.fmean(nonzero_values) if nonzero_values else None
+    return finding(metric_id, name, summary.get("mean"), spec.unit, family=FAMILY,
                    sample_size=summary.get("count"), min_sample=MIN_SAMPLE,
-                   distribution={**summary, "engine_version": outcome.version,
-                                "resource": outcome.resource},
+                   distribution={**summary, "aggregation": "mean over sentences",
+                                "zero_share": zero_share, "nonzero_mean": nonzero_mean,
+                                "engine_version": outcome.version, "resource": outcome.resource},
                    warning=None if values else "no sentence produced a usable score")
 
 

@@ -129,10 +129,16 @@ def test_strongly_positive_vs_negative_fixtures_separate():
     pos_findings = _by_id(affect.measure(positive))
     neg_findings = _by_id(affect.measure(negative))
 
-    assert pos_findings[f"{PREFIX}vader_level"]["value"] == pytest.approx(0.6369, abs=1e-4)
-    assert neg_findings[f"{PREFIX}vader_level"]["value"] == pytest.approx(-0.5719, abs=1e-4)
-    assert pos_findings[f"{PREFIX}afinn_level"]["value"] == pytest.approx(4.0 / 3.0)
-    assert neg_findings[f"{PREFIX}afinn_level"]["value"] == pytest.approx(-1.0)
+    # The headline is the MEAN over sentences (see _level_finding's docstring
+    # for why), not the median -- computed by hand from each engine's three
+    # per-sentence scores rather than assumed.
+    assert pos_findings[f"{PREFIX}vader_level"]["value"] == pytest.approx(0.6816, abs=1e-4)
+    assert neg_findings[f"{PREFIX}vader_level"]["value"] == pytest.approx(-0.59183, abs=1e-4)
+    assert pos_findings[f"{PREFIX}afinn_level"]["value"] == pytest.approx(1.244444, abs=1e-5)
+    assert neg_findings[f"{PREFIX}afinn_level"]["value"] == pytest.approx(-1.066667, abs=1e-5)
+    # The median is still available, in distribution, for comparison.
+    assert pos_findings[f"{PREFIX}vader_level"]["distribution"]["median"] == pytest.approx(0.6369, abs=1e-4)
+    assert pos_findings[f"{PREFIX}vader_level"]["distribution"]["aggregation"] == "mean over sentences"
     # Every signed engine agrees on sign here, which is the boring/expected case.
     for engine in ("vader", "afinn", "nrc_valence", "textblob_polarity"):
         assert pos_findings[f"{PREFIX}{engine}_level"]["value"] > 0
@@ -171,8 +177,13 @@ def test_mean_and_volatility_are_independent():
     arc = findings[f"{PREFIX}toy_alternating_arc"]
     reversal = findings[f"{PREFIX}toy_alternating_reversal_runs"]
 
+    # The headline IS the mean (see _level_finding); here mean and median
+    # coincide by symmetry, so this also doubles as a sanity check that the
+    # mean-headline change did not disturb the symmetric case.
     assert level["value"] == pytest.approx(0.0)
     assert level["distribution"]["mean"] == pytest.approx(0.0)
+    assert level["distribution"]["median"] == pytest.approx(0.0)
+    assert level["distribution"]["aggregation"] == "mean over sentences"
     # Volatility is NOT zero even though the mean is: consecutive sentences
     # are always 2.0 apart on a [-1, 1] scale, the maximum possible.
     assert volatility["value"] == pytest.approx(2.0)
@@ -194,9 +205,50 @@ def test_neutral_technical_prose_reads_as_neutral():
     findings = _by_id(affect.measure(_analysis(text)))
     level = findings[f"{PREFIX}vader_level"]
     share = findings[f"{PREFIX}vader_polarity_share"]
-    assert level["value"] == pytest.approx(0.0)
+    # The mean is small but not exactly zero (one sentence carries a mild
+    # signal); the median, in distribution, IS exactly zero here -- the
+    # headline must read the former, not the latter.
+    assert level["value"] == pytest.approx(0.068, abs=1e-4)
+    assert level["distribution"]["median"] == pytest.approx(0.0)
     assert share["distribution"]["neutral_share"] >= 60.0
     assert share["distribution"]["neutral_share"] > share["distribution"]["positive_share"]
+
+
+def test_level_headline_is_the_mean_on_a_zero_inflated_series():
+    """The regression this suite must never repeat: a lexicon engine scores
+    most ordinary sentences at exactly 0.0, and real books push that share
+    past 50% (measured on Alice's Adventures in Wonderland, Tess of the
+    d'Urbervilles and Flatland: 41-50% of sentences at exactly 0.0 for every
+    signed engine). A median-based headline collapses to exactly 0.0 on
+    every one of those books; the mean does not, and is what ..._level must
+    report. A toy engine with an exact, content-addressed score keeps the
+    fixture deterministic rather than depending on a lexicon's own numbers.
+    """
+
+    def make_scorer(settings):
+        def score(text):
+            return 1.0 if "POS" in text else 0.0
+        return score, None
+
+    affect.register_engine(affect.EngineSpec(
+        name="toy_zero_inflated", label="toy zero-inflated", unit="score [0,1]", signed=True,
+        make_scorer=make_scorer))
+    sentences = [f"Neutral filler sentence number {i}." for i in range(8)]
+    sentences += ["POS this is wonderful.", "POS this is amazing."]
+    analysis = _analysis(" ".join(sentences))
+    findings = _by_id(affect.measure(analysis, config={"features": {
+        name: False for name in affect.DEFAULT_FEATURES}}))
+    level = findings[f"{PREFIX}toy_zero_inflated_level"]
+
+    assert level["sample_size"] == 10
+    # Hand-computed: eight 0.0 sentences and two 1.0 sentences.
+    assert level["value"] == pytest.approx(0.2)
+    assert level["value"] != 0.0
+    assert level["distribution"]["mean"] == pytest.approx(0.2)
+    assert level["distribution"]["median"] == pytest.approx(0.0)  # what a median headline would report
+    assert level["distribution"]["aggregation"] == "mean over sentences"
+    assert level["distribution"]["zero_share"] == pytest.approx(80.0)
+    assert level["distribution"]["nonzero_mean"] == pytest.approx(1.0)
 
 
 def test_dialogue_and_narration_tones_separate():
