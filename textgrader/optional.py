@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import os
+import sys
 import threading
 from typing import Any
 
@@ -403,7 +404,11 @@ def require(name: str) -> tuple[Any, str | None]:
             return _cache[name]
     module_name, hint = PACKAGES.get(name, (name, f"pip install {name}"))
     try:
-        module = importlib.import_module(module_name)
+        # Some packages print on import (taaled announces that plotnine is
+        # missing). Stdout is the report itself under grade.py --json, so an
+        # import's chatter goes to stderr instead of corrupting it.
+        with contextlib.redirect_stdout(sys.stderr):
+            module = importlib.import_module(module_name)
         outcome: tuple[Any, str | None] = (module, None)
     except Exception as exc:  # ImportError, but a broken build can raise anything
         outcome = (None, f"optional package '{name}' unavailable ({type(exc).__name__}: {exc}); {hint}")

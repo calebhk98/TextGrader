@@ -210,3 +210,18 @@ def test_no_optional_package_is_registered_twice():
             assert [k for k, n in collections.Counter(keys).items() if n > 1] == []
             return
     raise AssertionError("PACKAGES dict literal not found")
+
+
+def test_an_optional_import_that_prints_cannot_corrupt_stdout(monkeypatch, capsys, tmp_path):
+    # Stdout carries the report under grade.py --json; a package that prints
+    # when imported (taaled does) must not put text ahead of the JSON.
+    (tmp_path / "noisy_optional_pkg.py").write_text("print('noisy import banner')\nVALUE = 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setitem(optional.PACKAGES, "noisy_optional_pkg",
+                        ("noisy_optional_pkg", "pip install nothing"))
+    optional.reset_cache()
+    module, reason = optional.require("noisy_optional_pkg")
+    captured = capsys.readouterr()
+    assert module is not None and reason is None
+    assert "noisy import banner" not in captured.out
+    assert "noisy import banner" in captured.err
