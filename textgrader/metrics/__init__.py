@@ -580,6 +580,37 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "plus a within-document distance-correlation channel between naturally paired "
                   "sequences. Every distance is its own finding, kept separate from any p-value; "
                   "every family is independently switchable. Off by default; experimental."),
+    _spec("mechanical_quality_suite", "mechanical_quality_suite", "lexical", "moderate",
+          requires=("pyspellchecker", "symspellpy", "ftfy", "confusable_homoglyphs"),
+          defaults={
+              "features": {
+                  "typography": True, "encoding": True, "encoding_ftfy": True,
+                  "confusables": True, "hyphenation": True,
+                  "spelling_pyspellchecker": True, "spelling_symspell": True,
+                  "spelling_disagreement": True, "likely_typos": True,
+                  "doubled_words": True, "fused_tokens": True, "ocr_substitution": True,
+                  "confusion_pairs": True, "sentence_summary": True,
+              },
+              "language": "en",
+              "recurring_min_count": 3,
+              "likely_typo_max_count": 2,
+              "likely_typo_max_candidates": 500,
+              "fused_min_length": 8,
+              "fused_max_candidates": 400,
+              "max_reported": 25,
+          },
+          summary="Experimental grammar/spelling/typography/encoding mechanical-quality "
+                  "diagnostics (LanguageTool replaced by Python-only checks -- see the module "
+                  "docstring): mixed quote/apostrophe/dash/ellipsis style, control/zero-width/"
+                  "replacement/private-use character rates, a diagnostic (non-mutating) ftfy "
+                  "repair estimate plus an independent mojibake pattern scan, mixed-script "
+                  "homoglyph detection, confirmed broken line-wrap hyphenation, two independent "
+                  "dictionary spell checkers (pyspellchecker, SymSpell) with a disagreement "
+                  "rate, likely-typo scoring that excludes a reported per-document 'recurring "
+                  "vocabulary' of invented names/places, fused- and split-token detection, "
+                  "OCR-substitution heuristics, and a small dialect-safe grammar rule set -- "
+                  "every mechanical rate that risks reading dialect as an error is reported "
+                  "separately for narration and dialogue. Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
