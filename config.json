@@ -475,8 +475,10 @@
       "srl_model": "cu-kairos/propbank_srl_seq2seq_t5_small",
       "srl_max_predicates": 40,
       "relation_extraction_model": "Babelscape/rebel-large",
+      "_relation_extraction_model_license": "Babelscape/rebel-large is licensed CC BY-NC-SA 4.0: non-commercial use only. TextGrader's own code is MIT, but whoever downloads and runs this model is bound by the model's licence. Swap in a commercially licensed model here before enabling relation_extraction for commercial work.",
       "relation_extraction_max_sentences": 40,
       "argument_mining_model": "raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L",
+      "_argument_mining_model_license": "raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L is licensed CC BY-NC-SA 4.0: non-commercial use only. TextGrader's own code is MIT, but whoever downloads and runs this model is bound by the model's licence. Swap in a commercially licensed model here before enabling argument_mining for commercial work.",
       "argument_mining_max_pairs": 40
     },
     "timeseries_suite": {
