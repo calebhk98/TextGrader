@@ -45,16 +45,21 @@ def test_registered_and_off_by_default():
     for name in ("features", "window_sentences", "max_pairs", "max_comparisons",
                 "max_evidence", "proposition_cap", "connective_min_words",
                 "repeated_assertion_min_words", "coreference_max_chars",
-                "nli_model", "nli_max_pairs", "nli_batch_size"):
+                "nli_model", "nli_max_pairs", "nli_batch_size",
+                "srl_model", "srl_max_predicates",
+                "relation_extraction_model", "relation_extraction_max_sentences",
+                "argument_mining_model", "argument_mining_max_pairs"):
         assert name in spec.defaults, name
     for name in ("negation_and_quantifiers", "connective_relations", "propositions",
                 "modal_argument_position", "nli_entailment", "coreference_resolution",
-                "lexical_opposition", "temporal_ordering"):
+                "lexical_opposition", "temporal_ordering", "semantic_role_labeling",
+                "relation_extraction", "argument_mining"):
         assert name in spec.defaults["features"], name
-    # The four new groups must default to off in the registry AND in config.json
-    # -- this is the gate the module docstring calls out by name.
+    # Every model-backed group must default to off in the registry AND in
+    # config.json -- this is the gate the module docstring calls out by name.
     for name in ("nli_entailment", "coreference_resolution", "lexical_opposition",
-                "temporal_ordering"):
+                "temporal_ordering", "semantic_role_labeling", "relation_extraction",
+                "argument_mining"):
         assert spec.defaults["features"][name] is False, name
 
 
@@ -321,10 +326,13 @@ def test_pronoun_subjects_are_excluded_from_cross_sentence_matching():
 
 def test_default_config_never_loads_nli_or_coref_model(monkeypatch):
     def boom(*args, **kwargs):
-        raise AssertionError("an NLI or coreference model must never load under default config")
+        raise AssertionError("a transformer model must never load under default config")
 
     monkeypatch.setattr(logic_suite, "_load_nli_pipeline", boom)
+    monkeypatch.setattr(logic_suite, "_load_argument_mining_pipeline", boom)
     monkeypatch.setattr(prop_lib, "_load_coref_model", boom)
+    monkeypatch.setattr(prop_lib, "_load_srl_model", boom)
+    monkeypatch.setattr(prop_lib, "_load_relation_model", boom)
     text = ("Alice was tired. She was not tired at all, though. Therefore the sign "
            "outside is misleading, however nobody read it.")
     # config=None: every legacy group defaults on; none of this must touch a model.
@@ -671,3 +679,177 @@ def test_hand_check_unreliable_narrator_contradiction_is_not_reported_as_an_erro
     # should be -- but the finding must still frame that as a model score,
     # never as a claim that the text itself contains an error.
     assert "not evidence of an error in the writing" in item["warning"]
+
+
+# --------------------------------------------------------- semantic role labelling
+
+def test_srl_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["semantic_role_labeling"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_srl_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        found = _findings("The door was locked.",
+                          config={"features": {"semantic_role_labeling": True}})
+        for metric_id in logic_suite.FEATURE_METRICS["semantic_role_labeling"]:
+            assert found[metric_id]["value"] is None
+            assert "transformers" in found[metric_id]["warning"] or "unavailable" in found[metric_id]["warning"]
+    finally:
+        optional.reset_cache()
+
+
+@requires_spacy
+@requires_transformers
+def test_srl_against_a_real_model_finds_a_thin_passive_frame():
+    """Real ``cu-kairos/propbank_srl_seq2seq_t5_small`` on one short sentence.
+
+    A passive with no expressed agent ("The door was locked.") has exactly one
+    core PropBank argument (ARG-1, the door) -- hand-checked against the real
+    model, not assumed (see the module docstring's cost note for why this test
+    stays to a single short sentence and a tiny ``srl_max_predicates``).
+    """
+
+    text = "The door was locked."
+    found = _findings(text, config={"features": {"semantic_role_labeling": True},
+                                    "srl_max_predicates": 2})
+    omission = found["discourse.logic_srl_argument_omission_rate"]
+    assert omission["sample_size"] == 1
+    assert omission["value"] == pytest.approx(100.0)
+    assert omission["evidence"][0]["roles"]
+    assert "candidate signal" in omission["warning"]
+    # Only one occurrence of "lock" in this document: nothing to compare for
+    # role-pattern consistency, and the finding must say so, not guess.
+    consistency = found["discourse.logic_srl_role_pattern_consistency"]
+    assert consistency["value"] is None
+    assert "two or more" in consistency["warning"]
+
+
+# ------------------------------------------------- closed-schema relation extraction
+
+def test_relation_extraction_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["relation_extraction"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_relation_extraction_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        found = _findings("Marie Curie was born in Warsaw.",
+                          config={"features": {"relation_extraction": True}})
+        item = found["discourse.logic_relation_extraction_triple_rate"]
+        assert item["value"] is None
+        assert "transformers" in item["warning"] or "unavailable" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+@requires_spacy
+@requires_transformers
+def test_relation_extraction_against_a_real_model_on_a_wikidata_style_fact():
+    """Real ``Babelscape/rebel-large`` (greedy decoding) on one short,
+    real-world biographical sentence -- hand-checked to actually produce
+    ``{'head': 'Marie Curie', 'type': 'place of birth', 'tail': 'Warsaw'}``,
+    not assumed from the model card.
+    """
+
+    text = "Marie Curie was born in Warsaw."
+    found = _findings(text, config={"features": {"relation_extraction": True},
+                                    "relation_extraction_max_sentences": 2})
+    item = found["discourse.logic_relation_extraction_triple_rate"]
+    assert item["sample_size"] == 1
+    assert item["distribution"]["triple_count"] >= 1
+    row = item["evidence"][0]
+    assert "curie" in row["head"].lower()
+    assert "warsaw" in row["tail"].lower()
+    assert "CLOSED-schema" in item["warning"]
+
+
+@requires_spacy
+@requires_transformers
+def test_relation_extraction_can_hallucinate_a_schema_compatible_relation_on_fiction():
+    """A real, hand-checked surprise, not the assumption this test used to
+    make: a plain fictional sentence with no stated Wikidata-style fact does
+    NOT reliably come back empty. Hand-checked against the real model:
+    "Alice was tired after her long journey through the old town." -- which
+    asserts nothing about where Alice lives -- generated
+    ``{'head': 'Alice', 'type': 'residence', 'tail': 'old town'}``, a
+    plausible-sounding, schema-compatible triple invented under the seq2seq
+    format's own pressure to always emit *something*, not read off the text.
+    This is why every relation_extraction finding calls each triple a model
+    judgement, never a verified fact, and why the module docstring no longer
+    claims fiction "legitimately scores near zero" as if that were the whole
+    story -- it can just as easily score a false positive.
+    """
+
+    text = "Alice was tired after her long journey through the old town."
+    found = _findings(text, config={"features": {"relation_extraction": True},
+                                    "relation_extraction_max_sentences": 2})
+    item = found["discourse.logic_relation_extraction_triple_rate"]
+    assert item["sample_size"] == 1
+    # Whatever the exact triple, it must come through as well-formed
+    # evidence with all three fields populated -- never a partial parse.
+    for row in item["evidence"]:
+        assert row["head"] and row["relation_type"] and row["tail"]
+
+
+# --------------------------------------------------------------- argument mining
+
+def test_argument_mining_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["argument_mining"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_argument_mining_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        text = ("The council delayed the vital bridge repairs for several months. "
+               "Therefore the fragile old bridge finally collapsed under heavy traffic.")
+        found = _findings(text, config={"features": {"argument_mining": True}})
+        item = found["discourse.logic_argument_relation_label_distribution"]
+        assert item["value"] is None
+        assert "transformers" in item["warning"] or "unavailable" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+def test_argument_mining_needs_a_connective_pair():
+    text = "Plain sentence one. Plain sentence two."
+    found = _findings(text, config={"features": {"argument_mining": True}})
+    item = found["discourse.logic_argument_relation_label_distribution"]
+    assert item["value"] is None
+    assert "connective" in item["warning"]
+
+
+@requires_spacy
+@requires_transformers
+def test_argument_mining_against_a_real_model_on_a_support_pair():
+    """Real ``raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L`` on one
+    therefore-linked pair, capped to a single candidate so this stays fast.
+    """
+
+    text = ("The council delayed the vital bridge repairs for several months. "
+           "Therefore the fragile old bridge finally collapsed under heavy traffic.")
+    found = _findings(text, config={"features": {"argument_mining": True},
+                                    "argument_mining_max_pairs": 1})
+    item = found["discourse.logic_argument_relation_label_distribution"]
+    assert item["sample_size"] == 1
+    assert item["evidence"][0]["argmin_label"] in {"no-relation", "inference", "conflict", "rephrase"}
+    assert item["distribution"]["model"] == "raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L"
+    assert "connective_chain_length proxy" in item["warning"]
+    agreement = found["discourse.logic_argument_relation_connective_agreement"]
+    assert agreement["sample_size"] == 1
+    assert agreement["distribution"]["confusion"]

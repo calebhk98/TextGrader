@@ -90,6 +90,12 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # by default). Heavy (pulls in a transformer checkpoint) and never imported
     # unless that flag is explicitly on -- see the module docstring's gating
     # note for why that matters here more than anywhere else in this codebase.
+    # The same "transformers" install also backs three more off-by-default
+    # logic_suite features added in a later pass -- "semantic_role_labeling"
+    # (a seq2seq PropBank SRL model), "relation_extraction" (a seq2seq
+    # closed-schema relation extractor, REBEL) and "argument_mining" (a
+    # RoBERTa argument-relation classifier) -- each its own Hugging Face hub
+    # checkpoint, no new package for any of them.
     "transformers": ("transformers", "pip install transformers"),
     # Only transformers' own import is touched directly; this entry exists so
     # `installed()`/`requirements.txt` account for the CPU wheel transformers

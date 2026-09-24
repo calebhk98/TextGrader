@@ -1,11 +1,26 @@
-"""Shallow subject-predicate-object triples, extracted once and cached.
+"""Shallow subject-predicate-object triples, extracted once and cached --
+plus, further down this file, the real SRL and closed-schema relation-
+extraction models that now sit alongside this shallow proxy rather than
+replacing it.
 
-This is the "OpenIE" mentioned in the logic-suite spec, sized to what is
-actually available here: no Stanford OpenIE, no AllenNLP SRL, no coreference
-resolver. What spaCy's dependency parse gives for free is a shallow
-proposition per clause -- its grammatical subject, its verb, and (if one
-exists) an object, attribute or prepositional complement -- and that is all
-this module extracts. A sentence yields one proposition for its main clause
+:func:`extract` was the "OpenIE" mentioned in the logic-suite spec's first
+pass, sized to what was actually available then: no Stanford OpenIE, no
+AllenNLP SRL, no coreference resolver, no relation-extraction model. That has
+only partly changed with time -- ``fastcoref`` now backs a real (opt-in)
+coreference resolver (see "No coreference, by default" below), and a later
+pass added real SRL (:func:`extract_srl_frames`) and real, closed-schema
+relation extraction (:func:`extract_relations`), both from Hugging Face hub
+models via ``transformers``, after actually trying AllenNLP and finding it
+uninstallable here (see those functions' own section docstrings, further
+down, for the quoted dry-run evidence). :func:`extract` itself is unchanged
+by any of that: it is kept, deliberately, as its own independent channel
+precisely because it disagreeing with the newer, real models -- or finding
+something they cannot, or missing something they catch -- is data worth
+surfacing, not a defect to fix by picking one. What spaCy's dependency parse
+gives for free is a shallow proposition per clause -- its grammatical
+subject, its verb, and (if one exists) an object, attribute or prepositional
+complement -- and that is all :func:`extract` itself extracts. A sentence
+yields one proposition for its main clause
 and one more for each clausal complement or subordinate clause it carries
 (``ccomp``: "she said [the lamp was lit]"; ``advcl``: "when he arrived, [it
 was dark]"; verb-headed ``conj``: "the lamp was dark and [the reservoir was
@@ -84,7 +99,7 @@ import re
 from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, replace
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .document import DocumentAnalysis
 from .optional import on_reset, require, shim_fastcoref_transformers
@@ -774,6 +789,411 @@ def resolve_coreference(analysis: DocumentAnalysis, extraction: "Extraction",
                          lambda: _resolve_coreference(analysis, extraction.propositions, int(max_chars)))
 
 
-__all__ = ["Proposition", "Extraction", "PairScan", "CorefResolution", "extract", "bucketed_pairs",
-          "negation_conflict", "attribute_conflict", "load_wordnet", "wordnet_antonym_conflict",
-          "wordnet_hypernym_related", "resolve_coreference"]
+# --------------------------------------------------------- semantic role labelling
+#
+# AllenNLP's own SRL predictor was tried first, as the task behind this pass
+# required, and rejected on hard evidence, not assumption: ``pip install
+# --dry-run "allennlp==2.10.1"`` in this environment fails outright --
+#
+#   ERROR: Could not find a version that satisfies the requirement
+#   torch<1.13.0,>=1.10.0 (from allennlp) (from versions: 1.13.0, 1.13.1, 2.0.0,
+#   ..., 2.14.0)
+#   ERROR: No matching distribution found for torch<1.13.0,>=1.10.0
+#
+# -- because allennlp==2.10.1 (the last release, with ``allennlp-models``'
+# SRL and OpenIE predictors) pins ``torch<1.13.0``, and no such wheel exists
+# for this environment's Python (3.11): PyPI's oldest torch build for cp311 is
+# 1.13.0 itself, one version too new for AllenNLP's own ceiling. Installing it
+# is not merely undesirable, it is impossible without a Python this project
+# does not run on. That closes AllenNLP for good, not for lack of trying it --
+# see :mod:`textgrader.metrics.logic_suite`'s module docstring for the same
+# note in context.
+#
+# ``cu-kairos/propbank_srl_seq2seq_t5_small`` (a T5 fine-tuned to generate
+# PropBank-style ``ARG-0: ... | ARG-1: ...`` role strings; see
+# https://huggingface.co/cu-kairos/propbank_srl_seq2seq_t5_small) is used
+# instead, loaded through the ``transformers`` this codebase already depends
+# on for ``nli_entailment`` -- no new optional package. Its own model card
+# calls it through ``pipeline("text2text-generation", ...)``; that pipeline
+# alias does not exist in this environment's installed ``transformers``
+# (5.17.0 raises ``KeyError: "Unknown task text2text-generation, ...``, found
+# by actually calling it, not assumed), so this module drives the
+# ``T5ForConditionalGeneration``/``T5Tokenizer`` pair directly instead, which
+# is equivalent and one layer more robust to a pipeline-registry change.
+#
+# The predicate token must be bracketed BOTH in the ``SRL for [verb]:`` prefix
+# AND inline at its position in the clause -- the model card's own example
+# does this, and skipping the inline bracket is an easy mistake with a real
+# cost: hand-checked against the real model on "The historian [said] the
+# lighthouse was built in 1861," omitting the inline bracket silently dropped
+# ARG-0 (the historian) from the output entirely, leaving only the reported
+# clause's own ARG-1. :func:`_srl_marked_text` always brackets both.
+
+
+_SRL_MODEL_NAME_DEFAULT = "cu-kairos/propbank_srl_seq2seq_t5_small"
+
+
+@dataclass(frozen=True)
+class SRLFrame:
+    """One predicate's PropBank-style role reading, from a real SRL model.
+
+    ``roles`` maps a role label (``"ARG-0"``, ``"ARG-1"``, ..., or an ``ARGM-*``
+    adjunct such as ``"ARGM-NEG"``/``"ARGM-TMP"``) to the argument text the
+    model generated for it -- read exactly as the model produced it, never
+    corrected or disambiguated against PropBank's own frame files (none is
+    consulted; see :func:`srl_core_roles`'s docstring for what that does and
+    does not mean).
+    """
+
+    sentence_index: int
+    offset: int
+    text: str
+    predicate_text: str
+    predicate_lemma: str
+    roles: dict[str, str]
+    raw_output: str
+
+
+@dataclass(frozen=True)
+class SRLExtraction:
+    """What :func:`extract_srl_frames` did, whether or not it could score anything."""
+
+    frames: list[SRLFrame]
+    sentences_scanned: int
+    candidates_seen: int
+    truncated: bool
+    available: bool
+    reason: str | None
+    model_name: str
+
+
+_SRL_MODEL_CACHE: dict[str, tuple[Any, str | None]] = {}
+
+
+def _reset_srl_cache() -> None:
+    _SRL_MODEL_CACHE.clear()
+
+
+on_reset(_reset_srl_cache)
+
+
+def _load_srl_model(model_name: str) -> tuple[Any, str | None]:
+    if model_name in _SRL_MODEL_CACHE:
+        return _SRL_MODEL_CACHE[model_name]
+    module, reason = require("transformers")
+    if module is None:
+        _SRL_MODEL_CACHE[model_name] = (None, reason)
+        return _SRL_MODEL_CACHE[model_name]
+    try:
+        tokenizer = module.T5Tokenizer.from_pretrained(model_name)
+        model = module.T5ForConditionalGeneration.from_pretrained(model_name)
+        try:
+            gen_config = module.GenerationConfig.from_pretrained(model_name)
+        except Exception:  # pragma: no cover - checkpoint without a saved generation config
+            gen_config = None
+        outcome: tuple[Any, str | None] = ((model, tokenizer, gen_config), None)
+    except Exception as exc:  # pragma: no cover - model download/runtime failure
+        outcome = (None, f"SRL model {model_name!r} unavailable ({type(exc).__name__}: {exc}); "
+                         f"pip install transformers torch")
+    _SRL_MODEL_CACHE[model_name] = outcome
+    return outcome
+
+
+def _srl_marked_text(root: Any) -> str:
+    """The clause spanning ``root``, with its predicate token bracketed both
+    inline and in the ``SRL for [...]:`` prefix -- see the section docstring
+    above for why both brackets matter."""
+
+    pieces = []
+    for tok in root.doc[root.left_edge.i:root.right_edge.i + 1]:
+        text = f"[{tok.text}]" if tok.i == root.i else tok.text
+        pieces.append(text + tok.whitespace_)
+    clause = "".join(pieces).strip()
+    return f"SRL for [{root.text}]: {clause}"
+
+
+_SRL_ROLE_RE = re.compile(r"^([A-Za-z][\w-]*)\s*:\s*(.*)$")
+
+
+def _parse_srl_output(raw: str) -> dict[str, str]:
+    """``{"ARG-0": "...", ...}`` from the model's own ``"ARG-0: X | ARG-1: Y"``
+    string.  A part that does not match the expected ``label: text`` shape
+    (a truncated generation, an empty label) is skipped rather than guessed at."""
+
+    roles: dict[str, str] = {}
+    for part in raw.split("|"):
+        match = _SRL_ROLE_RE.match(part.strip())
+        if not match:
+            continue
+        role, value = match.group(1).upper(), match.group(2).strip()
+        if role and value:
+            roles[role] = value
+    return roles
+
+
+_CORE_ROLE_RE = re.compile(r"^ARG-?\d+$")
+
+
+def srl_core_roles(roles: Mapping[str, str]) -> frozenset[str]:
+    """The numbered PropBank arguments in ``roles`` (``ARG-0``..``ARG-4``),
+    excluding ``ARGM-*`` adjuncts (negation, location, time, manner, ...),
+    which are not core arguments and so are not part of a predicate's "role
+    signature" for :func:`textgrader.metrics.logic_suite`'s consistency check.
+    No PropBank frame file says which core roles a *specific* verb sense
+    requires -- this only reports which ones the model actually filled.
+    """
+
+    return frozenset(role for role in roles if _CORE_ROLE_RE.match(role))
+
+
+def _srl_candidates(analysis: DocumentAnalysis) -> tuple[list[tuple[int, int, str, Any]], int]:
+    """Every clause-level predicate in the document, unbounded -- cheap, since
+    this only walks the already-parsed spaCy tree and calls no model; the cap
+    is applied by the caller so ``truncated`` can be reported accurately."""
+
+    scanned = 0
+    candidates: list[tuple[int, int, str, Any]] = []
+    for sent, _channel, offset in analysis.spacy_sents_by_channel():
+        scanned += 1
+        for root in _clause_roots(sent):
+            candidates.append((scanned - 1, offset + sent.start_char, sent.text, root))
+    return candidates, scanned
+
+
+def _extract_srl(analysis: DocumentAnalysis, cap: int, model_name: str) -> SRLExtraction:
+    if analysis.nlp_unavailable:
+        return SRLExtraction([], 0, 0, False, False, analysis.nlp_unavailable, model_name)
+    all_candidates, scanned = _srl_candidates(analysis)
+    truncated = len(all_candidates) > cap
+    candidates = all_candidates[:cap]
+    if not candidates:
+        return SRLExtraction([], scanned, 0, False, False,
+                             "no clause with an extractable (subject-bearing) predicate", model_name)
+
+    loaded, reason = _load_srl_model(model_name)
+    if loaded is None:
+        return SRLExtraction([], scanned, len(candidates), truncated, False, reason, model_name)
+    model, tokenizer, gen_config = loaded
+
+    inputs_text = [_srl_marked_text(root) for *_ignore, root in candidates]
+    try:
+        batch = tokenizer(inputs_text, return_tensors="pt", padding=True, truncation=True)
+        kwargs = {"generation_config": gen_config} if gen_config is not None else {}
+        generated = model.generate(**batch, **kwargs)
+        decoded = tokenizer.batch_decode(generated, skip_special_tokens=True)
+    except Exception as exc:  # pragma: no cover - runtime failure
+        return SRLExtraction([], scanned, len(candidates), truncated, False,
+                             f"SRL generation failed ({type(exc).__name__}: {exc})", model_name)
+
+    frames = []
+    for (sentence_index, start_char, sentence_text, root), raw in zip(candidates, decoded):
+        frames.append(SRLFrame(sentence_index, start_char, sentence_text, root.text,
+                               root.lemma_.lower(), _parse_srl_output(raw), raw))
+    return SRLExtraction(frames, scanned, len(candidates), truncated, True, None, model_name)
+
+
+def extract_srl_frames(analysis: DocumentAnalysis, cap: int,
+                       model_name: str = _SRL_MODEL_NAME_DEFAULT) -> SRLExtraction:
+    """Cached: real PropBank-style SRL frames for logic_suite's
+    ``semantic_role_labeling`` feature (off by default; see that module).
+
+    Bounded by ``cap`` clause-level predicates (document order), because each
+    one costs a model generation call -- far more expensive per item than
+    :func:`extract`'s dependency-parse pass, which is why this cap is much
+    smaller by default than ``proposition_cap``. Every frame is the model's
+    own generated reading, not a verified PropBank annotation.
+    """
+
+    return analysis.memo(f"logic_srl:{int(cap)}:{model_name}",
+                         lambda: _extract_srl(analysis, int(cap), model_name))
+
+
+# ----------------------------------------------------- closed-schema relation extraction
+#
+# "Open" information extraction -- arbitrary predicate PHRASES lifted verbatim
+# from the sentence, with no fixed relation vocabulary -- is exactly what
+# Stanford OpenIE and AllenNLP's OpenIE predictor do, and exactly what neither
+# is available to do here: Stanford's is Java (out by the project's Python-only
+# decision) and AllenNLP's needs a torch this environment cannot install (see
+# the SRL section above for the quoted dry-run failure, which blocks AllenNLP's
+# OpenIE predictor for the identical reason it blocks its SRL predictor -- both
+# ship in the same ``allennlp-models`` package).
+#
+# ``Babelscape/rebel-large`` (see https://huggingface.co/Babelscape/rebel-large)
+# is offered here instead, honestly under a different name:
+# ``extract_relations``/``relation_extraction``, never "openie". REBEL is
+# CLOSED-schema relation extraction -- a BART model fine-tuned to generate
+# ``<triplet> head <subj> tail <obj> relation`` sequences over roughly 200
+# Wikidata-style relation types ("capital of", "spouse", "author", ...), not
+# an arbitrary phrase read off the sentence. Hand-checked, not assumed, on
+# real sentences: "Marie Curie was born in Warsaw" correctly generates
+# ``{'head': 'Marie Curie', 'type': 'place of birth', 'tail': 'Warsaw'}``, but
+# "Alice was tired after her long journey through the old town" -- fiction
+# asserting nothing about where Alice lives -- generated
+# ``{'head': 'Alice', 'type': 'residence', 'tail': 'old town'}`` anyway: a
+# plausible-sounding, schema-compatible triple invented under the seq2seq
+# format's own pressure to always emit something, not read off the text. This
+# is kept as an independent channel alongside :func:`extract`'s dependency-
+# parse proxy (see that function's own docstring) specifically because the
+# two disagreeing, or one finding something (real or invented) the other
+# cannot, is itself data worth surfacing, per the task this pass was written
+# against -- and it is exactly why every finding built from this channel
+# calls a triple a model judgement, never a verified fact, rather than
+# framing a fictional near-zero rate as simply the schema staying quiet.
+
+_RELATION_MODEL_NAME_DEFAULT = "Babelscape/rebel-large"
+
+
+@dataclass(frozen=True)
+class Relation:
+    sentence_index: int
+    offset: int
+    text: str
+    head: str
+    relation_type: str
+    tail: str
+
+
+@dataclass(frozen=True)
+class RelationExtraction:
+    relations: list[Relation]
+    sentences_scanned: int
+    sentences_scored: int
+    truncated: bool
+    available: bool
+    reason: str | None
+    model_name: str
+
+
+_RELATION_MODEL_CACHE: dict[str, tuple[Any, str | None]] = {}
+
+
+def _reset_relation_cache() -> None:
+    _RELATION_MODEL_CACHE.clear()
+
+
+on_reset(_reset_relation_cache)
+
+
+def _load_relation_model(model_name: str) -> tuple[Any, str | None]:
+    if model_name in _RELATION_MODEL_CACHE:
+        return _RELATION_MODEL_CACHE[model_name]
+    module, reason = require("transformers")
+    if module is None:
+        _RELATION_MODEL_CACHE[model_name] = (None, reason)
+        return _RELATION_MODEL_CACHE[model_name]
+    try:
+        tokenizer = module.AutoTokenizer.from_pretrained(model_name)
+        model = module.AutoModelForSeq2SeqLM.from_pretrained(model_name)
+        outcome: tuple[Any, str | None] = ((model, tokenizer), None)
+    except Exception as exc:  # pragma: no cover - model download/runtime failure
+        outcome = (None, f"relation-extraction model {model_name!r} unavailable "
+                         f"({type(exc).__name__}: {exc}); pip install transformers torch")
+    _RELATION_MODEL_CACHE[model_name] = outcome
+    return outcome
+
+
+def _relation_triplets(raw: str) -> list[tuple[str, str, str]]:
+    """``[(head, relation_type, tail), ...]`` from REBEL's own linearised
+    output.  Adapted, not copied verbatim, from the parsing snippet on
+    Babelscape/rebel-large's own model card -- the same well-known routine
+    every REBEL integration uses, kept here to match the model's exact
+    output grammar rather than re-derive a new one.
+    """
+
+    triplets: list[tuple[str, str, str]] = []
+    relation = subject = obj = ""
+    current = "x"
+    cleaned = raw.replace("<s>", "").replace("<pad>", "").replace("</s>", "")
+    for token in cleaned.split():
+        if token == "<triplet>":
+            current = "t"
+            if relation:
+                triplets.append((subject.strip(), relation.strip(), obj.strip()))
+                relation = ""
+            subject = ""
+        elif token == "<subj>":
+            current = "s"
+            if relation:
+                triplets.append((subject.strip(), relation.strip(), obj.strip()))
+            obj = ""
+        elif token == "<obj>":
+            current = "o"
+            relation = ""
+        elif current == "t":
+            subject += " " + token
+        elif current == "s":
+            obj += " " + token
+        elif current == "o":
+            relation += " " + token
+    if subject and relation and obj:
+        triplets.append((subject.strip(), relation.strip(), obj.strip()))
+    return triplets
+
+
+def _extract_relations(analysis: DocumentAnalysis, cap: int, model_name: str) -> RelationExtraction:
+    if analysis.nlp_unavailable:
+        return RelationExtraction([], 0, 0, False, False, analysis.nlp_unavailable, model_name)
+    sentences: list[tuple[int, int, str]] = []
+    scanned = 0
+    for sent, _channel, offset in analysis.spacy_sents_by_channel():
+        scanned += 1
+        text = sent.text.strip()
+        if text:
+            sentences.append((scanned - 1, offset + sent.start_char, text))
+    truncated = len(sentences) > cap
+    scored = sentences[:cap]
+    if not scored:
+        return RelationExtraction([], scanned, 0, truncated, False, "no non-empty sentence to scan", model_name)
+
+    loaded, reason = _load_relation_model(model_name)
+    if loaded is None:
+        return RelationExtraction([], scanned, len(scored), truncated, False, reason, model_name)
+    model, tokenizer = loaded
+
+    texts = [text for _, _, text in scored]
+    try:
+        batch = tokenizer(texts, max_length=128, padding=True, truncation=True, return_tensors="pt")
+        # The model card's own example uses num_beams=3; greedy decoding
+        # (num_beams=1) is used here instead, deliberately -- this channel
+        # scores individual sentences, not the long, multi-relation passages
+        # REBEL was built to summarize, and beam search's cost multiplies
+        # with beam width on top of an already measurably slow CPU generation
+        # call (see the module docstring's cost note). A missed lower-
+        # probability triple is an honest, documented recall trade-off for
+        # this channel's cost budget, not a correctness bug.
+        generated = model.generate(batch["input_ids"], attention_mask=batch["attention_mask"],
+                                   max_length=128, num_beams=1, num_return_sequences=1)
+        decoded = tokenizer.batch_decode(generated, skip_special_tokens=False)
+    except Exception as exc:  # pragma: no cover - runtime failure
+        return RelationExtraction([], scanned, len(scored), truncated, False,
+                                  f"relation-extraction generation failed ({type(exc).__name__}: {exc})",
+                                  model_name)
+
+    relations: list[Relation] = []
+    for (sentence_index, start_char, text), raw in zip(scored, decoded):
+        for head, relation_type, tail in _relation_triplets(raw):
+            if head and relation_type and tail:
+                relations.append(Relation(sentence_index, start_char, text, head, relation_type, tail))
+    return RelationExtraction(relations, scanned, len(scored), truncated, True, None, model_name)
+
+
+def extract_relations(analysis: DocumentAnalysis, cap: int,
+                      model_name: str = _RELATION_MODEL_NAME_DEFAULT) -> RelationExtraction:
+    """Cached: closed-schema relation triples for logic_suite's
+    ``relation_extraction`` feature (off by default; see that module and the
+    section docstring above for what "closed-schema" means here and why).
+
+    Bounded by ``cap`` sentences (document order) for the same reason
+    :func:`extract_srl_frames` bounds itself: one model generation call per
+    unit scored, far more expensive than the shared dependency parse.
+    """
+
+    return analysis.memo(f"logic_relations:{int(cap)}:{model_name}",
+                         lambda: _extract_relations(analysis, int(cap), model_name))
+
+
+__all__ = ["Proposition", "Extraction", "PairScan", "CorefResolution", "SRLFrame", "SRLExtraction",
+          "Relation", "RelationExtraction", "extract", "bucketed_pairs", "negation_conflict",
+          "attribute_conflict", "load_wordnet", "wordnet_antonym_conflict", "wordnet_hypernym_related",
+          "resolve_coreference", "srl_core_roles", "extract_srl_frames", "extract_relations"]

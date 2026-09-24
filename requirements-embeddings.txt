@@ -8,12 +8,17 @@
 -r requirements.txt
 sentence-transformers>=2.2
 
-# NLI cross-encoder (logic_suite's `nli_entailment`), coreference resolution
-# (logic_suite and coherence_suite), and a causal language model
-# (randomness_suite's `neural_language_model`).  All three share the torch
-# install above and every one of them is off by default; without them each
-# channel reports "unavailable" with an install hint and its suite's other
-# measurements are unaffected.
+# NLI cross-encoder, real semantic-role-labelling, closed-schema relation
+# extraction and real argument-relation classification (logic_suite's
+# `nli_entailment`, `semantic_role_labeling`, `relation_extraction` and
+# `argument_mining`), coreference resolution (logic_suite and coherence_suite),
+# and a causal language model (randomness_suite's `neural_language_model`).
+# All of these share the torch install above and every one is off by default;
+# without them each channel reports "unavailable" with an install hint and its
+# suite's other measurements are unaffected. None of the four logic_suite
+# model channels needs a package beyond `transformers` itself -- each is just
+# a different Hugging Face hub checkpoint, fetched on first use the same way
+# `nli_entailment`'s already is.
 #
 # fastcoref as shipped does not do the tied-weight bookkeeping transformers 5.x
 # expects; textgrader.optional.shim_fastcoref_transformers supplies the missing

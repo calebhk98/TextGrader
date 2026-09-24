@@ -5,13 +5,82 @@ toolchain this environment did not have: no NLI cross-encoder, no OpenIE
 service, no argument-mining model, no GPU, no network access to fetch one.
 It shipped only what a dependency-free pass and the installed spaCy pipeline
 could genuinely compute, and named every one of them for what it actually
-measured. An NLI model, ``fastcoref``, downloaded WordNet corpus data and
-``python-dateutil`` are now installed, and four more measurement groups --
-``nli_entailment``, ``coreference_resolution``, ``lexical_opposition`` and
-``temporal_ordering`` -- close most of what that pass's own ``Deferred``
-section named. See ``Deferred`` at the end of this docstring for what is
-still, permanently, out of scope, and see the "Gating" section below before
-touching any of the four new groups' defaults.
+measured. A second pass installed an NLI model, ``fastcoref``, downloaded
+WordNet corpus data and ``python-dateutil``, closing most of what that first
+pass's own ``Deferred`` section named. This fourth pass closed the rest of it
+for real, by actually trying the tools the first two passes had assumed away
+rather than repeating the assumption:
+
+* **AllenNLP** (the obvious source for real SRL and real OpenIE) was
+  installed, not merely cited as unavailable -- and it does not fit here, on
+  hard evidence, not a shrug. ``pip install --dry-run "allennlp==2.10.1"``
+  (the last release, bundling ``allennlp-models``' SRL and OpenIE predictors)
+  fails outright in this environment::
+
+      ERROR: Could not find a version that satisfies the requirement
+      torch<1.13.0,>=1.10.0 (from allennlp) (from versions: 1.13.0, 1.13.1,
+      2.0.0, 2.0.1, ..., 2.14.0)
+      ERROR: No matching distribution found for torch<1.13.0,>=1.10.0
+
+  AllenNLP pins ``torch<1.13.0``; PyPI's oldest ``torch`` wheel for this
+  environment's Python (3.11) is ``1.13.0`` itself, one version too new. There
+  is no torch this environment can install that satisfies AllenNLP's own
+  ceiling -- not "not installed," genuinely not installable without a Python
+  this project does not run on. This closes AllenNLP for both SRL and OpenIE
+  at once (both predictors ship in ``allennlp-models``, gated by the same
+  ``allennlp`` core dependency), permanently, and is why it is not attempted
+  again below.
+* **Semantic role labelling** is real anyway: ``cu-kairos/propbank_srl_seq2seq_t5_small``,
+  a ``transformers``-native seq2seq model (no new optional package -- the
+  same ``transformers`` install ``nli_entailment`` already needs), backs the
+  new ``semantic_role_labeling`` feature. See
+  :mod:`textgrader.propositions`'s "semantic role labelling" section for how
+  it is called (its own model card's ``pipeline("text2text-generation", ...)``
+  does not work against this environment's ``transformers`` 5.17.0 --
+  ``KeyError: "Unknown task text2text-generation, ...`` on the actual call,
+  not assumed -- so this module drives the model and tokenizer directly) and
+  for a real, hand-checked example of exactly the failure mode a shallow
+  dependency-parse subject cannot see: SRL reads "he" as ARG-1 (patient) in
+  "He was arrested by the police" and would read the same referent as ARG-0
+  (agent) in an active rewording, a voice-invariant reading a grammatical
+  subject/object split cannot give.
+* **Open information extraction**, honestly, could not be closed as asked:
+  Stanford OpenIE is Java (out by the Python-only decision) and AllenNLP's
+  OpenIE predictor is blocked by the identical dry-run failure quoted above.
+  What is offered instead, under its own honest name -- ``relation_extraction``,
+  never "openie" -- is ``Babelscape/rebel-large``, a real, transformers-native
+  model, but a **closed-schema** relation extractor (roughly 200 Wikidata-style
+  relation types such as "capital of" or "spouse"), not an open-domain,
+  arbitrary-predicate extractor. That is a genuine difference in kind, not
+  degree, and every finding built from it says so. Hand-checked, not assumed,
+  on real sentences: "Marie Curie was born in Warsaw" correctly comes back
+  ``{'head': 'Marie Curie', 'type': 'place of birth', 'tail': 'Warsaw'}``, but
+  "Alice was tired after her long journey through the old town" -- a plain
+  fictional sentence asserting nothing about where Alice lives -- generated
+  ``{'head': 'Alice', 'type': 'residence', 'tail': 'old town'}`` anyway: a
+  plausible-sounding, schema-compatible triple the seq2seq format's own
+  pressure to always emit something invented rather than one the sentence
+  actually states. So this is not simply "fiction scores near zero because
+  the schema does not cover it" -- it can just as easily score a false
+  positive, and every finding built from this channel says a triple is this
+  model's own generated reading, never a verified fact, for exactly that
+  reason.
+* **Argument mining** is real: ``raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L``,
+  a RoBERTa-large Argument Relation Identification classifier trained on the
+  US2016 and QT30 debate corpora, backs the new ``argument_mining`` feature,
+  labelling this suite's own therefore/because/however-adjacent clause pairs
+  No-Relation / Inference (support) / Conflict (attack) / Rephrase. The
+  existing ``connective_chain_length`` proxy is unchanged and kept under its
+  own honest name -- a marker-adjacency proxy for argument structure, never
+  claim/premise/support/attack labels from a model -- exactly as the module
+  docstring said before this pass, now sitting beside the real thing instead
+  of standing in for it.
+
+See ``Deferred`` at the end of this docstring for what remains out of scope
+and why -- every remaining item is now either excluded by the Python-only
+decision or backed by the dry-run evidence quoted above, not an unchecked
+assumption -- and see the "Gating" section below before touching any
+off-by-default group's defaults, old or new.
 
 Nothing here checks whether a claim is *true*, including the groups backed by
 a real model. Two sentences that share a subject and a verb but disagree
@@ -26,10 +95,10 @@ hypotheticals, quoted falsehoods), so a high contradiction share is never
 reported as an error count. Every finding below says this in its name or its
 docstring, not just once here.
 
-Eight independently switchable measurement groups, under ``features`` in this
+Eleven independently switchable measurement groups, under ``features`` in this
 suite's config block. The first four were the original pass and default to
-*on*; the last four are new, need an installed model or resource, and default
-to *off* regardless of their own cost (see "Gating"):
+*on*; the other seven each need an installed model or resource and default to
+*off* regardless of their own cost (see "Gating"):
 
 ``negation_and_quantifiers`` (stdlib, cost ``fast``)
     Surface negation density and universal/existential ("all", "never", "no
@@ -103,6 +172,47 @@ default)
     explicitly framed as an observation, not an error, since flashbacks and
     non-chronological narration produce this legitimately.
 
+``semantic_role_labeling`` (``transformers`` seq2seq SRL, off by default)
+    Real PropBank-style ARG-0..ARG-4 (+ ARGM-*) role frames from
+    ``cu-kairos/propbank_srl_seq2seq_t5_small`` by default, over clause-level
+    predicates capped by ``srl_max_predicates`` (see
+    :func:`textgrader.propositions.extract_srl_frames`). Two channels built
+    from those frames: ``discourse.logic_srl_role_pattern_consistency`` --
+    whether the same predicate's core-argument role signature (which ARG-N
+    slots got filled) holds steady across its mentions in the document, a
+    voice-invariant check a shallow subject/object split cannot make -- and
+    ``discourse.logic_srl_argument_omission_rate``, the share of frames the
+    model filled with fewer than two core arguments. Both are candidate
+    signals, explicitly not errors: legitimate voice alternation, ellipsis and
+    verb-sense variation all produce the same pattern a genuine inconsistency
+    would.
+
+``relation_extraction`` (``transformers`` seq2seq relation extraction, off by
+default)
+    ``Babelscape/rebel-large`` by default, over sentences capped by
+    ``relation_extraction_max_sentences`` (see
+    :func:`textgrader.propositions.extract_relations`). CLOSED-schema (~200
+    Wikidata-style relation types), not open-domain OpenIE -- see this
+    docstring's opening section for why an open-domain extractor could not be
+    closed this pass, and why that makes this a genuinely different, narrower
+    tool than the one the task named. Reports a triple rate and how often a
+    triple's head/tail also appear as a subject/object pair in
+    ``propositions``' own dependency-parse proxy -- the two extractors
+    disagreeing, or one finding nothing the other also finds nothing on, is
+    reported as data, never as either channel being wrong.
+
+``argument_mining`` (``transformers`` argument-relation classifier, off by
+default)
+    ``raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L`` by default, applied to
+    this suite's own therefore/because/however-adjacent clause pairs (capped
+    by ``argument_mining_max_pairs``), labelling each pair No-Relation /
+    Inference (support) / Conflict (attack) / Rephrase. Reports the label
+    distribution and a confusion-matrix cross-check of the connective's own
+    implied polarity (support: therefore/because; contrast: however/but)
+    against the model's label. ``connective_chain_length`` (under
+    ``connective_relations``) is unchanged and kept under its own honest
+    name -- see this docstring's opening section.
+
 Every scalar this module reports is a **candidate rate, a lexical-overlap
 score, or a labelled model score**, never a truth value on its own, and every
 one records the settings it was computed under (``window_sentences``,
@@ -117,32 +227,45 @@ Gating
 ``textgrader/corpus.py`` decides which metrics it profiles over every
 reference book by excluding ``needs_parse`` and ``needs_model`` metrics, and
 ``MetricSpec.needs_model`` is defined as ``"sentence_transformers" in
-self.requires`` -- nothing else. ``nli_entailment`` is backed by
-``transformers``, not ``sentence_transformers``, so that guard **cannot see
-it**: a corpus build run with ``include_model_metrics=True`` would not
-exclude this suite on that basis alone. Two things currently stand between
-this and a book-length NLI pass nobody asked for, and both must stay true:
+self.requires`` -- nothing else. Every model-backed feature in this suite
+(``nli_entailment``, the SRL/relation-extraction/argument-mining trio, and
+coreference resolution) is backed by ``transformers`` or ``fastcoref``, never
+``sentence_transformers``, so that guard **cannot see any of them**: a corpus
+build run with ``include_model_metrics=True`` would not exclude this suite on
+that basis alone. Two things currently stand between this and a book-length
+pass of five transformer models (``nli_entailment``, coreference resolution,
+``semantic_role_labeling``, ``relation_extraction`` and ``argument_mining`` --
+``lexical_opposition`` and ``temporal_ordering`` are ``nltk``/``dateutil``,
+not transformer models, but default to off for the same reason) nobody asked
+for, and both must stay true:
 
 1. This suite's registry ``cost`` is ``"parse"``, so ``needs_parse`` already
    excludes it from corpus profiling regardless of ``needs_model`` -- do not
    make this suite cheaper without re-checking this.
-2. ``features.nli_entailment`` (and ``coreference_resolution``,
-   ``lexical_opposition``, ``temporal_ordering``) default to ``False`` in
+2. ``features.nli_entailment``, ``coreference_resolution``,
+   ``lexical_opposition``, ``temporal_ordering``, ``semantic_role_labeling``,
+   ``relation_extraction`` and ``argument_mining`` all default to ``False`` in
    both ``MetricSpec.defaults`` and ``config.json``, and the ``on()`` helper
-   in :func:`measure` falls back to ``False`` for any of these four when a
-   caller's ``features`` mapping omits them -- unlike the original four
+   in :func:`measure` falls back to ``False`` for every one of these seven
+   when a caller's ``features`` mapping omits them -- unlike the original four
    groups, which fall back to ``True`` for backward compatibility. Getting
    that fallback backwards for a new group would turn on a transformer-model
    pass for every caller that passes ``config=None`` or a partial ``features``
-   mapping, most of which are tests.
+   mapping, most of which are tests. ``_ON_BY_DEFAULT`` is the one place this
+   is decided; a new feature group must never be added to it without the same
+   scrutiny this note asks for.
 
-``_load_nli_pipeline`` and ``prop_lib._load_coref_model`` are the only two
-places this module (and the ``propositions`` module it uses) ever import
-``transformers`` or ``fastcoref``, and both are called only from inside
-``_nli_findings``/coreference resolution -- never at import time, never
-unless the owning feature is on. ``tests/test_logic_suite.py`` asserts this
-directly by monkeypatching both loaders to raise and running ``measure()``
-under the default config.
+``_load_nli_pipeline``, ``_load_argument_mining_pipeline``,
+``prop_lib._load_coref_model``, ``prop_lib._load_srl_model`` and
+``prop_lib._load_relation_model`` are the only five places this module (and
+the ``propositions`` module it uses) ever import ``transformers`` or
+``fastcoref``, and every one is called only from inside its own feature's
+finding function -- never at import time, never unless the owning feature is
+on. ``tests/test_logic_suite.py``'s
+``test_default_config_never_loads_nli_or_coref_model`` asserts this directly
+by monkeypatching all five loaders to raise and running ``measure()`` under
+the default config; it was extended to cover the three new loaders in this
+pass rather than left checking only the two the previous pass added.
 
 Measured cost, CPU only, ``cross-encoder/nli-deberta-v3-small``: loading the
 pipeline is about 2.5s; scoring is roughly 30ms/pair batched (measured on an
@@ -155,6 +278,21 @@ same cores -- a real property of shared hardware, not of this code -- so
 timing this channel is only meaningful on an otherwise-quiet machine.
 Proposition extraction and the heuristic bucket scans stay ``parse``-class
 and are entirely unaffected by whether this group is on.
+
+Measured cost, CPU only, the three seq2seq/classification channels added this
+pass: each is one model *generation* (SRL, relation extraction) or
+classification (argument mining) call per candidate, batched, and each is
+markedly more expensive per item than ``nli_entailment``'s classification
+call -- a batch of 6 short SRL inputs measured at roughly 44s/item and a
+single ``Babelscape/rebel-large`` load at over 130s on this environment's
+otherwise-idle-in-theory CPU, both far worse in practice whenever other
+CPU-bound work shares the same cores (exactly the contention effect the NLI
+paragraph above already documents, reproduced here on every new channel).
+This is why ``srl_max_predicates``, ``relation_extraction_max_sentences`` and
+``argument_mining_max_pairs`` all default to a much smaller 40 rather than
+``nli_max_pairs``'s 60, and why every real-model test for these three
+features in ``tests/test_logic_suite.py`` caps its own run far below even
+that, the same way the existing NLI tests already do with ``nli_max_pairs``.
 
 No corpus-reference channel
 ----------------------------
@@ -178,31 +316,42 @@ would be built, at real cost, for reference books nobody asked to profile.
 Deferred
 --------
 
-Permanently out of scope -- not a matter of what happens to be installed:
+Permanently out of scope, each for a reason checked this pass, not assumed:
 
 * **Stanford CoreNLP / Stanford OpenIE.** Not used: both are Java, and
-  TextGrader is Python only by decision.
-* **AllenNLP SRL / OpenIE.** Not yet integrated. ``textgrader/propositions.py`` extracts a
-  dependency-parse proxy instead (documented there), which is narrower:
-  single subject, single object, no semantic roles, no nested clauses.
-* **Argument mining (claim/premise/support/attack extraction).** No
-  argument-mining model or toolkit is installed. ``connective_chain_length``
-  is offered as a much narrower proxy -- built only from where "therefore"
-  and "because" sit relative to each other -- and is named and documented as
-  exactly that, never as claim/premise/support/attack labels from a model.
-* **Semantic-role pattern consistency / argument omission rates.** These need
-  real SRL (PropBank-style ARG0/ARG1/ARGM labels), which needs AllenNLP or an
-  equivalent model this environment does not have; the shallow dependency
-  triples here are not semantic roles and are not offered as a substitute.
-* **FrameNet / PropBank / VerbNet / ConceptNet.** No wrapper for any of these
-  is installed; WordNet (``lexical_opposition``) is the one lexical resource
-  this module now uses, and it is not a substitute for frame or role
-  inventories.
+  TextGrader is Python only by decision. This is the one item in this section
+  excluded by project decision rather than by a capability check, and it
+  would stay excluded even if a Python wrapper existed.
+* **AllenNLP SRL / OpenIE.** Actually installed, not merely cited as
+  unavailable, and rejected on its own dry-run failure: see this docstring's
+  opening section for the quoted ``pip install --dry-run "allennlp==2.10.1"``
+  output. AllenNLP pins ``torch<1.13.0``; no such wheel exists for this
+  environment's Python (3.11). ``semantic_role_labeling`` and
+  ``relation_extraction`` above are real, working replacements for what this
+  bullet used to defer -- a different model each, from the Hugging Face hub
+  through the ``transformers`` this codebase already depends on -- not a
+  second attempt at AllenNLP itself.
+* **FrameNet / PropBank / VerbNet.** ``nltk`` (already installed and used for
+  ``lexical_opposition``'s WordNet channel) also ships downloadable FrameNet,
+  VerbNet and PropBank corpora, the same way it ships WordNet's -- these are
+  genuinely available in this environment, not blocked the way AllenNLP is.
+  Integrating a frame-inventory or verb-class cross-check on top of them is a
+  real, additional feature a future pass could build the way ``lexical_
+  opposition`` added WordNet; it is not in this pass's scope (SRL, relation
+  extraction and argument mining were), so it is deferred by scope, not by
+  capability, and this bullet no longer claims otherwise.
+* **ConceptNet.** Not shipped via ``nltk``; using it means either a network
+  call to its public API (a runtime dependency this module does not want) or
+  a separate multi-hundred-megabyte downloaded database (``conceptnet-lite``
+  or similar). Neither was attempted this pass -- a genuine scope decision,
+  not a claim that either is impossible.
 
-Closed since the first pass, with real limitations of their own (each
-documented at its own feature group above and, for coreference and WordNet,
-in ``textgrader/propositions.py``): pairwise NLI, coreference resolution,
-WordNet antonymy, and temporal ordering.
+Closed across this and the previous pass, with real limitations of their own
+(each documented at its own feature group above and, for coreference,
+WordNet, SRL and relation extraction, in ``textgrader/propositions.py``):
+pairwise NLI, coreference resolution, WordNet antonymy, temporal ordering,
+semantic role labelling, closed-schema relation extraction, and argument
+mining.
 """
 
 from __future__ import annotations
@@ -277,6 +426,12 @@ _METRIC_NAMES = {
     "discourse.logic_wordnet_antonym_candidates": "WordNet antonym-based lexical-opposition candidates",
     "discourse.logic_wordnet_hypernym_downgrade_rate": "Property-conflict candidates WordNet marks as hypernym/hyponym-related, not opposed",
     "discourse.logic_temporal_order_candidates": "Temporal-conflict pairs whose parsed date order contradicts narrative order",
+    "discourse.logic_srl_role_pattern_consistency": "SRL role-pattern (in)consistency across mentions of the same predicate",
+    "discourse.logic_srl_argument_omission_rate": "SRL frames with fewer than two core arguments filled ('thin' predication rate)",
+    "discourse.logic_relation_extraction_triple_rate": "Closed-schema relation-extraction triple rate",
+    "discourse.logic_relation_extraction_proposition_overlap_rate": "Relation-extraction triples corroborated by the propositions dependency-parse proxy",
+    "discourse.logic_argument_relation_label_distribution": "Argument-mining relation-label distribution over connective-linked clause pairs",
+    "discourse.logic_argument_relation_connective_agreement": "Connective-polarity vs. argument-mining-model label agreement",
 }
 
 #: Reference date for :func:`dateutil.parser.parse` when a parsed string omits
@@ -1112,6 +1267,332 @@ def _temporal_findings(context: _PropContext, *, max_evidence: int) -> list[dict
             "so an unrelated number could occasionally be mis-read as a date"))]
 
 
+# ----------------------------------------------------------- semantic role labelling
+
+def _srl_findings(analysis: DocumentAnalysis, *, srl_model: str, srl_max_predicates: int,
+                  max_evidence: int) -> list[dict[str, Any]]:
+    """Real PropBank-style SRL, and two channels the spec asks for on top of it.
+
+    Independent of ``propositions``: this re-walks the shared spaCy parse for
+    its own clause-level predicates (see :func:`prop_lib.extract_srl_frames`)
+    rather than reusing ``context.props``, so it works whether or not
+    ``features.propositions`` is on and its own ``srl_max_predicates`` cap is
+    never distorted by ``proposition_cap``.
+    """
+
+    ids = list(FEATURE_METRICS["semantic_role_labeling"])
+    extraction = prop_lib.extract_srl_frames(analysis, srl_max_predicates, srl_model)
+    if not extraction.available:
+        return [unavailable(mid, _METRIC_NAMES[mid], extraction.reason, family=FAMILY) for mid in ids]
+    frames = extraction.frames
+    settings = _settings(srl_model=srl_model, srl_max_predicates=srl_max_predicates,
+                         candidates_seen=extraction.candidates_seen, truncated=extraction.truncated,
+                         sentences_scanned=extraction.sentences_scanned)
+
+    by_predicate: dict[str, list[prop_lib.SRLFrame]] = defaultdict(list)
+    for f in frames:
+        by_predicate[f.predicate_lemma].append(f)
+    eligible = {lemma: fs for lemma, fs in by_predicate.items() if len(fs) >= 2}
+    inconsistent = 0
+    consistency_evidence: list[dict[str, Any]] = []
+    for lemma, fs in eligible.items():
+        signatures = Counter(prop_lib.srl_core_roles(f.roles) for f in fs)
+        _majority_sig, majority_count = signatures.most_common(1)[0]
+        if majority_count < len(fs):
+            inconsistent += 1
+            if len(consistency_evidence) < max_evidence:
+                consistency_evidence.append({
+                    "predicate": lemma, "occurrences": len(fs),
+                    "signatures": [{"core_roles": sorted(sig), "count": count}
+                                  for sig, count in signatures.items()],
+                    "examples": [{"sentence_index": f.sentence_index, "text": f.text, "roles": dict(f.roles)}
+                                for f in fs[:4]],
+                })
+    out = [finding(
+        "discourse.logic_srl_role_pattern_consistency", _METRIC_NAMES["discourse.logic_srl_role_pattern_consistency"],
+        rate(inconsistent, len(eligible), 100.0) if eligible else None, "percent",
+        family=FAMILY, sample_size=len(eligible), min_sample=5, sample_size_sensitive=True,
+        distribution={"inconsistent_predicate_count": inconsistent, "predicate_groups_examined": len(eligible),
+                     "settings": settings},
+        evidence=consistency_evidence,
+        warning=(
+            f"candidate signal, not an error: 'inconsistent' means {srl_model!r}'s own generated "
+            "core-argument role signature (which ARG-0..ARG-4 slots it filled) differs across two or "
+            "more mentions of the same predicate lemma in this document. Active/passive alternation "
+            "(the same referent surfacing as ARG-0 in one mention and being omitted, or the sentence "
+            "eliding an argument, in another), a different sense of the same verb, or a real "
+            "inconsistency in what the text asserts can all produce this -- the finding cannot tell "
+            "them apart, only surface the disagreement. Every role is this model's own generated "
+            "reading, never a verified PropBank annotation" if eligible else
+            "no predicate lemma had two or more SRL-scored occurrences to compare within "
+            "srl_max_predicates; raise it to see repeats in a longer document"))]
+
+    thin_frames = [f for f in frames if len(prop_lib.srl_core_roles(f.roles)) < 2]
+    omission_evidence = [{"sentence_index": f.sentence_index, "text": f.text, "predicate": f.predicate_text,
+                          "roles": dict(f.roles)} for f in thin_frames[:max_evidence]]
+    out.append(finding(
+        "discourse.logic_srl_argument_omission_rate", _METRIC_NAMES["discourse.logic_srl_argument_omission_rate"],
+        rate(len(thin_frames), len(frames), 100.0) if frames else None, "percent",
+        family=FAMILY, sample_size=len(frames), min_sample=10, sample_size_sensitive=True,
+        distribution={"thin_frame_count": len(thin_frames), "frames_scored": len(frames), "settings": settings},
+        evidence=omission_evidence,
+        warning=(
+            "candidate signal, not an error: counts SRL frames the model filled with fewer than two "
+            "core arguments (ARG-0..ARG-4), a 'thin' predication. Many verbs are legitimately "
+            "intransitive, passive with an unstated agent, or elliptical in dialogue, so a high rate "
+            "is not itself a defect in the writing. No PropBank per-verb frame file is consulted, so "
+            f"this never claims a specific argument was 'required' and skipped -- only that "
+            f"{srl_model!r} filled fewer than two role slots for that predicate" if frames else
+            "no SRL frame was scored (no extractable predicate within srl_max_predicates)")))
+    return out
+
+
+# ------------------------------------------------- closed-schema relation extraction
+
+def _relation_extraction_findings(analysis: DocumentAnalysis, context: "_PropContext | None", *,
+                                  relation_extraction_model: str, relation_extraction_max_sentences: int,
+                                  max_evidence: int) -> list[dict[str, Any]]:
+    """A REBEL-backed cross-check, kept beside (never merged into)
+    ``propositions``' own dependency-parse triples -- see
+    :func:`prop_lib.extract_relations` for why REBEL is closed-schema relation
+    extraction, not open-domain OpenIE, and why that distinction matters here.
+    """
+
+    ids = list(FEATURE_METRICS["relation_extraction"])
+    extraction = prop_lib.extract_relations(analysis, relation_extraction_max_sentences, relation_extraction_model)
+    if not extraction.available:
+        return [unavailable(mid, _METRIC_NAMES[mid], extraction.reason, family=FAMILY) for mid in ids]
+
+    settings = _settings(relation_extraction_model=relation_extraction_model,
+                         relation_extraction_max_sentences=relation_extraction_max_sentences,
+                         sentences_scanned=extraction.sentences_scanned,
+                         sentences_scored=extraction.sentences_scored, truncated=extraction.truncated)
+    relations = extraction.relations
+    evidence = [{"sentence_index": r.sentence_index, "text": r.text, "head": r.head,
+                "relation_type": r.relation_type, "tail": r.tail} for r in relations[:max_evidence]]
+    out = [finding(
+        "discourse.logic_relation_extraction_triple_rate",
+        _METRIC_NAMES["discourse.logic_relation_extraction_triple_rate"],
+        rate(len(relations), extraction.sentences_scored, 100.0) if extraction.sentences_scored else None,
+        "triples per 100 sentences scored", family=FAMILY, sample_size=extraction.sentences_scored,
+        min_sample=10, sample_size_sensitive=True,
+        distribution={"triple_count": len(relations), "settings": settings}, evidence=evidence,
+        warning=(
+            f"{relation_extraction_model!r} is CLOSED-schema relation extraction (roughly 200 "
+            "Wikidata-style relation types such as 'capital of' or 'spouse'), not open-domain "
+            "arbitrary-predicate OpenIE the way Stanford OpenIE or AllenNLP's OpenIE predictor work "
+            "(neither is available here -- see module Deferred notes for the quoted evidence). This "
+            "is not simply a channel that stays quiet on fiction: hand-checked on real text, an "
+            "invented sentence stating nothing about where a character lives still generated a "
+            "plausible-sounding 'residence' triple the text never asserts, a schema-compatible "
+            "guess invented under the seq2seq format's own pressure to always emit something. So "
+            "this rate is never comparable to a 'should have relations' expectation in either "
+            "direction, and it is never combined with discourse.logic_entity_attribute_conflict_"
+            "candidates' own count. Every triple is this model's own generated reading, never a "
+            "verified fact"))]
+
+    props = context.props if (context is not None and not context.unavailable_reason) else []
+    if not relations:
+        out.append(unavailable(
+            "discourse.logic_relation_extraction_proposition_overlap_rate",
+            _METRIC_NAMES["discourse.logic_relation_extraction_proposition_overlap_rate"],
+            "no relation triple was extracted to cross-check", family=FAMILY))
+    elif not props:
+        out.append(unavailable(
+            "discourse.logic_relation_extraction_proposition_overlap_rate",
+            _METRIC_NAMES["discourse.logic_relation_extraction_proposition_overlap_rate"],
+            "needs features.propositions on, for a comparison pool of subject/object pairs", family=FAMILY))
+    else:
+        subject_object_pairs = {(p.subject_text.lower(), p.object_text.lower())
+                                for p in props if p.object_text}
+
+        def corroborated(head: str, tail: str) -> bool:
+            head_l, tail_l = head.lower(), tail.lower()
+            return any((head_l in s or s in head_l) and (tail_l in o or o in tail_l)
+                      for s, o in subject_object_pairs)
+
+        overlap_evidence = []
+        hits = 0
+        for r in relations:
+            is_hit = corroborated(r.head, r.tail)
+            hits += int(is_hit)
+            if len(overlap_evidence) < max_evidence:
+                overlap_evidence.append({"sentence_index": r.sentence_index, "head": r.head,
+                                         "relation_type": r.relation_type, "tail": r.tail,
+                                         "corroborated_by_propositions": is_hit})
+        out.append(finding(
+            "discourse.logic_relation_extraction_proposition_overlap_rate",
+            _METRIC_NAMES["discourse.logic_relation_extraction_proposition_overlap_rate"],
+            rate(hits, len(relations), 100.0), "percent", family=FAMILY, sample_size=len(relations),
+            min_sample=5, sample_size_sensitive=True,
+            distribution={"corroborated_count": hits, "triple_count": len(relations), "settings": settings},
+            evidence=overlap_evidence,
+            warning=(
+                "percent of this model's relation triples whose head and tail both loosely match "
+                "(case-insensitive substring, not identity) a subject/object pair "
+                "discourse.propositions' dependency-parse proxy also extracted in this document -- "
+                "two independently-built extractors agreeing is a corroboration signal, not proof of "
+                "either being correct; disagreeing is data too (different sentence coverage, "
+                "different schema), never treated as either channel being wrong")))
+    return out
+
+
+# --------------------------------------------------------------- argument mining
+
+_ARGMIN_MODEL_CACHE: dict[str, tuple[Any, str | None]] = {}
+
+
+def _reset_argmin_cache() -> None:
+    _ARGMIN_MODEL_CACHE.clear()
+
+
+on_reset(_reset_argmin_cache)
+
+
+def _load_argument_mining_pipeline(model_name: str) -> tuple[Any, str | None]:
+    if model_name in _ARGMIN_MODEL_CACHE:
+        return _ARGMIN_MODEL_CACHE[model_name]
+    module, reason = require("transformers")
+    if module is None:
+        _ARGMIN_MODEL_CACHE[model_name] = (None, reason)
+        return _ARGMIN_MODEL_CACHE[model_name]
+    try:
+        pipeline_obj = module.pipeline("text-classification", model=model_name, device=-1, top_k=None)
+        outcome: tuple[Any, str | None] = (pipeline_obj, None)
+    except Exception as exc:  # pragma: no cover - model download/runtime failure
+        outcome = (None, f"argument-mining model {model_name!r} unavailable ({type(exc).__name__}: {exc}); "
+                         f"pip install transformers torch")
+    _ARGMIN_MODEL_CACHE[model_name] = outcome
+    return outcome
+
+
+def _argument_candidate_pairs(analysis: DocumentAnalysis, min_words: int,
+                              max_pairs: int) -> list[tuple[str, int, str, str, str]]:
+    """``(polarity, sentence_index, premise_text, conclusion_text, marker)`` for
+    the same therefore/because/however-style connectives ``connective_relations``
+    scores, filtered the same way (``min_words`` content words on each side).
+
+    Deliberately its own scan rather than a refactor of :func:`_relation_scores`:
+    ``connective_relations``' surface candidate counts are pinned stable
+    (see the module docstring) across every group added since, and this
+    channel needs its own, independently-capped pool regardless of whether
+    ``connective_relations`` itself is even on.
+    """
+
+    sentences = analysis.sentences
+    pairs: list[tuple[str, int, str, str, str]] = []
+    for polarity, pattern in (("support", THEREFORE_PATTERN), ("support", BECAUSE_PATTERN),
+                             ("contrast", CONTRAST_PATTERN)):
+        for index, sentence in enumerate(sentences):
+            if len(pairs) >= max_pairs:
+                return pairs
+            match = pattern.search(sentence)
+            if not match:
+                continue
+            left_text = sentence[:match.start()]
+            right_text = sentence[match.end():]
+            left_words = textlib.words(left_text)
+            cross_sentence = not left_words
+            if cross_sentence:
+                if index == 0:
+                    continue
+                left_text = sentences[index - 1]
+                left_words = textlib.words(left_text)
+            right_words = textlib.words(right_text)
+            if len(_content_words(left_words)) < min_words or len(_content_words(right_words)) < min_words:
+                continue
+            pairs.append((polarity, index, left_text.strip(), right_text.strip(), match.group(0).lower()))
+    return pairs
+
+
+def _argument_mining_findings(analysis: DocumentAnalysis, *, argument_mining_model: str,
+                              argument_mining_max_pairs: int, connective_min_words: int,
+                              max_evidence: int) -> list[dict[str, Any]]:
+    """A real argument-relation classifier over this suite's own connective-linked
+    clause pairs -- claim/premise/support/attack from a model, not a proxy.
+
+    ``connective_chain_length`` (see ``connective_relations``) is unchanged and
+    kept under its own honest, narrower name: a marker-adjacency proxy for
+    argument structure built from nothing but sentence position. This group
+    is the real thing it stood in for, offered alongside it, never replacing it.
+    """
+
+    ids = list(FEATURE_METRICS["argument_mining"])
+    pairs = _argument_candidate_pairs(analysis, connective_min_words, argument_mining_max_pairs)
+    if not pairs:
+        warning = ("no therefore/because/however-style connective pair passed "
+                   "connective_min_words content words on both sides")
+        return [unavailable(mid, _METRIC_NAMES[mid], warning, family=FAMILY) for mid in ids]
+
+    pipeline_obj, reason = _load_argument_mining_pipeline(argument_mining_model)
+    if pipeline_obj is None:
+        return [unavailable(mid, _METRIC_NAMES[mid], reason, family=FAMILY) for mid in ids]
+
+    pairs_text = [(premise, conclusion) for _polarity, _index, premise, conclusion, _marker in pairs]
+    try:
+        labels = _nli_label_scores(pipeline_obj, pairs_text, 8)
+    except Exception as exc:  # pragma: no cover - runtime failure
+        warning = f"argument-mining scoring failed ({type(exc).__name__}: {exc})"
+        return [unavailable(mid, _METRIC_NAMES[mid], warning, family=FAMILY) for mid in ids]
+
+    label_counts = Counter(label for label, _scores in labels)
+    total = len(labels)
+    related = total - label_counts.get("no-relation", 0)
+    settings = _settings(argument_mining_model=argument_mining_model,
+                         argument_mining_max_pairs=argument_mining_max_pairs,
+                         connective_min_words=connective_min_words)
+    top_evidence = [{
+        "marker": marker, "connective_polarity": polarity, "argmin_label": label,
+        "scores": {k: round(v, 4) for k, v in scores.items()}, "premise": premise, "conclusion": conclusion,
+    } for (polarity, _index, premise, conclusion, marker), (label, scores)
+      in list(zip(pairs, labels))[:max_evidence]]
+
+    out = [finding(
+        "discourse.logic_argument_relation_label_distribution",
+        _METRIC_NAMES["discourse.logic_argument_relation_label_distribution"],
+        rate(related, total, 100.0),
+        "percent of connective-linked pairs the model labels as some argument relation (not No-Relation)",
+        family=FAMILY, sample_size=total, min_sample=5, sample_size_sensitive=True,
+        distribution={"counts": dict(label_counts),
+                     "percentages": {label: rate(count, total, 100.0) for label, count in label_counts.items()},
+                     "model": argument_mining_model, "settings": settings},
+        evidence=top_evidence,
+        warning=(
+            f"{argument_mining_model!r} is a real argument-relation classifier (RoBERTa-large, "
+            "trained on the US2016 and QT30 debate corpora for Argument Relation Identification) "
+            "applied here to this suite's own therefore/because/however-adjacent clause pairs, "
+            "labelling each pair No-Relation / Inference (support) / Conflict (attack) / Rephrase -- "
+            "genuine claim/premise support-attack labelling, not the connective_chain_length proxy "
+            "(kept, unchanged, as its own metric; see module Deferred notes). A model label is a "
+            "judgement about these two clauses in isolation, never a verified logical relationship, "
+            "and which clause is 'premise' vs. 'conclusion' is this suite's own structural guess from "
+            "which side of the connective it sits on, not confirmed by the model or anything else"))]
+
+    confusion: dict[str, Counter] = defaultdict(Counter)
+    expected_match = 0
+    for (polarity, *_rest), (label, _scores) in zip(pairs, labels):
+        confusion[polarity][label] += 1
+        if (polarity == "support" and label == "inference") or (polarity == "contrast" and label == "conflict"):
+            expected_match += 1
+    out.append(finding(
+        "discourse.logic_argument_relation_connective_agreement",
+        _METRIC_NAMES["discourse.logic_argument_relation_connective_agreement"],
+        rate(expected_match, total, 100.0),
+        "percent where the connective's implied polarity (support: therefore/because; "
+        "contrast: however/but) matches the model's label (Inference/Conflict respectively)",
+        family=FAMILY, sample_size=total, min_sample=5, sample_size_sensitive=True,
+        distribution={"confusion": {polarity: dict(counts) for polarity, counts in confusion.items()},
+                     "settings": settings},
+        evidence=top_evidence,
+        warning=(
+            "cross-tabulates this suite's own connective-polarity guess (rows: 'support' for "
+            "therefore/because, 'contrast' for however/but) against the argument-mining model's "
+            "label (columns); neither is ground truth, so a disagreement means the two signals "
+            "disagree, not that either is wrong -- 'however' often separates two independent claims "
+            "without one attacking the other, which the model is free to call No-Relation or Rephrase")))
+    return out
+
+
 # ----------------------------------------------------------- modal/hedge position
 
 _STANCE_TABLE = _by_length({**HEDGES, **MODALS})
@@ -1180,6 +1661,14 @@ FEATURE_METRICS: dict[str, tuple[str, ...]] = {
     "lexical_opposition": (
         "discourse.logic_wordnet_antonym_candidates", "discourse.logic_wordnet_hypernym_downgrade_rate"),
     "temporal_ordering": ("discourse.logic_temporal_order_candidates",),
+    "semantic_role_labeling": (
+        "discourse.logic_srl_role_pattern_consistency", "discourse.logic_srl_argument_omission_rate"),
+    "relation_extraction": (
+        "discourse.logic_relation_extraction_triple_rate",
+        "discourse.logic_relation_extraction_proposition_overlap_rate"),
+    "argument_mining": (
+        "discourse.logic_argument_relation_label_distribution",
+        "discourse.logic_argument_relation_connective_agreement"),
 }
 
 #: Feature groups that were part of the module's original, dependency-free
@@ -1224,6 +1713,13 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     nli_model = str(option(config, "nli_model", "cross-encoder/nli-deberta-v3-small"))
     nli_max_pairs = int(option(config, "nli_max_pairs", 60))
     nli_batch_size = int(option(config, "nli_batch_size", 16))
+    srl_model = str(option(config, "srl_model", "cu-kairos/propbank_srl_seq2seq_t5_small"))
+    srl_max_predicates = int(option(config, "srl_max_predicates", 40))
+    relation_extraction_model = str(option(config, "relation_extraction_model", "Babelscape/rebel-large"))
+    relation_extraction_max_sentences = int(option(config, "relation_extraction_max_sentences", 40))
+    argument_mining_model = str(option(config, "argument_mining_model",
+                                       "raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L"))
+    argument_mining_max_pairs = int(option(config, "argument_mining_max_pairs", 40))
 
     def on(name: str) -> bool:
         fallback = name in _ON_BY_DEFAULT
@@ -1261,4 +1757,16 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
               if on("lexical_opposition") else _disabled("lexical_opposition"))
     out.extend(_temporal_findings(context, max_evidence=max_evidence)
               if on("temporal_ordering") else _disabled("temporal_ordering"))
+    out.extend(_srl_findings(analysis, srl_model=srl_model, srl_max_predicates=srl_max_predicates,
+                             max_evidence=max_evidence)
+              if on("semantic_role_labeling") else _disabled("semantic_role_labeling"))
+    out.extend(_relation_extraction_findings(
+        analysis, context, relation_extraction_model=relation_extraction_model,
+        relation_extraction_max_sentences=relation_extraction_max_sentences, max_evidence=max_evidence)
+        if on("relation_extraction") else _disabled("relation_extraction"))
+    out.extend(_argument_mining_findings(
+        analysis, argument_mining_model=argument_mining_model,
+        argument_mining_max_pairs=argument_mining_max_pairs, connective_min_words=connective_min_words,
+        max_evidence=max_evidence)
+        if on("argument_mining") else _disabled("argument_mining"))
     return out
