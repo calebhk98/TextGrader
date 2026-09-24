@@ -986,17 +986,29 @@ def _finding_politeness(events: list[dict]) -> list[dict]:
                  for name, count in per_strategy.most_common(EVIDENCE_LIMIT)])]
 
 
+def _pearson_interval(r: float, n: int) -> list[float] | None:
+    """95% interval for a Pearson r by Fisher's z, so a coupling measured over
+    a handful of reply pairs carries its own width instead of looking exact."""
+
+    if n <= 3 or abs(r) >= 1:
+        return None
+    z = math.atanh(r)
+    half = 1.959964 / math.sqrt(n - 3)
+    return [math.tanh(z - half), math.tanh(z + half)]
+
+
 def _finding_sentiment(events: list[dict], reply_pairs: list[tuple[dict, dict]],
-                       state: Mapping[str, Any], min_turns: int, min_coverage: float) -> list[dict]:
+                       state: Mapping[str, Any], min_turns: int, min_coverage: float,
+                       min_pairs: int = 30) -> list[dict]:
     sentiment_id = PREFIX + "sentiment_coupling"
     emotion_id = PREFIX + "emotion_coupling"
     spread_id = PREFIX + "speaker_sentiment_spread"
     if not state["sufficient"]:
         reason = _insufficient_reason(state, min_turns, min_coverage)
         return [finding(sentiment_id, "VADER sentiment coupling", None, "pearson r",
-                        family=FAMILY, sample_size=0, min_sample=5, warning=reason),
+                        family=FAMILY, sample_size=0, min_sample=min_pairs, warning=reason),
                 finding(emotion_id, "NRC emotion coupling", None, "pearson r", family=FAMILY,
-                        sample_size=0, min_sample=5, warning=reason),
+                        sample_size=0, min_sample=min_pairs, warning=reason),
                 finding(spread_id, "Spread of per-speaker mean sentiment", None,
                         "compound score", family=FAMILY, sample_size=0, min_sample=2,
                         warning=reason)]
@@ -1010,15 +1022,20 @@ def _finding_sentiment(events: list[dict], reply_pairs: list[tuple[dict, dict]],
                 reason: str | None) -> dict[str, Any]:
         if values is None:
             return finding(metric_id, name, None, "pearson r", family=FAMILY, sample_size=0,
-                          min_sample=5, warning=reason)
+                          min_sample=min_pairs, warning=reason)
         by_id = {id(event): value for event, value in zip(named_events, values)}
         xs = [by_id[id(prev)] for prev, nxt in reply_pairs
              if id(prev) in by_id and id(nxt) in by_id]
         ys = [by_id[id(nxt)] for prev, nxt in reply_pairs
              if id(prev) in by_id and id(nxt) in by_id]
         r = _pearson(xs, ys)
+        # A correlation over five pairs has a 95% interval about +-0.9 wide:
+        # below min_pairs grade.py reports insufficient_data instead.
         return finding(metric_id, name, r, "pearson r", family=FAMILY, sample_size=len(xs),
-                      min_sample=5, distribution={"n_pairs": len(xs)},
+                      min_sample=min_pairs,
+                      distribution={"n_pairs": len(xs), "min_pairs": min_pairs,
+                                    "ci95": _pearson_interval(r, len(xs)) if r is not None
+                                    else None},
                       warning=None if r is not None else
                       "not enough cross-speaker reply pairs with a usable sentiment score")
 
@@ -1338,7 +1355,8 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     if features.get("politeness", True):
         out += _finding_politeness(events)
     if features.get("sentiment_coupling", True):
-        out += _finding_sentiment(events, reply_pairs, state, min_turns, min_coverage)
+        out += _finding_sentiment(events, reply_pairs, state, min_turns, min_coverage,
+                                  int(option(config, "min_coupling_pairs", 30)))
     if features.get("speaker_separability", True):
         out += _finding_separability(state, min_turns, min_coverage, separability_max_turns, seed)
     if features.get("graph", True):

@@ -856,6 +856,7 @@
       "min_coordination_pairs": 5,
       "min_entrainment_pairs": 10,
       "min_graph_edges": 3,
+      "min_coupling_pairs": 30,
       "rare_word_zipf_threshold": 3.0,
       "shuffle_seed": 0,
       "separability_max_turns": 400,

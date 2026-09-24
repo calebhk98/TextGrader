@@ -563,3 +563,15 @@ def test_scene_drift_reports_insufficient_with_too_few_windows(sample_text):
     item = findings[PREFIX + "scene_style_drift"]
     assert item["value"] is None
     assert "window" in item["warning"]
+
+
+def test_a_coupling_correlation_needs_enough_pairs_and_carries_its_interval():
+    # r over five pairs has a 95% interval about +-0.9 wide, so the default
+    # minimum is 30 pairs and the interval travels with the value.
+    assert REGISTRY["conversation_suite"].defaults["min_coupling_pairs"] == 30
+    low, high = cs._pearson_interval(0.5, 5)
+    assert low < -0.4 and high > 0.9
+    low, high = cs._pearson_interval(0.5, 103)
+    assert low == pytest.approx(0.3392, abs=1e-3)
+    assert high == pytest.approx(0.6323, abs=1e-3)
+    assert cs._pearson_interval(1.0, 50) is None
