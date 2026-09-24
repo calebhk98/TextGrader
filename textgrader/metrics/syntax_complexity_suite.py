@@ -106,9 +106,16 @@ Everything is switched on or off independently through ``features``:
     builds a POS-bigram/dependency-bigram table, it is called once per book
     while *building* a corpus profile, and :func:`measure` only ever reads
     that pooled table back through ``profile`` -- there is no code path that
-    fits a model from the current document. Without a corpus profile built
-    with this suite enabled, every finding in this feature reports
-    ``unavailable`` naming that requirement, exactly like
+    fits a model from the current document. This suite's ``cost`` is
+    ``"parse"``, so :func:`textgrader.corpus._metric_names` drops it from
+    corpus profiling unless the profile is built with ``--parse-metrics``
+    -- enabling ``syntax_complexity_suite`` in ``metrics`` is not enough on
+    its own, the same two-part requirement ``coherence_suite``'s
+    ``_requires_transition_corpus_delta`` note documents for its own
+    ``profile_vector`` hook (that one also needs ``--model-metrics``; this
+    one does not, since nothing here needs ``sentence_transformers``).
+    Without a profile built with BOTH flags, every finding in this feature
+    reports ``unavailable`` naming that requirement, exactly like
     ``coherence_suite``'s ``discourse.coherence_entity_grid_transition_corpus_delta``
     does with no corpus at all. Constituency production-rule cross-entropy
     (the spec's fourth surprisal item) is deferred: wiring it in would mean
@@ -262,6 +269,15 @@ def _collect_clause_stats(analysis: DocumentAnalysis) -> dict[str, Any]:
     verb_phrases_per_tunit: list[float] = []
     sentence_words: list[float] = []
     tunits_per_sentence: list[float] = []
+    # Raw per-sentence counts (as opposed to the per-sentence RATIOS above),
+    # kept so the L2SCA findings below can pool them (sum of numerators /
+    # sum of denominators over the whole sampled text) rather than averaging
+    # or medianing the per-sentence ratios -- see _pooled()'s docstring for
+    # why those are not the same quantity.
+    clause_counts: list[float] = []
+    dependent_counts: list[float] = []
+    coordinate_counts: list[float] = []
+    complex_nominal_counts: list[float] = []
     finite_total = 0
     nonfinite_total = 0
     sentence_count = 0
@@ -310,6 +326,10 @@ def _collect_clause_stats(analysis: DocumentAnalysis) -> dict[str, Any]:
             # this pass adds), so this ratio is identical to
             # clauses_per_tunit above under this approximation.
             verb_phrases_per_tunit.append(n_predicate / n_tunit_eff)
+            clause_counts.append(float(n_clause_eff))
+            dependent_counts.append(float(n_dependent))
+            coordinate_counts.append(float(coordinate_phrases))
+            complex_nominal_counts.append(float(n_complex_nominal))
 
     return {
         "sentence_count": sentence_count,
@@ -325,6 +345,10 @@ def _collect_clause_stats(analysis: DocumentAnalysis) -> dict[str, Any]:
         "complex_nominal_per_clause": complex_nominal_per_clause,
         "complex_nominal_per_tunit": complex_nominal_per_tunit,
         "verb_phrases_per_tunit": verb_phrases_per_tunit,
+        "clause_counts": clause_counts,
+        "dependent_counts": dependent_counts,
+        "coordinate_counts": coordinate_counts,
+        "complex_nominal_counts": complex_nominal_counts,
         "finite_total": finite_total,
         "nonfinite_total": nonfinite_total,
     }
@@ -358,6 +382,55 @@ _L2SCA_WARNING = ("approximation of L2SCA, computed from spaCy dependency labels
                   "module docstring's 'tunit_clause' section")
 
 
+def _join_warnings(*parts: str | None) -> str | None:
+    joined = "; ".join(part for part in parts if part)
+    return joined or None
+
+
+def _pooled(metric_id: str, numerator_total: float, denominator_total: float,
+           per_sentence_values: Sequence[float], unit: str, *,
+           cross_ref: str | None = None, approximation: bool = True) -> dict[str, Any]:
+    """A single L2SCA-style ratio, headlined as L2SCA and TAASSC actually
+    define it: the POOLED, text-level ratio of totals (sum of numerators /
+    sum of denominators over every sentence/T-unit/clause sampled), not the
+    median or mean of each sentence's own small ratio.
+
+    Those two are genuinely different quantities whenever sentences differ
+    in size (a ratio of sums is not the same as a mean of ratios -- the
+    same reason a batting average is computed hits/at-bats, not the mean of
+    each game's own average). On real books this matters: complex-nominal
+    and coordinate-phrase counts per clause are small integers on most
+    sentences, so the MEDIAN or MEAN of the per-sentence ratio collapses
+    toward the value the *majority* of (short, simple) sentences take,
+    while the pooled ratio reflects the whole sampled text and keeps the
+    resolution a corpus percentile needs. The per-sentence shape is not
+    thrown away -- it is still reported, under
+    ``distribution["per_sentence_shape"]`` -- but it no longer headlines.
+
+    ``sample_size`` is the denominator total (the number of sentences,
+    T-units or clauses actually pooled over), per the same "how much did
+    this rate rest on" convention every other rate metric in this codebase
+    already uses.
+    """
+
+    pooled_value = numerator_total / denominator_total if denominator_total else None
+    per_sentence_shape = summarize(per_sentence_values) if per_sentence_values else {"count": 0}
+    distribution: dict[str, Any] = {
+        "aggregation": "pooled",
+        "numerator_total": numerator_total,
+        "denominator_total": denominator_total,
+        "per_sentence_shape": per_sentence_shape,
+    }
+    if cross_ref:
+        distribution["overlaps_existing_metric_id"] = cross_ref
+    warning = None if denominator_total else "no units to pool this ratio over"
+    if approximation:
+        warning = _join_warnings(warning, _L2SCA_WARNING)
+    return finding(metric_id, _TUNIT_IDS[metric_id], pooled_value, unit, family=FAMILY,
+                   sample_size=int(denominator_total), min_sample=MIN_SAMPLE,
+                   distribution=distribution, warning=warning)
+
+
 def _tunit_clause(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[str, Any]]:
     stats = analysis.memo("syntax_complexity_clause_stats", lambda: _collect_clause_stats(analysis))
     sentence_count = stats["sentence_count"]
@@ -366,43 +439,51 @@ def _tunit_clause(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list
         return [unavailable(metric_id, name, no_data, family=FAMILY)
                 for metric_id, name in _TUNIT_IDS.items()]
 
-    out: list[dict[str, Any]] = []
+    total_words = sum(stats["sentence_words"])
+    total_tunit = sum(stats["tunits_per_sentence"])
+    total_clause = sum(stats["clause_counts"])
+    total_dependent = sum(stats["dependent_counts"])
+    total_coordinate = sum(stats["coordinate_counts"])
+    total_complex_nominal = sum(stats["complex_nominal_counts"])
+    total_predicate = float(stats["finite_total"] + stats["nonfinite_total"])
 
-    def _shape(metric_id: str, values: Sequence[float], unit: str, cross_ref: str | None = None,
-              approximation: bool = True) -> None:
-        found = shape(metric_id, _TUNIT_IDS[metric_id], values, unit, family=FAMILY,
-                     min_sample=MIN_SAMPLE)[0]
-        distribution = dict(found["distribution"] or {})
-        if cross_ref:
-            distribution["overlaps_existing_metric_id"] = cross_ref
-        found["distribution"] = distribution
-        if approximation:
-            found["warning"] = _L2SCA_WARNING
-        out.append(found)
-
-    _shape("syntax.complexity_l2sca_mean_sentence_length", stats["sentence_words"], "words",
-          cross_ref="style.sentence_words_p50 (canonical word tokenizer; this uses non-punct "
-                    "spaCy tokens, so small differences from that metric are expected)")
-    _shape("syntax.complexity_l2sca_tunits_per_sentence", stats["tunits_per_sentence"], "T-units")
-    _shape("syntax.complexity_l2sca_mean_tunit_length", stats["tunit_length"], "words")
-    _shape("syntax.complexity_l2sca_clauses_per_tunit", stats["clauses_per_tunit"], "ratio")
-    _shape("syntax.complexity_l2sca_mean_clause_length", stats["clause_length"], "words")
-    _shape("syntax.complexity_l2sca_dependent_clauses_per_clause", stats["dependent_per_clause"],
-          "ratio", cross_ref="syntax.subordination_rate (rate per 100 sentences; this is a "
-                             "per-sentence ratio of dependent clauses to all clauses instead)")
-    _shape("syntax.complexity_l2sca_dependent_clauses_per_tunit", stats["dependent_per_tunit"],
-          "ratio")
-    _shape("syntax.complexity_l2sca_coordinate_phrases_per_clause", stats["coordinate_per_clause"],
-          "ratio", cross_ref="syntax.coordination_rate (rate per 100 sentences; this excludes "
-                             "clause-level coordination, which is already reflected in the "
-                             "T-unit count above, and covers only phrase-level conj)")
-    _shape("syntax.complexity_l2sca_coordinate_phrases_per_tunit", stats["coordinate_per_tunit"],
-          "ratio")
-    _shape("syntax.complexity_l2sca_complex_nominals_per_clause", stats["complex_nominal_per_clause"],
-          "ratio")
-    _shape("syntax.complexity_l2sca_complex_nominals_per_tunit", stats["complex_nominal_per_tunit"],
-          "ratio")
-    _shape("syntax.complexity_l2sca_verb_phrases_per_tunit", stats["verb_phrases_per_tunit"], "ratio")
+    out: list[dict[str, Any]] = [
+        _pooled("syntax.complexity_l2sca_mean_sentence_length", total_words, sentence_count,
+               stats["sentence_words"], "words",
+               cross_ref="style.sentence_words_p50 draws its median from this same per-sentence "
+                        "word-count population; this headlines the pooled MEAN (total words / "
+                        "total sentences) instead, matching L2SCA's MLS definition -- the two "
+                        "differ in aggregation (mean vs. median), not in what they count"),
+        _pooled("syntax.complexity_l2sca_tunits_per_sentence", total_tunit, sentence_count,
+               stats["tunits_per_sentence"], "T-units"),
+        _pooled("syntax.complexity_l2sca_mean_tunit_length", total_words, total_tunit,
+               stats["tunit_length"], "words"),
+        _pooled("syntax.complexity_l2sca_clauses_per_tunit", total_clause, total_tunit,
+               stats["clauses_per_tunit"], "ratio"),
+        _pooled("syntax.complexity_l2sca_mean_clause_length", total_words, total_clause,
+               stats["clause_length"], "words"),
+        _pooled("syntax.complexity_l2sca_dependent_clauses_per_clause", total_dependent,
+               total_clause, stats["dependent_per_clause"], "ratio",
+               cross_ref="syntax.subordination_rate (a rate per 100 sentences, also a "
+                        "document-level pooled quantity; this pools dependent clauses over "
+                        "clauses instead of over sentences)"),
+        _pooled("syntax.complexity_l2sca_dependent_clauses_per_tunit", total_dependent,
+               total_tunit, stats["dependent_per_tunit"], "ratio"),
+        _pooled("syntax.complexity_l2sca_coordinate_phrases_per_clause", total_coordinate,
+               total_clause, stats["coordinate_per_clause"], "ratio",
+               cross_ref="syntax.coordination_rate (a rate per 100 sentences, also a "
+                        "document-level pooled quantity; this excludes clause-level "
+                        "coordination, already reflected in the T-unit count above, and pools "
+                        "over clauses instead of over sentences)"),
+        _pooled("syntax.complexity_l2sca_coordinate_phrases_per_tunit", total_coordinate,
+               total_tunit, stats["coordinate_per_tunit"], "ratio"),
+        _pooled("syntax.complexity_l2sca_complex_nominals_per_clause", total_complex_nominal,
+               total_clause, stats["complex_nominal_per_clause"], "ratio"),
+        _pooled("syntax.complexity_l2sca_complex_nominals_per_tunit", total_complex_nominal,
+               total_tunit, stats["complex_nominal_per_tunit"], "ratio"),
+        _pooled("syntax.complexity_l2sca_verb_phrases_per_tunit", total_predicate, total_tunit,
+               stats["verb_phrases_per_tunit"], "ratio"),
+    ]
 
     finite, nonfinite = stats["finite_total"], stats["nonfinite_total"]
     total_predicates = finite + nonfinite
@@ -417,10 +498,10 @@ def _tunit_clause(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list
     out.append(finding(
         "syntax.complexity_finite_nonfinite_clause_ratio", _TUNIT_IDS["syntax.complexity_finite_nonfinite_clause_ratio"],
         ratio, "ratio", family=FAMILY, sample_size=total_predicates, min_sample=MIN_SAMPLE,
-        distribution={"finite_count": finite, "nonfinite_count": nonfinite,
+        distribution={"aggregation": "pooled", "finite_count": finite, "nonfinite_count": nonfinite,
                      "overlaps_existing_metric_id": "syntax.finite_clauses_per_sentence "
-                     "(counts only finite clause heads per sentence; this ratio adds the "
-                     "nonfinite side and compares the two directly)"},
+                     "(a per-sentence median count via shape(); this ratio pools the finite and "
+                     "nonfinite totals across the whole document and compares them directly)"},
         warning=ratio_warning))
     return out
 
@@ -1093,8 +1174,11 @@ _SURPRISAL_IDS = {
     "syntax.complexity_sentence_syntactic_surprisal": "Per-sentence syntactic surprisal",
 }
 _NO_CORPUS_MODEL = ("no corpus-trained POS/dependency n-gram model available; build a profile "
-                    "with syntax_complexity_suite enabled (features.syntactic_surprisal on, the "
-                    "default) to populate one -- see profile_vector in this module")
+                    "with --parse-metrics AND syntax_complexity_suite enabled "
+                    "(features.syntactic_surprisal on, the default) to populate one -- this "
+                    "suite's cost is 'parse', so textgrader.corpus._metric_names drops it from "
+                    "profiling unless --parse-metrics is passed, even with the suite enabled; "
+                    "see profile_vector in this module")
 
 
 def _syntactic_surprisal(analysis: DocumentAnalysis, config: Mapping[str, Any],

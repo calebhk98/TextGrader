@@ -214,6 +214,77 @@ def test_finite_nonfinite_ratio_is_undefined_not_infinite_with_no_nonfinite_verb
     assert item["value"] != float("inf")
 
 
+@requires_spacy
+def test_l2sca_headline_is_pooled_not_the_per_sentence_median():
+    """Most sentences here have zero dependent clauses; a few (repeated
+    heavily) have several. The median of per-sentence ratios collapses to
+    0, exactly the resolution problem the coordinator flagged from the
+    real-book table; the pooled (sum of numerators / sum of denominators)
+    ratio must not collapse the same way."""
+
+    text = " ".join(SIMPLE_SENTENCES * 6) + " " + " ".join(EMBEDDED_SENTENCES * 3)
+    findings = _findings(text)
+    item = findings["syntax.complexity_l2sca_dependent_clauses_per_clause"]
+    pooled = item["value"]
+    median = item["distribution"]["per_sentence_shape"]["median"]
+    assert item["distribution"]["aggregation"] == "pooled"
+    assert median == pytest.approx(0.0, abs=1e-9)
+    assert pooled > 0.05, "the pooled ratio must keep resolution the median throws away"
+    assert pooled != pytest.approx(median)
+
+
+@requires_spacy
+def test_l2sca_pooled_headline_equals_hand_computed_sum_over_sum():
+    text = _repeat_sentences(SIMPLE_SENTENCES + EMBEDDED_SENTENCES, 3)
+    for metric_id in ("syntax.complexity_l2sca_complex_nominals_per_clause",
+                      "syntax.complexity_l2sca_clauses_per_tunit",
+                      "syntax.complexity_l2sca_mean_sentence_length"):
+        item = _findings(text)[metric_id]
+        numerator = item["distribution"]["numerator_total"]
+        denominator = item["distribution"]["denominator_total"]
+        assert denominator > 0
+        assert item["value"] == pytest.approx(numerator / denominator), metric_id
+        assert item["sample_size"] == int(denominator), metric_id
+
+
+@requires_spacy
+def test_syntax_complexity_profile_needs_parse_metrics_flag():
+    """The suite's cost is 'parse', so textgrader.corpus._metric_names drops
+    it from profiling -- and profile_vector never runs -- unless the build
+    passes --parse-metrics, even with the suite enabled in metrics config.
+    This is what makes the config note's "--parse-metrics AND the suite
+    enabled" wording true rather than aspirational."""
+
+    import tempfile
+    from pathlib import Path
+    from textgrader.corpus import build_profile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / "book.txt"
+        source.write_text(_repeat_sentences(SIMPLE_SENTENCES, 10), encoding="utf-8")
+
+        without_flag = build_profile(
+            [source], metrics={"syntax_complexity_suite": {"enabled": True}})
+        assert "syntax_complexity_suite" not in without_flag["feature_profiles"]
+
+        with_flag = build_profile(
+            [source], include_parse_metrics=True,
+            metrics={"syntax_complexity_suite": {"enabled": True}})
+        assert "syntax_complexity_suite" in with_flag["feature_profiles"]
+        rows = with_flag["feature_profiles"]["syntax_complexity_suite"]
+        assert rows and rows[0]
+
+
+@requires_spacy
+def test_syntactic_surprisal_unavailable_warning_names_parse_metrics_flag():
+    findings = _findings("The cat sat on the mat quietly today.",
+                         config=_all_off_config(syntactic_surprisal=True))
+    for metric_id in ("syntax.complexity_pos_bigram_cross_entropy",
+                      "syntax.complexity_dependency_label_bigram_cross_entropy",
+                      "syntax.complexity_sentence_syntactic_surprisal"):
+        assert "--parse-metrics" in findings[metric_id]["warning"]
+
+
 # ------------------------------------------------------ synthetic separation
 
 def _repeat_sentences(sentences: list[str], times: int) -> str:
@@ -319,9 +390,15 @@ def test_sentence_length_alone_does_not_explain_the_complexity_signal():
 
 
 @requires_spacy
-def test_shape_metrics_are_not_dominated_by_one_huge_sentence():
-    """Rule from the segmentation-bug context: one oversized sentence must
-    not drag a shape()'s median headline value, only its upper quantiles."""
+def test_pooled_headline_and_per_sentence_median_serve_different_purposes():
+    """The MLS headline is now the pooled, L2SCA-style mean (total words /
+    total sentences), which -- correctly -- IS pulled up by one huge
+    sentence, the same way a real long run-on genuinely raises a whole
+    text's average sentence length. That pooled sensitivity is the point of
+    fixing the aggregation; robustness to the outlier still lives in
+    ``distribution["per_sentence_shape"]``, which is not thrown away, so a
+    reader who wants the median-based view the segmentation-bug context
+    called for still has it available beside the pooled headline."""
 
     short_sentences = ["The cat sat quietly by the fire tonight."] * 25
     huge_sentence = ("The cat sat, and the dog watched, and the bird sang, and the mouse hid, "
@@ -334,20 +411,28 @@ def test_shape_metrics_are_not_dominated_by_one_huge_sentence():
 
     findings = _findings(text)
     sentence_length = findings["syntax.complexity_l2sca_mean_sentence_length"]
-    median = sentence_length["value"]
-    mean = sentence_length["distribution"]["mean"]
-    maximum = sentence_length["distribution"]["max"]
-    assert median < 10, "median should reflect the 25 short sentences, not the outlier"
-    assert maximum > median * 5, "the outlier sentence should still be visible in the distribution's max"
-    assert mean > median, "the mean is the one dragged upward by the single huge sentence"
+    pooled = sentence_length["value"]
+    shape_summary = sentence_length["distribution"]["per_sentence_shape"]
+    assert sentence_length["distribution"]["aggregation"] == "pooled"
+    assert shape_summary["median"] < 10, \
+        "the per-sentence median should still reflect the 25 short sentences"
+    assert pooled > shape_summary["median"], \
+        "the pooled mean is correctly pulled up by the one huge sentence -- that is the point"
+    assert pooled == pytest.approx(shape_summary["mean"]), \
+        "MLS's denominator is sentence count, so its pooled ratio equals the per-sentence mean"
+    assert shape_summary["max"] > shape_summary["median"] * 5, \
+        "the outlier sentence is still visible in the per-sentence shape's max"
 
     # The T-unit split is the other half of the story: this suite's own
     # T-unit approximation correctly reads the huge run-on as many short
-    # coordinated T-units rather than one huge one, which is why
-    # mean_tunit_length stays low even for the outlier sentence while
-    # tunits_per_sentence spikes for it instead.
+    # coordinated T-units rather than one huge one, which is why the pooled
+    # mean T-unit length stays low for the outlier while T-units per
+    # sentence spikes for it instead.
+    tunit_length = findings["syntax.complexity_l2sca_mean_tunit_length"]
     tunits_per_sentence = findings["syntax.complexity_l2sca_tunits_per_sentence"]
-    assert tunits_per_sentence["distribution"]["max"] > tunits_per_sentence["value"] * 3
+    assert tunit_length["value"] < 12
+    assert (tunits_per_sentence["distribution"]["per_sentence_shape"]["max"]
+           > tunits_per_sentence["value"] * 3)
 
 
 # ------------------------------------------------------------ syntactic surprisal
