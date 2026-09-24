@@ -142,6 +142,14 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # real PyDelta project (github.com/cophi-wue/pydelta) could not be
     # installed here either.
     "pystylometry": ("pystylometry", "pip install pystylometry"),
+    # A tiny, independent character-bigram gibberish classifier for
+    # randomness_suite's optional "gibberish_detector_package" feature (off by
+    # default; see the module docstring's gating rule). Trained fresh on each
+    # document's own held-out split, exactly like this suite's from-scratch
+    # n-gram channels -- never on the package's own bundled reference file --
+    # so it degrades to "unavailable" on an install that lacks it rather than
+    # to an import error.
+    "gibberish_detector": ("gibberish_detector", "pip install gibberish-detector"),
 }
 
 _lock = threading.Lock()

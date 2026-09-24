@@ -220,7 +220,10 @@ def test_degenerate_documents_never_crash(text):
     findings = _measure(text, features={**rs.DEFAULT_FEATURES, "pos_dependency": True,
                                         "kenlm_language_model": True,
                                         "neural_language_model": True,
-                                        "textdescriptives_cross_check": True})
+                                        "textdescriptives_cross_check": True,
+                                        "gibberish_detector_package": True,
+                                        "ncd_against_corpus": True},
+                        ncd_corpus_dirs=["/nonexistent-for-degenerate-document-test"])
     assert findings
     for item in findings.values():
         assert isinstance(item["metric_id"], str) and item["metric_id"].startswith(rs.ID)
@@ -500,6 +503,129 @@ def test_letter_bigram_divergence_is_off_by_a_dedicated_toggle():
     assert f"{rs.ID}letter_frequency_divergence" in without_it
 
 
+# ------------------------------------------------- gibberish-detector package
+
+def test_gibberish_detector_package_is_off_by_default():
+    assert rs.DEFAULT_FEATURES["gibberish_detector_package"] is False
+    findings = _measure(REAL_PROSE)
+    assert f"{rs.ID}gibberish_detector_score" not in findings
+
+
+def test_gibberish_detector_package_trains_nothing_under_default_config(monkeypatch):
+    """The hard requirement: measuring with MetricSpec.defaults must never
+    even ask optional.require for gibberish_detector, let alone train a
+    model - so corpus profiling (which uses exactly these defaults) cannot
+    spend time training one no matter what is installed."""
+
+    requested: list[str] = []
+    real_require = optional.require
+
+    def _tracking_require(name):
+        requested.append(name)
+        return real_require(name)
+
+    monkeypatch.setattr(rs, "require", _tracking_require)
+    _measure(REAL_PROSE)  # rs.DEFAULTS: gibberish_detector_package is False
+    assert "gibberish_detector" not in requested
+
+
+def test_gibberish_detector_package_degrades_visibly_without_the_package(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "gibberish_detector")
+    optional.reset_cache()
+    try:
+        findings = _measure(REAL_PROSE,
+                            features={**rs.DEFAULT_FEATURES, "gibberish_detector_package": True})
+        item = findings[f"{rs.ID}gibberish_detector_score"]
+        assert item["value"] is None
+        assert "gibberish" in item["warning"] or "pip install" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+_HAVE_GIBBERISH_DETECTOR = optional.have("gibberish_detector")
+
+
+@pytest.mark.skipif(not _HAVE_GIBBERISH_DETECTOR, reason="gibberish-detector not installed")
+def test_gibberish_detector_package_scores_real_text_when_enabled():
+    findings = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "gibberish_detector_package": True})
+    item = findings[f"{rs.ID}gibberish_detector_score"]
+    if item["value"] is None:
+        pytest.skip(f"unavailable in this environment: {item['warning']}")
+    assert item["value"] >= 0.0
+    assert item["distribution"]["library"] == "gibberish-detector"
+    assert item["sample_size_sensitive"] is True
+
+
+@pytest.fixture(scope="module")
+def gibberish_detector_findings() -> dict[str, dict[str, dict]]:
+    if not _HAVE_GIBBERISH_DETECTOR:
+        pytest.skip("gibberish-detector not installed")
+    return {name: _measure(text, features={**rs.DEFAULT_FEATURES, "gibberish_detector_package": True})
+            for name, text in CORRUPTIONS.items()}
+
+
+def test_gibberish_detector_score_separates_character_level_corruption_from_real_prose(
+        gibberish_detector_findings):
+    """Character-order and random-letter corruption change adjacent-letter
+    bigrams directly, which is exactly what this channel's model scores, so
+    both should register clearly above real prose."""
+
+    def value(name):
+        return gibberish_detector_findings[name][f"{rs.ID}gibberish_detector_score"]["value"]
+
+    real = value("real_prose")
+    shuffled_chars = value("shuffled_chars")
+    random_letters = value("random_letters")
+    assert real < shuffled_chars < random_letters
+
+
+def test_gibberish_detector_score_is_nearly_blind_to_word_order(gibberish_detector_findings):
+    """The package's own n-gram iterator (gibberish_detector.util.NGramIterator)
+    strips whitespace before taking adjacent-letter bigrams, so word order
+    barely touches its score: shuffling word order leaves every bigram
+    inside every word untouched. This is the same 'structurally blind to
+    this exact corruption' pattern this module's own char n-gram model shows
+    for sentence-order shuffling (see test_word_and_char_shuffle_baselines_
+    increase_surprisal_more_than_sentence_shuffle) -- here it shows up as a
+    channel that barely moves for word-shuffled text even though a reader
+    immediately sees scrambled nonsense."""
+
+    def value(name):
+        return gibberish_detector_findings[name][f"{rs.ID}gibberish_detector_score"]["value"]
+
+    real = value("real_prose")
+    shuffled_words = value("shuffled_words")
+    shuffled_chars = value("shuffled_chars")
+    word_gap = shuffled_words - real
+    char_gap = shuffled_chars - real
+    assert 0.0 <= word_gap < char_gap / 2
+
+
+def test_gibberish_detector_score_ranks_a_repeated_template_below_real_prose(gibberish_detector_findings):
+    """Counter-intuitive but correct, and worth asserting explicitly: this
+    channel measures predictability, not meaning, so a heavily repeated
+    template - obviously not gibberish to a human, and the reason
+    consonant_cluster_rate scores it at 0% - scores LOWER (less
+    'gibberish') on this channel than genuinely varied real prose. Nothing
+    is more predictable to a model trained on its own opening than its own
+    unchanging refrain repeated back to it. See _group_gibberish_detector_
+    package's docstring for the measured numbers behind this assertion."""
+
+    def value(name):
+        return gibberish_detector_findings[name][f"{rs.ID}gibberish_detector_score"]["value"]
+
+    real = value("real_prose")
+    repeated = value("repeated_phrase")
+    consonant_real = gibberish_detector_findings["real_prose"][f"{rs.ID}consonant_cluster_rate"]["value"]
+    consonant_repeated = gibberish_detector_findings["repeated_phrase"][f"{rs.ID}consonant_cluster_rate"]["value"]
+    assert repeated < real
+    # The two channels disagree on nothing here -- both say the repeated
+    # template is the least gibberish-like text in the ladder -- which is
+    # the point: independent channels reaching the same odd-sounding
+    # conclusion by different routes is corroboration, not noise.
+    assert consonant_repeated <= consonant_real
+
+
 # ------------------------------------------------------- PPM language model
 
 def test_ppm_cross_entropy_is_off_by_a_dedicated_toggle():
@@ -771,6 +897,202 @@ def test_ncd_channels_are_bounded_and_present():
         value = findings[metric_id]["value"]
         assert value is not None
         assert 0.0 <= value <= 1.5  # NCD can exceed 1 slightly with small blocks
+
+
+# ------------------------------------------------- NCD against reference corpus
+
+def test_ncd_against_corpus_off_by_default_and_names_the_missing_config():
+    off = _measure(REAL_PROSE)
+    assert f"{rs.ID}ncd_corpus_nearest_reference" not in off
+
+    on = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True})
+    item = on[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert item["value"] is None
+    assert "ncd_corpus_dirs" in item["warning"]
+
+
+def test_ncd_against_corpus_never_touches_the_filesystem_under_default_config(monkeypatch):
+    """The hard requirement paired with the gating rule above: measuring with
+    MetricSpec.defaults must never even look at ncd_corpus_dirs, let alone
+    read the filesystem - so corpus profiling cannot open a corpus folder as
+    a side effect of this suite being enabled."""
+
+    opened: list[str] = []
+    real_reference_texts = rs._ncd_corpus_reference_texts
+
+    def _tracking(corpus_dirs, *args, **kwargs):
+        opened.append(list(corpus_dirs))
+        return real_reference_texts(corpus_dirs, *args, **kwargs)
+
+    monkeypatch.setattr(rs, "_ncd_corpus_reference_texts", _tracking)
+    _measure(REAL_PROSE)  # rs.DEFAULTS: ncd_against_corpus is False
+    assert not opened
+
+
+def test_ncd_against_corpus_reports_an_unreachable_directory_clearly(tmp_path):
+    missing_dir = tmp_path / "does_not_exist"
+    findings = _measure(REAL_PROSE, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                        ncd_corpus_dirs=[str(missing_dir)])
+    item = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert item["value"] is None
+    assert "exist" in item["warning"]
+
+
+def test_ncd_corpus_algorithm_defaults_to_lzma_not_zlib():
+    """zlib/gzip's fixed 32768-byte DEFLATE window is smaller than
+    2 * ncd_corpus_max_bytes (100_000 by default), so zlib cannot see back
+    far enough for NCD to work at this suite's own default byte caps (see
+    test_ncd_against_corpus_discriminates_self_from_different_at_default_
+    settings below and _group_ncd_against_corpus's docstring for the
+    measured numbers). lzma's dictionary is >= 256 KiB at every preset."""
+
+    assert rs.DEFAULTS["ncd_corpus_algorithm"] == "lzma"
+
+
+def test_ncd_against_corpus_discriminates_self_from_different_at_default_settings(tmp_path):
+    """The regression this fix exists to catch: at DEFAULT settings (no
+    algorithm or byte-cap override), on text of a realistic size (well over
+    100 KB, comparable to a real chapter), NCD of a document against an
+    IDENTICAL reference copy must land far below NCD against a genuinely
+    DIFFERENT reference. This is exactly the case zlib could not handle
+    (measured directly at these byte caps: NCD(x, x) = 0.97, NCD(x, y) =
+    0.98 for an unrelated y - indistinguishable) and lzma, the default, can:
+    see _group_ncd_against_corpus's docstring for the full numbers."""
+
+    target_text = _real_prose(seed=5000, paragraphs=600)
+    different_text = _real_prose(seed=6000, paragraphs=600)
+    assert len(target_text) > 100_000 and len(different_text) > 100_000
+
+    same_dir = tmp_path / "same"
+    same_dir.mkdir()
+    (same_dir / "identical.txt").write_text(target_text, encoding="utf-8")
+
+    different_dir = tmp_path / "different"
+    different_dir.mkdir()
+    (different_dir / "different.txt").write_text(different_text, encoding="utf-8")
+
+    same_findings = _measure(target_text, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                             ncd_corpus_dirs=[str(same_dir)])
+    diff_findings = _measure(target_text, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                             ncd_corpus_dirs=[str(different_dir)])
+
+    same_item = same_findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    diff_item = diff_findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert same_item["value"] is not None and diff_item["value"] is not None
+    assert same_item["distribution"]["algorithm"] == "lzma"
+    assert same_item["value"] < 0.2
+    assert diff_item["value"] > 0.8
+
+
+def test_ncd_against_corpus_refuses_a_windowed_compressor_past_its_window(tmp_path):
+    """The guard: explicitly choosing zlib (or gzip/lz4/snappy) at byte caps
+    that exceed its fixed window must degrade visibly, naming the window and
+    a safe max_bytes, rather than silently returning a meaningless number -
+    the exact failure mode this whole fix addresses."""
+
+    target_text = _real_prose(seed=5001, paragraphs=600)
+    corpus_dir = tmp_path / "windowed"
+    corpus_dir.mkdir()
+    (corpus_dir / "identical.txt").write_text(target_text, encoding="utf-8")
+
+    for algorithm in ("zlib", "gzip", "lz4", "snappy"):
+        if algorithm in ("lz4", "snappy") and not optional.have(rs._COMPRESSOR_MODULE_NAME[algorithm]):
+            continue
+        findings = _measure(target_text, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                            ncd_corpus_dirs=[str(corpus_dir)], ncd_corpus_algorithm=algorithm)
+        item = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+        assert item["value"] is None, algorithm
+        assert "window" in item["warning"], algorithm
+        assert str(rs._WINDOWED_COMPRESSOR_BYTES[algorithm]) in item["warning"], algorithm
+
+
+def test_ncd_against_corpus_window_guard_does_not_trigger_when_bytes_fit(tmp_path):
+    """The same windowed compressor works fine once max_bytes is lowered to
+    fit its window - the guard is about the configuration, not a blanket ban
+    on these algorithms."""
+
+    target_text = _real_prose(seed=5002, paragraphs=600)
+    corpus_dir = tmp_path / "small_window_ok"
+    corpus_dir.mkdir()
+    (corpus_dir / "identical.txt").write_text(target_text, encoding="utf-8")
+
+    findings = _measure(target_text, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                        ncd_corpus_dirs=[str(corpus_dir)], ncd_corpus_algorithm="zlib",
+                        ncd_corpus_max_bytes=10_000)
+    item = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert item["value"] is not None
+    assert item["distribution"]["compressor_window_bytes"] == 32_768
+
+
+def test_ncd_against_corpus_reads_real_reference_files_from_disk(tmp_path):
+    corpus_dir = tmp_path / "ncd_corpus"
+    corpus_dir.mkdir()
+    for i in range(3):
+        (corpus_dir / f"ref{i}.txt").write_text(_real_prose(seed=900 + i, paragraphs=40),
+                                                encoding="utf-8")
+    (corpus_dir / "note.md").write_text(_real_prose(seed=910, paragraphs=10), encoding="utf-8")
+    (corpus_dir / "ignored.csv").write_text("not,a,reference,file\n", encoding="utf-8")
+
+    findings = _measure(_real_prose(seed=920, paragraphs=60),
+                        features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                        ncd_corpus_dirs=[str(corpus_dir)],
+                        ncd_corpus_max_reference_documents=4, ncd_corpus_max_bytes=20_000)
+    nearest = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    mean_ncd = findings[f"{rs.ID}ncd_corpus_reference_mean"]
+    assert nearest["value"] is not None
+    assert 0.0 <= nearest["value"] <= 1.5
+    assert mean_ncd["value"] is not None
+    assert 0.0 <= mean_ncd["value"] <= 1.5
+    assert nearest["distribution"]["reference_documents_compared"] == 4
+    assert nearest["distribution"]["algorithm"] == "lzma"
+    assert nearest["distribution"]["compressor_window_bytes"] is not None
+    assert nearest["distribution"]["compressor_window_bytes"] >= 262_144
+    assert nearest["evidence"][0]["reference"].endswith((".txt", ".md"))
+
+
+def test_ncd_against_corpus_caps_bytes_and_document_count(tmp_path):
+    corpus_dir = tmp_path / "ncd_corpus_capped"
+    corpus_dir.mkdir()
+    for i in range(6):
+        (corpus_dir / f"ref{i}.txt").write_text(_real_prose(seed=930 + i, paragraphs=40),
+                                                encoding="utf-8")
+
+    findings = _measure(_real_prose(seed=940, paragraphs=60),
+                        features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                        ncd_corpus_dirs=[str(corpus_dir)],
+                        ncd_corpus_max_reference_documents=2, ncd_corpus_max_bytes=5_000)
+    nearest = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert nearest["distribution"]["reference_documents_compared"] == 2
+    assert nearest["distribution"]["reference_documents_read"] == 2
+    assert nearest["distribution"]["reference_documents_available"] == 6
+    assert nearest["distribution"]["max_bytes_per_document"] == 5_000
+
+
+def test_ncd_against_corpus_uses_its_own_multi_algorithm_compressor(tmp_path):
+    """Unlike stylometry_suite's NCD-against-corpus (zlib/lzma only), this
+    suite's own _compress backs every configured compression_algorithms
+    entry, and ncd_corpus_algorithm can select any of them."""
+
+    if not optional.have("pyppmd"):
+        pytest.skip("pyppmd not installed")
+    corpus_dir = tmp_path / "ncd_corpus_ppmd"
+    corpus_dir.mkdir()
+    (corpus_dir / "ref0.txt").write_text(_real_prose(seed=950, paragraphs=40), encoding="utf-8")
+
+    findings = _measure(_real_prose(seed=960, paragraphs=60),
+                        features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                        ncd_corpus_dirs=[str(corpus_dir)], ncd_corpus_algorithm="ppmd")
+    nearest = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert nearest["value"] is not None
+    assert nearest["distribution"]["algorithm"] == "ppmd"
+
+
+def test_ncd_against_corpus_requires_enough_words():
+    findings = _measure("Too short.", features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                        ncd_corpus_dirs=["/nonexistent"])
+    item = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert item["value"] is None
+    assert "words" in item["warning"]
 
 
 # ------------------------------------------------------- neural language model

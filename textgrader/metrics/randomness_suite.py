@@ -128,6 +128,38 @@ than a number that mostly encodes their difference in length.
   document rather than normalizing by token count first), so the numbers
   disagree in scale, and the disagreement itself is reported rather than
   hidden.
+* The ``gibberish-detector`` package (``features.gibberish_detector_package``,
+  off by default) is trained fresh on this document's own held-out split,
+  never on the package's own bundled reference file, exactly like every
+  from-scratch n-gram channel above - see "Judgment calls" and
+  ``_group_gibberish_detector_package``'s own docstring for what it actually
+  measures and the two ways it disagrees with ``consonant_cluster_rate``:
+  it is close to blind to word order (its own n-gram iterator strips spaces
+  before taking letter bigrams) and it scores a heavily repeated template as
+  LESS gibberish than varied real prose, because it measures predictability,
+  not meaning.
+* NCD against the reference corpus (``features.ncd_against_corpus``, off by
+  default) is now implemented for real, reading the corpus folder directly
+  at grading time behind its own switch - see "Deferred" below for why this
+  one measurement, alone in this suite, touches the filesystem instead of a
+  cached profile. Its default ``ncd_corpus_algorithm`` is ``lzma``, not
+  ``zlib``: NCD needs ``compress(x + y)`` to see back across the WHOLE
+  concatenation, and zlib/gzip's DEFLATE window is a fixed 32768 bytes,
+  smaller than 2x this suite's own default byte cap - a real, measured
+  failure (an identical document and an unrelated one both scored ~0.97 NCD
+  under zlib at 100 KB), not a property of how the compared text was
+  produced. ``_group_ncd_against_corpus``'s docstring has the full numbers
+  and the guard that now refuses a number a windowed compressor cannot
+  actually compute, rather than reporting a meaningless one.
+* ``features.gibberish_detector_package`` and ``features.ncd_against_corpus``
+  join ``features.kenlm_language_model`` and ``features.neural_language_model``
+  under the same gating rule stated above for KenLM and the neural LM: both
+  are off by default specifically so that corpus profiling - which runs this
+  suite's ``MetricSpec.defaults`` over every reference book - never trains a
+  gibberish-detector model or opens a corpus folder as a side effect of
+  profiling being on. Verified the same way: a test patches ``require`` (for
+  gibberish-detector) and asserts ``ncd_corpus_dirs`` defaults to ``[]`` (for
+  NCD-against-corpus) and neither code path runs under default settings.
 
 **Deferred** (named, not silently skipped):
 
@@ -163,29 +195,55 @@ than a number that mostly encodes their difference in length.
   every from-scratch n-gram channel here (char, byte, word, POS, dependency,
   punctuation), so all six report comparably smoothed numbers instead of six
   different smoothing behaviours.
-* ``gibberish-detector`` is not installed and is not added as a dependency;
-  the consonant-cluster heuristic here is this suite's independent weak
-  sensor for the same phenomenon, implemented so it degrades to nothing
-  rather than to an import error.
-* AntroPy, EntropyHub and dit are not added as dependencies. None is
-  installed in this environment, all of the specific measures the task names
-  from them (permutation, spectral, SVD, approximate, sample entropy, LZ
-  complexity) have short, well-known closed-form definitions, and
-  implementing them directly on top of NumPy means they degrade to "NumPy
-  unavailable" instead of "one more third-party package unavailable", and are
-  easy to unit-test against the textbook formulas.
-* Normalized Compression Distance against a whole reference corpus is still
-  not implemented, and for the same reason as before: nothing reaches this
-  module except one document's ``DocumentAnalysis`` and (optionally) a
-  corpus *profile* of scalar distributions and pooled counts, never raw
-  text, so there is no representative document to concatenate-and-compress
-  against. The letter-bigram table above is built from one of those pooled
-  counts (a word-frequency table), which is a much weaker artifact than raw
-  text - it can drive a frequency-table divergence but not NCD, which needs
-  actual compressible bytes. What IS implemented is NCD between a document
-  and seeded corruptions of itself (word/char/sentence shuffles), which
-  answers a related, self-contained question: how much does compressibility
-  change when this specific kind of structure is destroyed.
+* ``gibberish-detector`` (PyPI, 0.1.1) is now installed and used for real
+  (``features.gibberish_detector_package``, off by default - see the gating
+  note above): it is on PyPI, ``pip install gibberish-detector`` works in
+  this environment, and it is exercised for real against the corruption
+  ladder (see ``_group_gibberish_detector_package``'s docstring for the
+  measured numbers), not kept out for being unavailable. It is a second,
+  independent channel beside the consonant-cluster heuristic, not a
+  replacement for it - the two disagree on a heavily repeated template
+  (this channel scores it as LESS gibberish than real prose; the heuristic
+  scores it at 0%, "no long consonant runs") and on word order (this
+  channel is nearly blind to it; the heuristic is unaffected by construction
+  either way, since it only looks inside each word), and both disagreements
+  are reported rather than reconciled, exactly this module's stated
+  philosophy.
+* AntroPy, EntropyHub and dit are not added as dependencies. This is a
+  design choice, not an availability one: all of the specific measures the
+  task names from them (permutation, spectral, SVD, approximate, sample
+  entropy, LZ complexity) have short, well-known closed-form definitions,
+  and implementing them directly on top of NumPy means they degrade to
+  "NumPy unavailable" instead of "one more third-party package unavailable",
+  and are easy to unit-test against the textbook formulas - the same
+  reasoning that keeps the from-scratch n-gram channels off NLTK's smoothing
+  classes, above. Nothing here is deferred for being uninstalled; all three
+  are installable from PyPI and simply are not the better implementation for
+  this codebase.
+* Normalized Compression Distance against a whole reference corpus is now
+  implemented (``features.ncd_against_corpus``, off by default, gated a
+  second time on ``ncd_corpus_dirs`` actually pointing at reachable
+  ``.txt``/``.md`` files - see the gating note above). The reason this was
+  deferred through three earlier passes is still true of the corpus
+  *profile*: nothing reaches this module from ``corpus.py`` except one
+  document's ``DocumentAnalysis`` and, optionally, a profile of scalar
+  distributions and pooled counts, never raw text, so a profile alone still
+  cannot serve real NCD. What changed is the design, not the profile: a
+  measurement that needs raw reference text and cannot be cached reads the
+  corpus folder directly, at grading time, behind its own switch, off by
+  default - the same pattern ``stylometry_suite``'s
+  ``_ncd_against_corpus_findings`` implements (see that function's
+  docstring), mirrored here with this suite's own multi-algorithm
+  ``_compress`` and its own ``ncd_corpus_max_reference_documents`` /
+  ``ncd_corpus_max_bytes`` bounds rather than reusing stylometry's. The
+  letter-bigram table above, built from a pooled word-frequency count, is
+  still the right (and much cheaper) tool for a frequency-table divergence
+  and is unaffected by this addition. NCD between a document and seeded
+  corruptions of itself (word/char/sentence shuffles, always on) remains a
+  different, self-contained question - how much does compressibility change
+  when a specific kind of structure is destroyed - from NCD against a real
+  reference book - how much does this document already share, structurally,
+  with one - and both are kept as separate findings rather than merged.
 * A ``profile_vector(analysis, config)`` for this suite - which would get a
   per-book vector cached under ``feature_profiles["randomness_suite"]`` the
   next time the shipped corpus profile is rebuilt - was considered and not
@@ -276,6 +334,8 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "kenlm_language_model": False,  # needs a compiled lmplz binary; opt-in, see module docstring.
     "neural_language_model": False,  # downloads/runs a pretrained model; opt-in, see module docstring.
     "textdescriptives_cross_check": False,  # needs its own spaCy pipeline; opt-in for parse cost.
+    "gibberish_detector_package": False,  # trains a fresh model per document; opt-in, see gating note below.
+    "ncd_against_corpus": False,  # reads the corpus folder at grading time; opt-in, see gating note below.
 }
 
 #: Every tunable this module reads via ``option()``. Mirrored, key for key,
@@ -323,6 +383,15 @@ DEFAULTS: dict[str, Any] = {
     "neural_lm_model": "distilgpt2",
     "neural_lm_max_chars": 6_000,
     "textdescriptives_max_chars": 50_000,
+    "gibberish_detector_charset": "abcdefghijklmnopqrstuvwxyz",
+    "ncd_corpus_dirs": [],  # empty = disabled even if the feature flag is on; see module docstring.
+    "ncd_corpus_max_reference_documents": 10,
+    "ncd_corpus_max_bytes": 100_000,
+    # lzma, not zlib: NCD needs compress(x+y) to see back across the whole
+    # concatenation, and zlib/gzip's DEFLATE window (32768 bytes, fixed) is
+    # smaller than 2 * ncd_corpus_max_bytes by default. See
+    # _group_ncd_against_corpus's docstring and its window guard.
+    "ncd_corpus_algorithm": "lzma",
 }
 
 VOWELS = set("aeiou")
@@ -660,6 +729,76 @@ def _effective_setting(name: str, level: int) -> tuple[str, int | None]:
         # would misrepresent it as having been used when it was not.
         return "level", None
     return "level", level  # zlib, gzip: pass the configured level through.
+
+
+#: Fixed, format-mandated back-reference windows for the compressors that
+#: genuinely have a small one, in bytes. zlib/gzip's DEFLATE window is 32768
+#: bytes (2**15) by construction and is NOT affected by ``compression_level``
+#: -- level changes match-finding effort, not the window itself. LZ4's raw
+#: block format encodes match offsets in 16 bits, so 65535 (rounded up to
+#: 65536 here) is the largest distance a match can ever reference, again
+#: regardless of level. python-snappy has no documented fixed limit, but
+#: measuring it directly (compressing two 100 KB real-book excerpts,
+#: concatenated, at several sizes) shows the same breakdown pattern between
+#: roughly 64 KB and 96 KB combined input that LZ4 shows, so it is treated
+#: the same, conservatively, at 65536.
+#:
+#: This matters because NCD needs ``compress(x + y)`` to be able to reference
+#: BACK INTO x while encoding y: if ``len(x) + len(y)`` exceeds this window,
+#: the compressor cannot see the earlier copy at all, so C(x+y) comes out
+#: close to C(x) + C(y) even when x and y are identical -- NCD(x, x) and
+#: NCD(x, y) for an unrelated y then both land near 1, and the measurement
+#: cannot discriminate anything.  ``_ncd_corpus_algorithm``'s default is
+#: ``lzma`` specifically to avoid this; see ``_group_ncd_against_corpus``.
+_WINDOWED_COMPRESSOR_BYTES: dict[str, int] = {
+    "zlib": 32_768, "gzip": 32_768, "lz4": 65_536, "snappy": 65_536,
+}
+
+#: liblzma's preset -> dictionary size table (XZ Utils' documented values;
+#: not affected by anything else this module configures). Used only to
+#: report a real number in ``distribution``, never to gate anything -- at
+#: preset 0 the dictionary is already 256 KiB, comfortably above every byte
+#: cap this suite uses by default, so lzma is never a windowing risk here.
+_LZMA_PRESET_DICT_BYTES = [262_144, 1_048_576, 2_097_152, 4_194_304, 4_194_304,
+                          8_388_608, 8_388_608, 16_777_216, 33_554_432, 67_108_864]
+
+
+def _compressor_window_bytes(name: str, level: int) -> int | None:
+    """The compressor's back-reference window or dictionary size in bytes,
+    for ``distribution.compressor_window_bytes`` on every NCD finding, or
+    ``None`` when the codec has no fixed distance limit at all (PPMd builds
+    a full statistical model of the whole input; it has an order, not a
+    window).
+
+    Only ``_WINDOWED_COMPRESSOR_BYTES``' four entries are ever small enough,
+    at this suite's byte caps, to change what an NCD finding means; the rest
+    are reported for transparency, not because any of them has been observed
+    to cause the failure this documents (see ``_group_ncd_against_corpus``'s
+    docstring for the measured numbers behind the four that are).
+    """
+
+    if name in _WINDOWED_COMPRESSOR_BYTES:
+        return _WINDOWED_COMPRESSOR_BYTES[name]
+    if name == "bz2":
+        # bz2's block size is exactly compresslevel * 100_000 bytes (Python's
+        # own bz2 docs); a match cannot be found across a block boundary.
+        return max(1, min(level, 9)) * 100_000
+    if name == "lzma":
+        preset = max(0, min(level, 9))
+        return _LZMA_PRESET_DICT_BYTES[preset]
+    if name == "zstd":
+        # zstandard's default window scales with level; ~2 MiB (window log
+        # 21) is the documented default around this suite's mid-range
+        # levels and only grows from there, comfortably above every byte
+        # cap this suite uses by default.
+        return 2_097_152
+    if name == "brotli":
+        # Brotli's default window (lgwin) is 22 bits = 4 MiB unless a
+        # caller sets lgwin explicitly, which this module does not.
+        return 4_194_304
+    if name == "ppmd":
+        return None  # a context-order model, not a sliding window.
+    return None
 
 
 def _compress(name: str, data: bytes, level: int) -> tuple[bytes | None, str | None]:
@@ -1192,6 +1331,7 @@ def _group_ncd(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict
                            distribution={"algorithm": algo, "level": level, "seed": seed,
                                         "compressed_original": cx, "compressed_variant": cy,
                                         "compressed_concatenation": cxy,
+                                        "compressor_window_bytes": _compressor_window_bytes(algo, level),
                                         "note": "near 0 means compression barely notices this "
                                                 "corruption; near 1 means the corrupted text shares "
                                                 "almost nothing compressible with the original"}))
@@ -1905,6 +2045,105 @@ def _group_lexical_gibberish(analysis: DocumentAnalysis, opts: Mapping[str, Any]
     return out
 
 
+# ------------------------------------------------- gibberish-detector package
+
+def _group_gibberish_detector_package(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The ``gibberish-detector`` PyPI package, as an independent sensor beside
+    this module's own hand-rolled consonant-cluster heuristic.
+
+    ``gibberish-detector`` ships with a trainer, not a fixed pretrained
+    model, and this channel uses it exactly the way it deliberately avoids
+    using its own bundled example corpus: trained fresh on this document's
+    own held-out split (:func:`_corruption_texts`, the same train/held-out
+    convention every from-scratch n-gram channel in this module follows),
+    never on a file shipped in the repo or in the package. That is a
+    meaningfully different model from the one its own CLI trains (on a large
+    curated English word list), so its raw score is reported on its own
+    terms rather than compared against the package's own default
+    ``is_gibberish`` threshold (4.0), which was calibrated for that other
+    corpus and would silently misrepresent a document-trained model as
+    "more confident" than it has any right to be.
+
+    **What this channel actually measures, and why it disagrees with
+    ``consonant_cluster_rate``:** the package's own n-gram iterator
+    (``gibberish_detector.util.NGramIterator``) strips every character
+    outside its charset - by default and here, whitespace and punctuation
+    included - before taking adjacent-letter bigrams. That makes it
+    materially blind to word order: shuffling word order changes only the
+    handful of bigrams that cross a (now-removed) word boundary, leaving
+    every bigram inside every word untouched, so ``shuffled_words`` scores
+    only marginally higher than real prose on this channel even though a
+    reader immediately sees scrambled nonsense - the same
+    "structurally blind to this exact corruption" phenomenon this module's
+    own docstring already documents for a local character n-gram model and
+    sentence-order shuffling. Character-order and random-letter corruption,
+    which do change adjacent-letter bigrams directly, register strongly.
+    See the module docstring's "Judgment calls" for the measured numbers.
+
+    A second, genuinely counter-intuitive result worth naming directly: a
+    heavily repeated template (``the cat sat on the mat...`` on a loop)
+    scores LOWER (less "gibberish") than ordinary varied prose, because
+    this channel measures predictability, not meaning, and nothing is more
+    predictable to a model trained on its own opening than its own
+    unchanging refrain repeated back to it. That is not a bug in the
+    channel; it is the same caveat this module already gives compression
+    ratio and cross-entropy on repetitive text, restated for a third,
+    independent measure that reaches the same conclusion by a different
+    route -- which is exactly the kind of agreement-across-channels this
+    module is built to surface.
+    """
+
+    mid = f"{ID}gibberish_detector_score"
+    name = "gibberish-detector package score of held-out text (document-trained model)"
+    module, reason = require("gibberish_detector")
+    if module is None:
+        return [unavailable(mid, name, reason, family=FAMILY)]
+
+    prep = _corruption_texts(analysis, opts)
+    if prep is None:
+        return [unavailable(mid, name, "fewer than 12 sentences to build a train/held-out split",
+                            family=FAMILY)]
+
+    test_text = prep["test_text"]
+    if len(test_text) < 50:
+        return [unavailable(mid, name, "held-out text too short to score", family=FAMILY)]
+
+    charset = str(option(opts, "gibberish_detector_charset", DEFAULTS["gibberish_detector_charset"]))
+    try:
+        # ``gibberish_detector``'s __init__.py imports nothing, so its
+        # trainer/detector submodules are not attributes of the top-level
+        # package `require()` already confirmed importable; they need their
+        # own (equally safe, pure-Python, no-op if already imported) import.
+        from gibberish_detector import trainer as gd_trainer, detector as gd_detector
+        trained_model = gd_trainer.train_on_content(prep["train_text"], charset)
+        det = gd_detector.Detector(trained_model, threshold=float("inf"))
+        score = det.calculate_probability_of_being_gibberish(test_text)
+    except Exception as exc:  # pragma: no cover - defensive; package is small and stable
+        return [unavailable(mid, name, f"gibberish_detector failed ({type(exc).__name__}: {exc})",
+                            family=FAMILY)]
+
+    filtered_chars = sum(1 for char in test_text if char in charset)
+    try:
+        from gibberish_detector.__version__ import VERSION as _gd_version
+    except Exception:  # pragma: no cover - defensive only
+        _gd_version = None
+    return [finding(
+        mid, name, score, "score", family=FAMILY, sample_size=max(filtered_chars - 1, 0),
+        min_sample=MIN_SAMPLE, sample_size_sensitive=True,
+        distribution={"charset": charset, "train_chars": len(prep["train_text"]),
+                     "test_chars": len(test_text), "filtered_bigrams_scored": max(filtered_chars - 1, 0),
+                     "library": "gibberish-detector", "library_version": _gd_version,
+                     "method": "a character-bigram model trained on this document's own held-out "
+                               "training split (never on the package's bundled reference file), "
+                               "scored against the held-out suffix; higher means less like the "
+                               "training text, not a calibrated gibberish/not-gibberish threshold",
+                     "note": "whitespace and punctuation are stripped before bigrams are taken "
+                             "(the package's own design), so this channel is close to blind to "
+                             "word order and should be read beside consonant_cluster_rate, not "
+                             "in place of it -- see this function's docstring for the measured "
+                             "corruption-ladder numbers"})]
+
+
 # ------------------------------------------------------ neural language model
 
 def _load_causal_lm(model_name: str) -> tuple[Any, Any, str | None]:
@@ -2120,6 +2359,209 @@ def _group_textdescriptives_cross_check(analysis: DocumentAnalysis,
                              "scale, not agreement, and treat disagreement as the finding"})]
 
 
+# ------------------------------------------------- NCD against reference documents
+
+def _ncd_corpus_reference_texts(corpus_dirs: Sequence[str], max_documents: int,
+                                max_bytes: int) -> tuple[list[tuple[str, bytes]], str | None, int]:
+    """Up to ``max_documents`` reference texts, each truncated to
+    ``max_bytes``, read fresh from ``corpus_dirs`` at GRADING time.
+
+    Mirrors :func:`textgrader.metrics.stylometry_suite._ncd_reference_texts`
+    exactly, for the same reason stated there: true NCD needs C(x), C(y) AND
+    C(x+y), so both raw texts must exist in memory together at the moment of
+    comparison, which is precisely what a corpus *profile* (no raw text
+    retained; see this module's docstring's "Deferred" section and
+    :mod:`textgrader.corpus`) cannot serve. Returns ``(rows, None,
+    available)`` on success or ``([], reason, available)`` naming exactly
+    what was missing -- no directories configured, a configured directory
+    absent on disk, or one with no ``.txt``/``.md`` files -- with
+    ``available`` the number of candidate files found BEFORE
+    ``max_documents`` truncation.
+    """
+
+    if not corpus_dirs:
+        return [], ("no corpus directory configured for NCD-against-corpus (set "
+                    "metrics.randomness_suite.ncd_corpus_dirs to one or more directories of "
+                    "reference .txt/.md files)"), 0
+    found: list[tuple[str, Path]] = []
+    missing: list[str] = []
+    for raw_dir in corpus_dirs:
+        directory = Path(str(raw_dir)).expanduser()
+        if not directory.is_dir():
+            missing.append(str(raw_dir))
+            continue
+        for pattern in ("*.txt", "*.md"):
+            for path in directory.rglob(pattern):
+                if path.is_file():
+                    found.append((path.relative_to(directory).as_posix(), path))
+    if not found:
+        if missing and len(missing) == len(corpus_dirs):
+            return [], f"none of the configured ncd_corpus_dirs exist on disk: {', '.join(missing)}", 0
+        return [], ("the configured ncd_corpus_dirs exist but contain no .txt/.md reference "
+                    "files" + (f" (also missing: {', '.join(missing)})" if missing else "")), 0
+    found.sort(key=lambda item: item[0])
+    available = len(found)
+    rows: list[tuple[str, bytes]] = []
+    for name, path in found[:max_documents]:
+        try:
+            data = path.read_bytes()[:max_bytes]
+        except OSError:
+            continue
+        if data:
+            rows.append((name, data))
+    if not rows:
+        return [], "reference documents were found but none could be read", available
+    return rows, None, available
+
+
+def _group_ncd_against_corpus(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """True Normalized Compression Distance against real reference documents
+    read from disk (see :func:`_ncd_corpus_reference_texts`), as distinct
+    from ``ncd_word_shuffle``/``ncd_char_shuffle``/``ncd_sentence_shuffle``
+    above, which are NCD against seeded corruptions of THIS document (no
+    filesystem access, always on by default).
+
+    This is the design settled on for the gap the module docstring used to
+    call permanently out of scope ("nothing reaches this module except one
+    document's DocumentAnalysis and, optionally, a corpus profile of scalar
+    distributions and pooled counts, never raw text"): a measurement that
+    genuinely needs raw reference text and cannot be served from a cached
+    profile reads the corpus folder directly, at grading time, behind its
+    own feature switch (``features.ncd_against_corpus``, off by default) so
+    it never runs as a side effect of enabling this suite, and it is a
+    second time gated on ``ncd_corpus_dirs`` actually pointing somewhere
+    reachable. ``stylometry_suite``'s ``_ncd_against_corpus_findings``
+    implements the identical pattern (same off-by-default feature name, same
+    ``ncd_corpus_dirs`` option name) for its own compressor options; this is
+    that same design, mirrored here with THIS suite's own multi-algorithm
+    ``_compress`` (any of ``compression_algorithms``, not only zlib/lzma) and
+    its own bounds (``ncd_corpus_max_reference_documents``,
+    ``ncd_corpus_max_bytes``) so the two suites' identically-named
+    ``ncd_corpus_dirs`` can point at the same folder without the two
+    measurements sharing a cache key or a byte budget.
+
+    Every finding records the algorithm, the byte caps and exactly how many
+    reference documents were compared in its ``distribution``, so a reader
+    can tell a real "nothing looked similar" from "only three reference
+    documents were readable".
+
+    **``ncd_corpus_algorithm`` defaults to ``lzma``, not ``zlib``, and this is
+    not a stylistic choice.** NCD needs ``compress(x + y)`` to be able to
+    reference back into ``x`` while it encodes ``y``. zlib/gzip's DEFLATE
+    window is a fixed 32768 bytes (LZ4 and, empirically, snappy break down
+    a little past 65536); this suite's byte caps default to
+    ``ncd_corpus_max_bytes = 100_000`` per side, so a ``zlib`` run here
+    concatenates roughly 200,000 bytes into a compressor that can only ever
+    see the last 32768 of them. The result is not merely noisy, it is
+    *unable to discriminate at all*: measured directly on two 100 KB real
+    book excerpts, ``zlib`` gave NCD(x, x) = 0.97 and NCD(x, y) = 0.98 for an
+    unrelated y -- an identical document and a different one score the same,
+    because the compressor genuinely cannot see the earlier copy, not
+    because of anything about how the text was produced or normalized. The
+    same pair scores NCD(x, x) = 0.002 and NCD(x, y) = 0.95 under ``lzma``
+    (dictionary >= 256 KiB at every preset), which is why it is the default.
+    ``zstd``, ``brotli`` and ``bz2`` (block size = ``compression_level`` *
+    100,000 bytes, so >= 100,000 at this suite's default level 6) are large
+    enough to work at these byte caps too; only ``zlib``, ``gzip``, ``lz4``
+    and ``snappy`` have a small enough window to matter here, and the guard
+    below refuses to report a number for exactly those four when the
+    configured byte caps exceed their window, rather than silently returning
+    a "different" score for an identical pair. See
+    ``_compressor_window_bytes`` for the exact figures and their sources,
+    and ``distribution.compressor_window_bytes`` on every finding here (and
+    on ``ncd_word_shuffle``/``ncd_char_shuffle``/``ncd_sentence_shuffle``
+    above) for the number that applied to it.
+    """
+
+    ids = (
+        (f"{ID}ncd_corpus_nearest_reference",
+         "Normalized Compression Distance to the nearest reference document"),
+        (f"{ID}ncd_corpus_reference_mean",
+         "Mean Normalized Compression Distance across sampled reference documents"),
+    )
+
+    def _unavailable(warning: str, size: int) -> list[dict[str, Any]]:
+        return [finding(mid, name, None, "ratio", family=FAMILY, sample_size=size, min_sample=200,
+                        warning=warning) for mid, name in ids]
+
+    word_count = analysis.word_count
+    if word_count < 200:
+        return _unavailable(f"only {word_count} words; need at least 200 to measure compressibility",
+                            word_count)
+
+    algorithm = str(option(opts, "ncd_corpus_algorithm", DEFAULTS["ncd_corpus_algorithm"]))
+    level = option(opts, "compression_level", DEFAULTS["compression_level"])
+    max_documents = max(1, int(option(opts, "ncd_corpus_max_reference_documents",
+                                      DEFAULTS["ncd_corpus_max_reference_documents"])))
+    max_bytes = max(1000, int(option(opts, "ncd_corpus_max_bytes", DEFAULTS["ncd_corpus_max_bytes"])))
+    raw_dirs = option(opts, "ncd_corpus_dirs", DEFAULTS["ncd_corpus_dirs"])
+    corpus_dirs = list(raw_dirs) if isinstance(raw_dirs, (list, tuple)) else ([raw_dirs] if raw_dirs else [])
+
+    doc_bytes = analysis.text.encode("utf-8")[:max_bytes]
+    window = _compressor_window_bytes(algorithm, level)
+
+    # Refuse to report a number this compressor cannot actually compute,
+    # rather than silently returning "different" for an identical pair (see
+    # this function's docstring for the measured numbers behind this guard).
+    # Sized against the CONFIGURED max_bytes, not the actual reference byte
+    # count, so the same configuration always gives the same answer whether
+    # a given reference document happens to be shorter than the cap or not.
+    if window is not None and len(doc_bytes) + max_bytes > window:
+        safe_max_bytes = max(1000, window // 2)
+        return _unavailable(
+            f"{algorithm} has a fixed {window}-byte compression window, but the configured "
+            f"ncd_corpus_max_bytes ({max_bytes}) lets a document/reference pair reach "
+            f"{len(doc_bytes) + max_bytes} bytes combined -- {algorithm} cannot see back that "
+            f"far, so it would report every reference as maximally different, including this "
+            f"document compared against itself. Lower ncd_corpus_max_bytes to at most "
+            f"{safe_max_bytes}, or set ncd_corpus_algorithm to lzma (the default), whose "
+            f"dictionary is megabytes rather than kilobytes.",
+            word_count)
+
+    references, reason, available = _ncd_corpus_reference_texts(corpus_dirs, max_documents, max_bytes)
+    if not references:
+        return _unavailable(reason, word_count)
+
+    def _len(data: bytes) -> int | None:
+        compressed, _ = _compress(algorithm, data, level)
+        return len(compressed) if compressed is not None else None
+
+    c_doc = _len(doc_bytes)
+    if c_doc is None:
+        return _unavailable(f"{algorithm} unavailable or produced empty output", word_count)
+
+    distances: list[tuple[str, float]] = []
+    for ref_name, ref_bytes in references:
+        c_ref = _len(ref_bytes)
+        c_joint = _len(doc_bytes + ref_bytes)
+        if c_ref is None or c_joint is None:
+            continue
+        denominator = max(c_doc, c_ref)
+        if denominator:
+            distances.append((ref_name, (c_joint - min(c_doc, c_ref)) / denominator))
+    if not distances:
+        return _unavailable("no reference document produced a comparable compressed size", word_count)
+
+    distances.sort(key=lambda item: item[1])
+    nearest_name, nearest_ncd = distances[0]
+    mean_ncd = sum(d for _, d in distances) / len(distances)
+    common = {"algorithm": algorithm, "level": level, "reference_documents_compared": len(distances),
+             "reference_documents_read": len(references), "reference_documents_available": available,
+             "max_reference_documents": max_documents, "max_bytes_per_document": max_bytes,
+             "document_bytes_compared": len(doc_bytes), "compressor_window_bytes": window,
+             "note": "near 0 means this document compresses almost as well jointly with a "
+                     "reference book as either does alone (shares a lot of compressible "
+                     "structure with it); near 1 means the two share almost nothing"}
+    evidence = [{"reference": rname, "ncd": d} for rname, d in distances[:25]]
+    return [
+        finding(ids[0][0], ids[0][1], nearest_ncd, "ratio", family=FAMILY, sample_size=word_count,
+                min_sample=200, sample_size_sensitive=True, distribution=common,
+                evidence=[{"reference": nearest_name, "ncd": nearest_ncd}]),
+        finding(ids[1][0], ids[1][1], mean_ncd, "ratio", family=FAMILY, sample_size=word_count,
+                min_sample=200, sample_size_sensitive=True, distribution=common, evidence=evidence),
+    ]
+
+
 # ---------------------------------------------------------------------- main
 
 def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
@@ -2145,6 +2587,8 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_group_corruption_baselines(analysis, config or {}))
     if features.get("lexical_gibberish", True):
         out.extend(_group_lexical_gibberish(analysis, config or {}))
+    if features.get("gibberish_detector_package", False):
+        out.extend(_group_gibberish_detector_package(analysis, config or {}))
     if features.get("letter_bigram_divergence", True):
         out.extend(_group_letter_bigram_divergence(analysis, config or {}))
     if features.get("kenlm_language_model", False):
@@ -2153,5 +2597,7 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_group_neural_language_model(analysis, config or {}))
     if features.get("textdescriptives_cross_check", False):
         out.extend(_group_textdescriptives_cross_check(analysis, config or {}))
+    if features.get("ncd_against_corpus", False):
+        out.extend(_group_ncd_against_corpus(analysis, config or {}))
 
     return out

@@ -108,6 +108,15 @@ pyppmd>=1.1
 # every other measurement in this suite is unaffected.
 kenlm>=0.2
 
+# A tiny, dependency-free character-bigram gibberish classifier, used by
+# randomness_suite's optional "gibberish_detector_package" feature (off by
+# default -- see that module's gating note). Trained fresh on each document's
+# own held-out split at grading time, never on its own bundled reference
+# file; without it, gibberish_detector_score reports "unavailable" and
+# consonant_cluster_rate, this suite's other independent gibberish sensor, is
+# unaffected either way.
+gibberish-detector>=0.1.1
+
 # Augmented Dickey-Fuller stationarity test, used by the experimental
 # timeseries_suite metric's "stationarity" feature.  Everything else in that
 # suite (ACF, trend, spectral, Hurst, DFA, permutation entropy, change points,

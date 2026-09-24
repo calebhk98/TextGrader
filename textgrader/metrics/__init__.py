@@ -325,6 +325,7 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "lexical_gibberish": True, "ppm_language_model": True,
                   "letter_bigram_divergence": True, "kenlm_language_model": False,
                   "neural_language_model": False, "textdescriptives_cross_check": False,
+                  "gibberish_detector_package": False, "ncd_against_corpus": False,
               },
               "language": "en",
               "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_order": 3,
@@ -346,15 +347,21 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "kenlm_max_train_chars": 200000, "kenlm_timeout_seconds": 30,
               "neural_lm_model": "distilgpt2", "neural_lm_max_chars": 6000,
               "textdescriptives_max_chars": 50000,
+              "gibberish_detector_charset": "abcdefghijklmnopqrstuvwxyz",
+              "ncd_corpus_dirs": [], "ncd_corpus_max_reference_documents": 10,
+              "ncd_corpus_max_bytes": 100000, "ncd_corpus_algorithm": "lzma",
           },
           summary="Character/word/POS/punctuation language-likeness, multi-algorithm "
                   "compression ratios (zlib/gzip/bz2/lzma/zstd/brotli/lz4/snappy/pyppmd) and "
-                  "NCD, a real PPM predictive-model cross-entropy, entropy/complexity families "
-                  "(Shannon, Renyi, Tsallis, permutation, spectral, SVD, ApEn/SampEn, LZ), "
-                  "single-letter and corpus-derived letter-bigram divergence from English, "
-                  "seeded shuffle-corruption baselines, and three opt-in external cross-checks "
-                  "(a real KenLM Kneser-Ney n-gram model, a pretrained causal-LM perplexity, "
-                  "and textdescriptives). Off by default; experimental."),
+                  "self-corruption NCD, a real PPM predictive-model cross-entropy, "
+                  "entropy/complexity families (Shannon, Renyi, Tsallis, permutation, spectral, "
+                  "SVD, ApEn/SampEn, LZ), single-letter and corpus-derived letter-bigram "
+                  "divergence from English, seeded shuffle-corruption baselines, and five opt-in "
+                  "external cross-checks (a real KenLM Kneser-Ney n-gram model, a pretrained "
+                  "causal-LM perplexity, textdescriptives, a gibberish-detector package model "
+                  "trained on the document's own held-out split, and true NCD against real "
+                  "reference documents read from disk at grading time). Off by default; "
+                  "experimental."),
     _spec("timeseries_suite", "timeseries_suite", "sentence_rhythm", "moderate",
           defaults={
               "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
