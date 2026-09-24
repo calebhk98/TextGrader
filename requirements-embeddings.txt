@@ -12,8 +12,11 @@ sentence-transformers>=2.2
 # extraction and real argument-relation classification (logic_suite's
 # `nli_entailment`, `semantic_role_labeling`, `relation_extraction` and
 # `argument_mining`), coreference resolution (logic_suite and coherence_suite),
-# and a causal language model (randomness_suite's `neural_language_model`).
-# All of these share the torch install above and every one is off by default;
+# a causal language model (randomness_suite's `neural_language_model`), and a
+# pretrained sentiment classifier (affect_suite's `transformer_sentiment`
+# feature, off by default and versioned by model name + revision in every
+# finding it produces). All of these share the torch install above and every
+# one is off by default;
 # without them each channel reports "unavailable" with an install hint and its
 # suite's other measurements are unaffected. None of the four logic_suite
 # model channels needs a package beyond `transformers` itself -- each is just
