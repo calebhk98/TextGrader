@@ -266,7 +266,9 @@ of it, so a slow run always says what was slow.
 | `finite_clauses` | parse | spacy | no | Finite clauses per sentence. |
 | `opening_patterns` | parse | spacy | no | POS/dependency sentence-opening shapes, with no hard-coded vocabulary. |
 | `parse_depth` | parse | spacy | no | Per-sentence maximum dependency-tree depth. |
+| `parser_consensus` | parse | spacy, pysbd, nltk, syntok, stanza, benepar | no | Where independent sentence splitters, tokenizers and parsers disagree on the same sampled text: long-sentence share and maximum length per splitter (the tail, which is where a quote-collapse shows), boundary F1, and, once a second parser is enabled, POS, dependency and noun-phrase agreement. |
 | `passive_voice` | parse | spacy | no | Share of clauses in the passive voice. |
+| `syntax_complexity_suite` | parse | spacy, benepar | no | L2SCA-style T-unit and clause ratios pooled over the text (a labelled spaCy approximation, not L2SCA itself), phrasal elaboration, dependency-tree topology, corpus-trained syntactic surprisal (needs a profile built with `--parse-metrics`), and opt-in benepar constituency measures over a bounded sample. |
 | `pos_distribution` | parse | spacy | no | Share of each open-class part of speech. |
 | `tense_consistency` | parse | spacy | no | Rate of sentence-to-sentence tense changes in narration. |
 
