@@ -125,6 +125,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from .document import DocumentAnalysis
 from .optional import on_reset, require, shim_fastcoref_transformers
+from .spans import sentence_ents
 
 #: Occurrences of one (subject, predicate) pair beyond this are sampled down
 #: to the first this-many (in document order) before pairing.  A hard safety
@@ -359,7 +360,7 @@ def _extract(analysis: DocumentAnalysis, cap: int) -> Extraction:
             continue
         start_char = offset + sent.start_char
         paragraph_index = _paragraph_index(starts, start_char)
-        entity_labels = tuple(sorted({ent.label_ for ent in sent.ents}))
+        entity_labels = tuple(sorted({ent.label_ for ent in sentence_ents(sent)}))
         for root in _clause_roots(sent):
             if len(props) >= cap:
                 truncated = True

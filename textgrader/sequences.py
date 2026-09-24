@@ -143,6 +143,7 @@ from typing import Any, Callable, Mapping
 from . import text as textlib
 from .document import DocumentAnalysis
 from .optional import require
+from .spans import sentence_ents
 
 # ------------------------------------------------------------------ the type
 
@@ -384,7 +385,7 @@ def _build_sentence_entity_count(analysis: DocumentAnalysis, settings: Mapping[s
     values: list[float] = []
     for _, doc in analysis.spacy_docs():
         for sent in doc.sents:
-            values.append(float(len(sent.ents)))
+            values.append(float(len(sentence_ents(sent))))
     return Sequence("sentence_entity_count", tuple(values), "entities", "sentence",
                     "Named-entity count of each sentence.", settings)
 

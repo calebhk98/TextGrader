@@ -46,6 +46,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from .metrics.semantic_adjacent import STOPWORDS
 from .optional import on_reset, require, shim_fastcoref_transformers
 from .text import words as split_words
+from .spans import sentence_noun_chunks
 
 ROLE_SCHEMA_VERSION = "sxo-v1"
 
@@ -337,7 +338,7 @@ def entity_mentions_by_sentence(sents_channels: Iterable[tuple[Any, str, int]]
     for sent, channel, _offset in sents_channels:
         roles: dict[str, str] = {}
         try:
-            chunks = list(sent.noun_chunks)
+            chunks = sentence_noun_chunks(sent)
         except Exception:  # pragma: no cover - defensive against parser edge cases
             chunks = []
         for chunk in chunks:

@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .optional import on_reset, require, shim_booknlp_transformers
+from .spans import sentence_noun_chunks
 
 GRAPH_SCHEMA_VERSION = "graph-suite-v1"
 
@@ -171,7 +172,7 @@ def character_mentions_by_sentence(sents_channels) -> list[list[str]]:
     for sent, _channel, _offset in sents_channels:
         names: list[str] = []
         try:
-            chunks = list(sent.noun_chunks)
+            chunks = sentence_noun_chunks(sent)
         except Exception:  # pragma: no cover - defensive against parser edge cases
             chunks = []
         seen: set[str] = set()
