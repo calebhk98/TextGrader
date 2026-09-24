@@ -741,6 +741,25 @@ def _load_rst_parser(model_name: str, model_version: str) -> tuple[Any, str | No
     return outcome
 
 
+def canonical_relation_label(label: str) -> str:
+    """A case-normalized key for counting one RST relation label.
+
+    ``isanlp_rst``'s ``rstdt`` checkpoint has been observed emitting at
+    least one relation (``"same-unit"``) in lowercase beside title-case
+    labels like ``"Attribution"``.  That is one model spelling one relation
+    two different ways, not two independent implementations disagreeing --
+    the latter is what this suite's "keep every disagreement" rule (see the
+    module docstring) is about, and it does not apply here.  Left
+    uncombined, a relation-mix entropy would count the same relation twice
+    under two different keys and read too high.  Lower-casing is the whole
+    normalization: it never merges two genuinely different relations (RST-DT
+    relation names are not case variants of each other), only two spellings
+    of the same one.
+    """
+
+    return label.strip().lower() if label else label
+
+
 def rst_tree_summary(node: Any) -> dict[str, Any]:
     """Depth, EDU count, per-EDU word length, and internal-node
     relation/nuclearity counts for one ``isanlp_rst`` ``DiscourseUnit`` tree.
@@ -756,9 +775,16 @@ def rst_tree_summary(node: Any) -> dict[str, Any]:
     ``relation == "elementary"``), not a documented, versioned API contract;
     a future isanlp_rst release that renames or drops one of them can only
     make this summary emptier, never raise.
+
+    Relation labels are returned two ways: ``relation_counts`` is keyed by
+    :func:`canonical_relation_label` (used for entropy, so one relation
+    spelled two ways is not double-counted), and ``raw_relation_counts``
+    keeps the exact, uncombined spellings actually observed, so a caller can
+    still report them and nothing is hidden.
     """
 
     relation_counts: Counter = Counter()
+    raw_relation_counts: Counter = Counter()
     nuclearity_counts: Counter = Counter()
     leaf_word_counts: list[int] = []
     max_depth = 0
@@ -783,7 +809,8 @@ def rst_tree_summary(node: Any) -> dict[str, Any]:
             leaf_word_counts.append(len(text.split()))
             continue
         if relation:
-            relation_counts[relation] += 1
+            raw_relation_counts[relation] += 1
+            relation_counts[canonical_relation_label(relation)] += 1
         try:
             nuclearity = getattr(current, "nuclearity", None)
         except Exception:  # pragma: no cover - defensive
@@ -794,7 +821,7 @@ def rst_tree_summary(node: Any) -> dict[str, Any]:
         stack.append((right, depth + 1))
     return {"depth": max_depth, "leaf_count": len(leaf_word_counts),
            "leaf_word_counts": leaf_word_counts, "relation_counts": relation_counts,
-           "nuclearity_counts": nuclearity_counts}
+           "raw_relation_counts": raw_relation_counts, "nuclearity_counts": nuclearity_counts}
 
 
 def sample_rst_passages(sentences: Sequence[str], num_passages: int, passage_sentences: int,
@@ -875,7 +902,12 @@ def resolve_rst(analysis: Any, model_name: str, model_version: str, num_passages
     only a target): once it is exceeded, sampling stops and every finding
     still reports on whatever passages parsed before the cutoff, rather than
     running an unbounded number of two-second-a-sentence parses on a slow
-    machine.
+    machine. The clock starts AFTER :func:`_load_rst_parser` returns, so a
+    slow (or cold, multi-gigabyte-download) model load is never charged
+    against this budget -- loading is a one-time process cost, not part of
+    measuring this document, and counting it here would make the budget mean
+    something different on the first document a process ever measures than
+    on every one after it (the parser is cached; see :func:`_load_rst_parser`).
     """
 
     parser, reason = _load_rst_parser(model_name, model_version)
@@ -891,7 +923,7 @@ def resolve_rst(analysis: Any, model_name: str, model_version: str, num_passages
         return [], settings, "no sentences available to sample for RST parsing"
 
     summaries: list[dict[str, Any]] = []
-    started = time.monotonic()
+    started = time.monotonic()  # after the parser load above, deliberately
     stopped_early = False
     for start, end, passage in passages:
         if time.monotonic() - started > max_seconds:
@@ -966,6 +998,6 @@ __all__ = [
     "transition_frequency_vector", "build_entity_graph",
     "graph_stats", "DEFAULT_COREF_MODEL", "mention_role", "coref_mentions_by_sentence",
     "resolve_coreference", "DEFAULT_RST_MODEL", "DEFAULT_RST_MODEL_VERSION",
-    "rst_tree_summary", "sample_rst_passages", "resolve_rst",
+    "canonical_relation_label", "rst_tree_summary", "sample_rst_passages", "resolve_rst",
     "permutation_percentile", "order_score_from_overlap",
 ]

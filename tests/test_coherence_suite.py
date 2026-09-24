@@ -6,6 +6,7 @@ optional package.
 from __future__ import annotations
 
 import time
+from collections import Counter
 
 import pytest
 
@@ -460,6 +461,137 @@ def test_no_rst_parser_is_loaded_under_the_default_config(monkeypatch, manuscrip
     errors = [item for item in report.results if item.status_type is StatusType.INTERNAL_ERROR]
     assert not errors, [(item.metric_id, item.error) for item in errors]
     assert not any("rst" in item.metric_id for item in report.results)
+
+
+def test_rst_time_cap_excludes_parser_load_time(monkeypatch):
+    """Loading is a one-time process cost, not part of measuring this
+    document: a slow (or cold, multi-gigabyte-download) model load must
+    never itself trip rst_max_seconds. Uses a fake parser/tree so this needs
+    no real model."""
+
+    class _FakeLeaf:
+        relation = "elementary"
+        left = None
+        right = None
+        text = "a b c"
+
+    class _FakeParser:
+        def __call__(self, text):
+            return {"rst": [_FakeLeaf()]}
+
+    def _slow_load(model_name, model_version):
+        time.sleep(1.5)  # longer than max_seconds below, on its own
+        return _FakeParser(), None
+
+    monkeypatch.setattr(coh, "_load_rst_parser", _slow_load)
+    fake_analysis = type("FakeAnalysis", (), {"sentences": [f"Sentence {i}." for i in range(20)]})()
+    summaries, settings, _note = coh.resolve_rst(
+        fake_analysis, "fake-model", "fake-version", num_passages=2, passage_sentences=2,
+        max_sentences=10, max_seconds=1.0, seed=0)
+    # Both 2-sentence passages parse instantly (the fake parser does no real
+    # work); if the 1.5s load had counted against the 1.0s cap, the very
+    # first cap check would already have tripped it.
+    assert settings["passages_parsed"] == 2
+    assert settings["stopped_early_on_time_cap"] is False
+    assert settings["elapsed_seconds"] < 1.0
+
+
+def _fake_rst_passage_summary(start, end):
+    return {"start_sentence": start, "end_sentence": end, "sentence_count": end - start,
+           "depth": 3, "leaf_count": 2, "leaf_word_counts": [4, 5],
+           "relation_counts": Counter({"Elaboration": 1}),
+           "raw_relation_counts": Counter({"Elaboration": 1}),
+           "nuclearity_counts": Counter({"NS": 1})}
+
+
+def _fake_rst_settings(passages_sampled, passages_parsed, stopped_early):
+    return {"backend": "rst", "model": coh.DEFAULT_RST_MODEL,
+           "model_version": coh.DEFAULT_RST_MODEL_VERSION, "total_sentences_in_document": 500,
+           "passages_requested": passages_sampled, "passage_sentences_target": 6,
+           "max_sentences_cap": 60, "seed": 0, "passages_sampled": passages_sampled,
+           "total_sentences_sampled": passages_sampled * 6, "passages_parsed": passages_parsed,
+           "elapsed_seconds": 1.0, "max_seconds_cap": 420.0,
+           "stopped_early_on_time_cap": stopped_early}
+
+
+def _rst_enabled_only_config():
+    return {"enabled": True, "features": {"lexical": False, "semantic": False, "entity": False,
+                                          "coreference": False, "rst": True,
+                                          "connectives": False, "order_permutation": False}}
+
+
+def test_rst_truncated_by_time_cap_reports_insufficient_data(monkeypatch, manuscript, base_config):
+    """The reproducibility fix: a sample the time cap cut short must never
+    be compared as though it were the complete, deterministic sample the
+    config called for -- see the module docstring's "Closed since the first
+    pass" section. sample_size (passages parsed) below min_sample (passages
+    sampled) is exactly the condition grade.py's own comparator already
+    turns into insufficient_data (see _finding_result in grade.py)."""
+
+    summaries = [_fake_rst_passage_summary(0, 6), _fake_rst_passage_summary(60, 66)]
+    settings = _fake_rst_settings(passages_sampled=8, passages_parsed=2, stopped_early=True)
+    note = "backend=rst: parsed 2 of 8 sampled passage(s)... (stopped early: time cap reached)"
+    monkeypatch.setattr(coh, "resolve_rst", lambda *a, **k: (summaries, settings, note))
+
+    config = {**base_config, "metrics": {**base_config["metrics"],
+                                         "coherence_suite": _rst_enabled_only_config()}}
+    report = grade.analyze(manuscript, config)
+    rst_items = {item.metric_id: item for item in report.results if "rst" in item.metric_id}
+    assert len(rst_items) == 4
+    for metric_id, item in rst_items.items():
+        assert item.sample_size == 2, (metric_id, item.sample_size)
+        assert item.action is Action.INSUFFICIENT_DATA, (metric_id, item.action, item.warning)
+        assert "2" in item.warning and "8" in item.warning
+
+
+def test_rst_complete_sample_is_not_marked_insufficient_data(monkeypatch, manuscript, base_config):
+    """The other half of the same fix: a sample that finished exactly as
+    planned (parsed == sampled) must compare normally, not be penalized for
+    having been a sample at all."""
+
+    summaries = [_fake_rst_passage_summary(0, 6), _fake_rst_passage_summary(60, 66)]
+    settings = _fake_rst_settings(passages_sampled=2, passages_parsed=2, stopped_early=False)
+    note = "backend=rst: parsed 2 of 2 sampled passage(s)..."
+    monkeypatch.setattr(coh, "resolve_rst", lambda *a, **k: (summaries, settings, note))
+
+    config = {**base_config, "metrics": {**base_config["metrics"],
+                                         "coherence_suite": _rst_enabled_only_config()}}
+    report = grade.analyze(manuscript, config)
+    rst_items = {item.metric_id: item for item in report.results if "rst" in item.metric_id}
+    assert len(rst_items) == 4
+    for metric_id, item in rst_items.items():
+        assert item.sample_size == 2, (metric_id, item.sample_size)
+        assert item.action is not Action.INSUFFICIENT_DATA, (metric_id, item.action, item.warning)
+
+
+def test_rst_relation_labels_are_counted_case_insensitively():
+    """One model spelling one relation two ways ('same-unit' lowercase
+    beside title-case 'Attribution') must be counted once, not treated as
+    two independent implementations disagreeing (see
+    coh.canonical_relation_label's docstring) -- otherwise entropy over the
+    relation mix silently inflates. The raw, uncombined spellings must still
+    be visible somewhere so nothing is hidden."""
+
+    assert coh.canonical_relation_label("same-unit") == "same-unit"
+    assert coh.canonical_relation_label("Same-Unit") == "same-unit"
+    assert coh.canonical_relation_label("SAME-UNIT") == "same-unit"
+    assert coh.canonical_relation_label("Attribution") == "attribution"
+
+    class _Node:
+        def __init__(self, relation, nuclearity=None, left=None, right=None, text=""):
+            self.relation, self.nuclearity = relation, nuclearity
+            self.left, self.right, self.text = left, right, text
+
+    tree = _Node("Same-Unit", nuclearity="NN",
+                left=_Node("elementary", text="one two"),
+                right=_Node("same-unit", nuclearity="NN",
+                            left=_Node("elementary", text="three"),
+                            right=_Node("elementary", text="four five")))
+    summary = coh.rst_tree_summary(tree)
+    # Counted together under one canonical key...
+    assert summary["relation_counts"] == {"same-unit": 2}
+    # ...but the exact spellings actually seen are still recoverable.
+    assert summary["raw_relation_counts"] == {"Same-Unit": 1, "same-unit": 1}
 
 
 def test_rst_degrades_cleanly_without_isanlp_rst(monkeypatch, sample_text):

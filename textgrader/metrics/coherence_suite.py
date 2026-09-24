@@ -63,7 +63,13 @@ suite measures four largely independent kinds of relationship:
     deterministic sample of passages spread across the document (see
     ``rst_passages``/``rst_passage_sentences`` below) and records exactly
     what it sampled in every finding's ``distribution``, so a number from ten
-    short passages is never mistaken for a whole-book parse. It is reported
+    short passages is never mistaken for a whole-book parse. If a slow or
+    busy machine trips ``rst_max_seconds`` before the sample finishes, every
+    RST finding's ``sample_size`` (passages parsed) drops below its
+    ``min_sample`` (passages the sample called for) and ``grade.py`` reports
+    it as ``insufficient_data`` rather than comparing a partial sample as
+    though it were complete - see the "Closed since the first pass" section
+    below for why that matters for corpus comparability. It is reported
     as its own metric ids, entirely separate from the surface, closed-class
     ``connectives`` channel above: a statistical RST parser and a fixed
     connective lexicon answering "how are these clauses related" differently
@@ -213,7 +219,47 @@ environment):
   discipline :func:`resolve_coreference` already applies to its own window.
   The parser is loaded once per process and cached
   (:func:`textgrader.coherence._load_rst_parser`), exactly like
-  :func:`_load_coref_model` above.
+  :func:`_load_coref_model` above; that load's own wall time is never counted
+  against ``rst_max_seconds`` (see :func:`coh.resolve_rst`'s docstring),
+  since it is a one-time process cost, not part of measuring this document.
+
+  A first cut of this feature made ``rst_max_seconds`` (default 90s) a
+  correctness bug, not just a cost control: a slow or busy machine would cut
+  the sample short partway through, and the resulting value -- a median over
+  fewer passages than a quiet run of the identical config would have parsed
+  -- was reported and compared exactly like a complete sample. Two things
+  fixed that, both using machinery ``grade.py`` already had rather than a new
+  rule: first, every RST finding's ``sample_size`` is now the number of
+  passages actually parsed and its ``min_sample`` is the number
+  :func:`coh.sample_rst_passages` decided to sample (after the
+  ``rst_max_sentences`` cap, never the raw ``rst_passages`` config value,
+  since that cap is a deliberate, reproducible reduction, not a shortfall).
+  A truncated sample (``sample_size < min_sample``) is exactly the condition
+  ``grade.py``'s own comparator (``StatsComparator.apply``, see
+  ``_finding_result``) already turns into ``insufficient_data`` and withholds
+  from corpus comparison; a complete sample (``sample_size == min_sample``)
+  compares normally. Second, the default ``rst_max_seconds`` was raised from
+  90s to 420s: measured parsing cost across several runs in this shared
+  container ranged 1.9-6.7 seconds per sentence (the original worked
+  example's quiet-machine figure, 7.7s for 4 sentences, is the low end of
+  that range), so the default sample (8 passages of 6 sentences, ~48
+  sentences) needs roughly 90-320 seconds even before any contention: 90s
+  could not fit it even on a quiet machine, which is self-defeating for a
+  cap that is supposed to be a safety margin, not the normal outcome. 420s
+  gives real margin above the measured range instead.
+
+  Relation labels are also now counted on a canonical (lower-cased) form
+  (:func:`coh.canonical_relation_label`): the ``rstdt`` checkpoint has been
+  observed emitting one relation, ``"same-unit"``, in lowercase beside
+  title-case labels like ``"Attribution"`` and its siblings. That is one
+  model spelling one relation two ways, not two independent implementations
+  disagreeing -- the case this suite's "keep every disagreement" rule (see
+  the top of this docstring) is actually about -- and left uncombined it
+  would count the same relation twice under two keys and inflate
+  ``discourse.coherence_rst_relation_family_entropy``. The exact, uncombined
+  spellings actually observed are still kept, in
+  ``distribution["relation_raw_label_counts"]``, so nothing is hidden; only
+  the counted-and-compared table is normalized.
 
 Still deferred - each of the following was actually installed and run against
 real text in this environment this pass, not assumed unavailable; the
@@ -283,13 +329,21 @@ MIN_SAMPLE_PARAGRAPH_PAIRS = 4
 MIN_SAMPLE_PARAGRAPHS = 5
 MIN_SAMPLE_WORDS = 200
 MIN_SAMPLE_GRAPH_NODES = 3
-# The RST channel's unit is "sampled passages" (tree depth, segment length)
-# or "internal nodes across the sample" (nuclearity, relation entropy), never
-# "sentences in the document" - a handful of sampled trees is genuinely all
-# there is, by design, so these floors are deliberately low rather than a
-# copy of MIN_SAMPLE's whole-document expectation.
-MIN_SAMPLE_RST_PASSAGES = 3
-MIN_SAMPLE_RST_NODES = 5
+# Every RST finding's sample_size/min_sample pair is passages PARSED vs.
+# passages the deterministic sample called for (coh.sample_rst_passages's
+# own passages_sampled, after the rst_max_sentences cap - never the raw
+# rst_passages config value, since that cap is a deliberate, reproducible
+# reduction, not a shortfall). This is not a statistical-power floor the way
+# MIN_SAMPLE is for other metrics; it exists so a sample the rst_max_seconds
+# wall-clock cap cut short (sample_size < min_sample) is reported as
+# insufficient_data and withheld from corpus comparison by grade.py's own
+# comparator (see _finding_result/StatsComparator.apply), while a sample
+# that finished exactly as planned (sample_size == min_sample) compares
+# normally - regardless of how many passages either number actually is.
+# Without this, identical input and config could score differently, and be
+# compared differently against a reference corpus, purely because of how
+# busy the machine was when it ran, which would defeat corpus comparison
+# entirely.
 
 # features.coreference, features.lexical_wordnet and features.rst are NOT in
 # this default set of "on unless disabled" groups, even though every other
@@ -1188,7 +1242,7 @@ def _rst(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[str
     num_passages = int(option(config, "rst_passages", 8))
     passage_sentences = int(option(config, "rst_passage_sentences", 6))
     max_sentences = int(option(config, "rst_max_sentences", 60))
-    max_seconds = float(option(config, "rst_max_seconds", 90.0))
+    max_seconds = float(option(config, "rst_max_seconds", 420.0))
     seed = int(option(config, "rst_seed", 0))
 
     summaries, settings, note = analysis.memo(
@@ -1199,10 +1253,20 @@ def _rst(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[str
         return [unavailable(metric_id, name, note or "RST parsing produced no usable tree",
                            family=FAMILY) for metric_id, name in ids]
 
+    # sample_size/min_sample for every RST finding below are passages PARSED
+    # vs. passages the deterministic sample called for (never the raw
+    # rst_passages config value - see the comment above DEFAULT_FEATURES).
+    # A sample the rst_max_seconds cap cut short (parsed < sampled) is
+    # reported insufficient_data and withheld from corpus comparison by
+    # grade.py's own comparator; a sample that finished as planned compares
+    # normally, regardless of how many passages either number actually is.
+    passages_parsed = len(summaries)
+    passages_sampled = settings.get("passages_sampled", passages_parsed)
+
     depth_id, depth_name = depth_id_name
     depths = [item["depth"] for item in summaries]
     depth_finding = shape(depth_id, depth_name, depths, "levels", family=FAMILY,
-                          min_sample=MIN_SAMPLE_RST_PASSAGES,
+                          min_sample=passages_sampled,
                           evidence=[{"start_sentence": item["start_sentence"],
                                     "end_sentence": item["end_sentence"], "depth": item["depth"],
                                     "leaf_count": item["leaf_count"]}
@@ -1213,18 +1277,29 @@ def _rst(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[str
         "mean_leaf_count_per_passage": sum(leaf_counts) / len(leaf_counts),
     }
     depth_finding["warning"] = note
+    # shape()'s own sample_size (count of depths) already equals
+    # passages_parsed one-to-one (one depth per parsed passage); set
+    # explicitly regardless so this is never an accident of shape()'s
+    # internals.
+    depth_finding["sample_size"] = passages_parsed
 
     seg_id, seg_name = seg_id_name
     leaf_word_counts = [count for item in summaries for count in item["leaf_word_counts"]]
     if leaf_word_counts:
         seg_finding = shape(seg_id, seg_name, leaf_word_counts, "words", family=FAMILY,
-                            min_sample=MIN_SAMPLE_RST_NODES)[0]
-        seg_finding["distribution"] = {**settings, **(seg_finding["distribution"] or {})}
+                            min_sample=passages_sampled)[0]
+        seg_finding["distribution"] = {**settings, **(seg_finding["distribution"] or {}),
+                                       "edus_sampled": len(leaf_word_counts)}
         seg_finding["warning"] = note
     else:
-        seg_finding = finding(seg_id, seg_name, None, "words", family=FAMILY, sample_size=0,
-                              min_sample=MIN_SAMPLE_RST_NODES, distribution=dict(settings),
+        seg_finding = finding(seg_id, seg_name, None, "words", family=FAMILY,
+                              min_sample=passages_sampled,
+                              distribution={**settings, "edus_sampled": 0},
                               warning=f"{note}; no elementary discourse unit had recoverable text")
+    # This finding's natural unit is EDUs, not passages (recorded above as
+    # edus_sampled); sample_size/min_sample are still passage-based, like
+    # every other RST finding, for the reason explained above.
+    seg_finding["sample_size"] = passages_parsed
 
     nuc_id, nuc_name = nuc_id_name
     nuclearity_counts: Counter = Counter()
@@ -1235,29 +1310,44 @@ def _rst(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[str
         if total_nuc else {}
     nuc_finding = finding(
         nuc_id, nuc_name, shares.get("NN", 0.0) if total_nuc else None, "%", family=FAMILY,
-        sample_size=total_nuc, min_sample=MIN_SAMPLE_RST_NODES,
+        sample_size=passages_parsed, min_sample=passages_sampled,
         distribution={**settings, "nuclearity_counts": dict(nuclearity_counts),
                      "nuclearity_share_percent": shares, "internal_nodes_sampled": total_nuc},
         warning=note if total_nuc else f"{note}; no internal (non-leaf) RST node to classify")
 
     rel_id, rel_name = rel_id_name
+    # Counted on a case-normalized key: this checkpoint emits at least one
+    # relation ('same-unit') in lowercase beside title-case labels like
+    # 'Attribution', and that is one model spelling one relation two ways,
+    # not two independent implementations disagreeing - the latter is what
+    # this suite's "keep every disagreement" rule is about (see the module
+    # docstring). Left uncombined, entropy would count the same relation
+    # twice under different keys and read too high. relation_raw_label_counts
+    # keeps the exact, uncombined spellings actually observed, so nothing is
+    # hidden - only entropy and the primary distribution are normalized.
     relation_counts: Counter = Counter()
+    raw_relation_counts: Counter = Counter()
     for item in summaries:
         relation_counts.update(item["relation_counts"])
+        raw_relation_counts.update(item["raw_relation_counts"])
     total_rel = sum(relation_counts.values())
     entropy = coh.entropy_of_counts(relation_counts) if total_rel else None
     rel_finding = finding(
-        rel_id, rel_name, entropy, "bits", family=FAMILY, sample_size=total_rel,
-        min_sample=MIN_SAMPLE_RST_NODES, sample_size_sensitive=True,
+        rel_id, rel_name, entropy, "bits", family=FAMILY, sample_size=passages_parsed,
+        min_sample=passages_sampled, sample_size_sensitive=True,
         distribution={
             **settings, "relation_counts": dict(relation_counts),
+            "relation_raw_label_counts": dict(raw_relation_counts),
+            "relation_labels_sampled": total_rel,
             "relation_rate_percent": ({key: 100.0 * count / total_rel
                                        for key, count in relation_counts.items()}
                                       if total_rel else {}),
             "relation_families_note": "the rstdt checkpoint predicts RST-DT's coarse relation "
                                       "classes directly (confirmed against this module's worked "
                                       "example), so this distribution already is a family-level "
-                                      "breakdown, not a fine-grained relation-sense inventory",
+                                      "breakdown, not a fine-grained relation-sense inventory. "
+                                      "Relation labels are counted case-insensitively (see "
+                                      "relation_raw_label_counts for the exact spellings seen).",
         },
         evidence=[{"relation": relation, "count": count}
                  for relation, count in relation_counts.most_common(20)],

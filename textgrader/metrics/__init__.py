@@ -251,7 +251,7 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "rst_passages": 8,
               "rst_passage_sentences": 6,
               "rst_max_sentences": 60,
-              "rst_max_seconds": 90.0,
+              "rst_max_seconds": 420.0,
               "rst_seed": 0,
               "connective_max_reported": 25,
               "permutations": 50,
