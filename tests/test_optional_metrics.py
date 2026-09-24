@@ -217,6 +217,9 @@ def test_an_optional_import_that_prints_cannot_corrupt_stdout(monkeypatch, capsy
     # when imported (taaled does) must not put text ahead of the JSON.
     (tmp_path / "noisy_optional_pkg.py").write_text("print('noisy import banner')\nVALUE = 1\n")
     monkeypatch.syspath_prepend(str(tmp_path))
+    # The fake package is stdlib-only, so it is importable even in the
+    # degraded run that disables every real optional package.
+    monkeypatch.delenv("TEXTGRADER_DISABLE_OPTIONAL", raising=False)
     monkeypatch.setitem(optional.PACKAGES, "noisy_optional_pkg",
                         ("noisy_optional_pkg", "pip install nothing"))
     optional.reset_cache()
