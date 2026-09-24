@@ -634,6 +634,46 @@
       "pystylometry_max_reference_documents": 5,
       "pystylometry_max_bytes": 200000,
       "pystylometry_mfw": 200
+    },
+    "anomaly_suite": {
+      "enabled": false,
+      "_features_requires": {
+        "sklearn_detectors": "'isolation_forest', 'lof', 'one_class_svm', 'elliptic_envelope', 'mahalanobis', 'knn', 'pca' and 'gmm' all need scikit-learn (pip install scikit-learn). Without it every one of those findings reports 'unavailable' naming scikit-learn; the pyod- and hdbscan-backed detectors are unaffected.",
+        "pyod_detectors": "'hbos', 'ecod', 'copod', 'abod', 'kde' and 'sos' need PyOD (pip install pyod). Without it those six findings report 'unavailable' naming PyOD; every scikit-learn/hdbscan detector still runs. 'sos' can also report 'unavailable' on its own if the reference corpus is too small/degenerate for its affinity computation to stay finite, independent of whether PyOD is installed.",
+        "hdbscan": "needs the hdbscan package (pip install hdbscan). Without it 'hdbscan' reports 'unavailable' naming the package; it also reports 'unavailable' (naming this instead) when the reference corpus's feature space has no real density-cluster structure at hdbscan_min_cluster_size, which is a legitimate outcome, not a bug -- see the module docstring."
+      },
+      "features": {
+        "isolation_forest": true,
+        "lof": true,
+        "one_class_svm": true,
+        "elliptic_envelope": true,
+        "mahalanobis": true,
+        "knn": true,
+        "pca": true,
+        "gmm": true,
+        "hbos": true,
+        "ecod": true,
+        "copod": true,
+        "abod": true,
+        "kde": true,
+        "sos": true,
+        "hdbscan": true,
+        "consensus_count": true,
+        "disagreement": true
+      },
+      "columns": null,
+      "min_coverage": 0.7,
+      "max_features": 20,
+      "min_corpus_documents": 20,
+      "seed": 42,
+      "loo_reference_size": 15,
+      "consensus_percentile": 90.0,
+      "evidence_features": 5,
+      "isolation_forest_n_estimators": 50,
+      "one_class_svm_nu": 0.1,
+      "pca_components": null,
+      "gmm_components": 2,
+      "hdbscan_min_cluster_size": 5
     }
   },
   "allow_external_metric_commands": false,

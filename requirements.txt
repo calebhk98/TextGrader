@@ -183,3 +183,16 @@ pystylometry>=1.4
 # here: they pull in torch, so they live in requirements-embeddings.txt beside
 # sentence-transformers for the same reason.  Every channel that wants one is
 # off by default and reports "unavailable" with an install hint without it.
+
+# A real, independent anomaly/outlier-detection library for
+# anomaly_suite's HBOS/ECOD/COPOD/ABOD/KDE/SOS channels, which scikit-learn
+# does not implement.  Lightweight (numba/scikit-learn/scipy, already
+# installed above); confirmed to be the genuine "Python Outlier Detection"
+# project (not a same-named unrelated package) before use.
+pyod>=2.0
+
+# Density-based clustering for anomaly_suite's GLOSH outlier-score channel.
+# Off by default, torch-free, and degrades to "unavailable" (naming either
+# the missing package or a reference corpus with no real cluster structure to
+# score against) without it.
+hdbscan>=0.8

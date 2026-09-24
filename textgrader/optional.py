@@ -171,6 +171,17 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # load_raw_text() path, which this codebase never calls (it tokenizes its
     # own sentences and calls load_token_list() instead).
     "nrclex": ("nrclex", "pip install NRCLex"),
+    # A real, independent anomaly/outlier-detection library (61 detectors
+    # spanning tabular/time-series/graph/text/image/audio data as of writing)
+    # for textgrader.metrics.anomaly_suite's HBOS/ECOD/COPOD/ABOD/KDE/SOS
+    # channels, which scikit-learn does not implement. Confirmed via
+    # `pip show pyod` before use, per this project's rule that a package's
+    # name is not evidence of what it does.
+    "pyod": ("pyod", "pip install pyod"),
+    # Density-based clustering (McInnes & Healy) for anomaly_suite's GLOSH
+    # outlier-score channel. Confirmed via `pip show hdbscan` before use, same
+    # reason as pyod above.
+    "hdbscan": ("hdbscan", "pip install hdbscan"),
 }
 
 _lock = threading.Lock()
