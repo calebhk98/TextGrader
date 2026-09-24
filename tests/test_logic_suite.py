@@ -31,6 +31,15 @@ requires_dateutil = pytest.mark.skipif(not DATEUTIL_READY, reason="python-dateut
 FASTCOREF_READY = optional.have("fastcoref")
 requires_fastcoref = pytest.mark.skipif(not FASTCOREF_READY, reason="fastcoref not available")
 
+PROPBANK_READY = prop_lib.load_propbank()[0] is not None
+requires_propbank = pytest.mark.skipif(not PROPBANK_READY, reason="nltk propbank corpus data not available")
+
+VERBNET_READY = prop_lib.load_verbnet()[0] is not None
+requires_verbnet = pytest.mark.skipif(not VERBNET_READY, reason="nltk verbnet corpus data not available")
+
+FRAMENET_READY = prop_lib.load_framenet()[0] is not None
+requires_framenet = pytest.mark.skipif(not FRAMENET_READY, reason="nltk framenet corpus data not available")
+
 
 def _findings(text, config=None, **doc_kwargs):
     analysis = DocumentAnalysis.from_text(text, comparison_unit="book", **doc_kwargs)
@@ -53,13 +62,15 @@ def test_registered_and_off_by_default():
     for name in ("negation_and_quantifiers", "connective_relations", "propositions",
                 "modal_argument_position", "nli_entailment", "coreference_resolution",
                 "lexical_opposition", "temporal_ordering", "semantic_role_labeling",
-                "relation_extraction", "argument_mining"):
+                "relation_extraction", "argument_mining", "propbank_argument_structure",
+                "verbnet_class_consistency", "framenet_frame_consistency"):
         assert name in spec.defaults["features"], name
     # Every model-backed group must default to off in the registry AND in
     # config.json -- this is the gate the module docstring calls out by name.
     for name in ("nli_entailment", "coreference_resolution", "lexical_opposition",
                 "temporal_ordering", "semantic_role_labeling", "relation_extraction",
-                "argument_mining"):
+                "argument_mining", "propbank_argument_structure", "verbnet_class_consistency",
+                "framenet_frame_consistency"):
         assert spec.defaults["features"][name] is False, name
 
 
@@ -339,6 +350,24 @@ def test_default_config_never_loads_nli_or_coref_model(monkeypatch):
     logic_suite.measure(DocumentAnalysis.from_text(text, comparison_unit="book"))
 
 
+def test_default_config_never_touches_propbank_verbnet_or_framenet(monkeypatch):
+    """The three corpus-lookup channels this pass added need no transformer or
+    fastcoref model, but must be exactly as inert under a default config as
+    the five loaders above -- a book-length FrameNet lemma-index build (see
+    that feature's own cost note) is not something a default config should
+    ever pay for either."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("propbank/verbnet/framenet must never be touched under default config")
+
+    monkeypatch.setattr(prop_lib, "load_propbank", boom)
+    monkeypatch.setattr(prop_lib, "load_verbnet", boom)
+    monkeypatch.setattr(prop_lib, "load_framenet", boom)
+    text = ("Alice was tired. She was not tired at all, though. Therefore the sign "
+           "outside is misleading, however nobody read it.")
+    logic_suite.measure(DocumentAnalysis.from_text(text, comparison_unit="book"))
+
+
 def test_nli_entailment_off_by_default_when_features_key_is_absent():
     """A ``features`` mapping that only sets an unrelated key must not turn NLI on.
 
@@ -469,6 +498,88 @@ def test_wordnet_channel_reports_unavailable_without_nltk(monkeypatch):
             assert "nltk" in found[metric_id]["warning"]
     finally:
         optional.reset_cache()
+
+
+# ------------------------------------------------- VerbNet / FrameNet consistency
+#
+# The separation test the task calls for: a passage where the same two
+# participants are described by two verbs from unrelated semantic classes
+# ("built"/"destroyed" the tower) must score higher than one where they are
+# described by two verbs that share a class ("opened"/"closed" the door) --
+# hand-checked against the real corpora, not assumed (see
+# textgrader/propositions.py's own worked-example comment).
+
+def test_verbnet_class_consistency_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["verbnet_class_consistency"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_framenet_frame_consistency_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["framenet_frame_consistency"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_verbnet_and_framenet_report_unavailable_without_nltk(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "nltk")
+    optional.reset_cache()
+    try:
+        found = _findings("The workers built the tower. The workers destroyed the tower.",
+                          config={"features": {"verbnet_class_consistency": True,
+                                              "framenet_frame_consistency": True}})
+        for feature in ("verbnet_class_consistency", "framenet_frame_consistency"):
+            for metric_id in logic_suite.FEATURE_METRICS[feature]:
+                assert found[metric_id]["value"] is None
+                assert "nltk" in found[metric_id]["warning"]
+    finally:
+        optional.reset_cache()
+
+
+@requires_spacy
+@requires_verbnet
+@requires_framenet
+def test_verbnet_and_framenet_separate_incompatible_from_compatible_verb_pairs():
+    """The headline separation test: build/destroy (no shared VerbNet class,
+    no shared FrameNet frame) must score higher than open/close (one shared
+    class, one shared frame) for the exact same two participants."""
+
+    config = {"features": {"verbnet_class_consistency": True, "framenet_frame_consistency": True}}
+    incompatible = _findings(
+        "The workers built the tower. Later, the workers destroyed the tower.", config=config)
+    compatible = _findings(
+        "Alice opened the door. Later, Alice closed the door.", config=config)
+
+    vn_incompatible = incompatible["discourse.logic_verbnet_class_conflict_candidates"]
+    vn_compatible = compatible["discourse.logic_verbnet_class_conflict_candidates"]
+    assert vn_incompatible["distribution"]["candidate_count"] == 1
+    assert vn_compatible["distribution"]["candidate_count"] == 0
+    assert (vn_incompatible["value"] or 0) > (vn_compatible["value"] or 0)
+    row = vn_incompatible["evidence"][0]
+    assert row["verb_a"] == "build" and row["verb_b"] == "destroy"
+    assert not (set(row["verbnet_classes_a"]) & set(row["verbnet_classes_b"]))
+    assert "unjudgeable" in vn_incompatible["warning"]
+
+    fn_incompatible = incompatible["discourse.logic_framenet_frame_conflict_candidates"]
+    fn_compatible = compatible["discourse.logic_framenet_frame_conflict_candidates"]
+    assert fn_incompatible["distribution"]["candidate_count"] == 1
+    assert fn_compatible["distribution"]["candidate_count"] == 0
+    assert (fn_incompatible["value"] or 0) > (fn_compatible["value"] or 0)
+
+
+@requires_spacy
+@requires_verbnet
+def test_verbnet_class_consistency_needs_a_non_pronoun_object():
+    text = "She saw it. He broke it."
+    found = _findings(text, config={"features": {"verbnet_class_consistency": True}})
+    item = found["discourse.logic_verbnet_class_conflict_candidates"]
+    # "it" is a pronoun object for both: participant_key excludes it, so
+    # there is nothing to compare -- never a false match on a shared pronoun.
+    assert item["distribution"]["candidate_count"] == 0
 
 
 # ----------------------------------------------------------- temporal ordering
@@ -728,6 +839,79 @@ def test_srl_against_a_real_model_finds_a_thin_passive_frame():
     consistency = found["discourse.logic_srl_role_pattern_consistency"]
     assert consistency["value"] is None
     assert "two or more" in consistency["warning"]
+
+
+# ---------------------------------------------- PropBank roleset argument structure
+
+def test_propbank_argument_structure_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["propbank_argument_structure"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_propbank_argument_structure_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        found = _findings("He gave.", config={"features": {"propbank_argument_structure": True}})
+        item = found["discourse.logic_propbank_argument_omission_rate"]
+        assert item["value"] is None
+        assert "transformers" in item["warning"] or "unavailable" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+def test_propbank_argument_structure_reports_unavailable_without_propbank_corpus(monkeypatch):
+    """A missing PropBank corpus must not be conflated with a missing SRL
+    model: the reason must name the corpus, and this must not require a real
+    SRL run at all -- the corpus check runs before the (far more expensive)
+    SRL model is ever loaded, so this degrades instantly even with spaCy and
+    transformers both unavailable (the loader is monkeypatched directly, the
+    same way other corpus-missing paths in this file are simulated)."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("the SRL model must never load when the PropBank corpus is missing")
+
+    monkeypatch.setattr(prop_lib, "load_propbank",
+                        lambda: (None, "nltk propbank corpus data unavailable; run "
+                                       "python -m nltk.downloader propbank"))
+    monkeypatch.setattr(prop_lib, "_load_srl_model", boom)
+    found = _findings("The door was locked.",
+                      config={"features": {"propbank_argument_structure": True}})
+    item = found["discourse.logic_propbank_argument_omission_rate"]
+    assert item["value"] is None
+    assert "propbank" in item["warning"]
+
+
+@requires_spacy
+@requires_transformers
+@requires_propbank
+def test_propbank_argument_omission_separates_intact_from_systematically_dropped_arguments():
+    """The task's own worked example: "He gave." / "She put." / "They told."
+    -- systematically dropped core arguments -- must score a higher omission
+    rate than the same three predicates used with their arguments intact.
+    Both documents are scored in the same test so the SRL model loads once.
+    """
+
+    config = {"features": {"propbank_argument_structure": True}, "srl_max_predicates": 3}
+    intact = _findings(
+        "He gave her the book. She put the vase on the table. They told him the news.",
+        config=config)
+    dropped = _findings("He gave. She put. They told.", config=config)
+
+    intact_item = intact["discourse.logic_propbank_argument_omission_rate"]
+    dropped_item = dropped["discourse.logic_propbank_argument_omission_rate"]
+    assert intact_item["sample_size"] == 3
+    assert dropped_item["sample_size"] == 3
+    assert intact_item["value"] == pytest.approx(0.0)
+    assert dropped_item["value"] == pytest.approx(100.0)
+    assert dropped_item["value"] > intact_item["value"]
+    for row in dropped_item["evidence"]:
+        assert row["missing_core_roles"]
+    assert "not real word-sense disambiguation" in dropped_item["warning"]
+    assert "stylistic ellipsis" in dropped_item["warning"]
 
 
 # ------------------------------------------------- closed-schema relation extraction

@@ -85,6 +85,28 @@ probably not a real conflict despite :func:`attribute_conflict` calling them
 just the one used in this sentence, so a false positive from an unusual sense
 is possible and each finding built from these says so.
 
+**PropBank, VerbNet and FrameNet, now available.** A later pass than
+WordNet's found that ``nltk`` also ships downloadable readers and corpus data
+for all three (``propbank``, ``verbnet``, ``framenet_v17`` -- three separate
+downloads), the same way it ships WordNet's, closing what
+:mod:`textgrader.metrics.logic_suite` used to defer as "a real, additional
+feature a future pass could build." Each is used for a different question
+than WordNet answers: :func:`propbank_best_roleset` reads a specific verb
+SENSE's declared PropBank argument structure (which numbered arguments
+``give.01`` vs. ``give.07`` actually calls for) to turn
+:func:`extract_srl_frames`'s "which ARG-N slots did the model fill" into
+"which did this predicate's own roleset expect but not get" -- a heuristic
+sense match, not gold word-sense disambiguation, documented in that function's
+own docstring. :func:`verbnet_class_conflict` and :func:`framenet_frame_conflict`
+instead ask a class-/frame-level question about TWO DIFFERENT verbs sharing
+the SAME two participants (:func:`participant_key`): whether they belong to
+any shared VerbNet class or evoke any shared FrameNet frame at all, a
+"the same event described in incompatible terms" candidate signal neither
+WordNet's lexical antonymy nor a shallow dependency-parse subject/object split
+can give. See the section comment above each pair for the worked
+build/destroy vs. open/close examples that motivated this design, hand-run
+against the real corpora, not assumed from either resource's documentation.
+
 Extraction is bounded by ``cap`` (propositions kept) and runs over
 :meth:`DocumentAnalysis.spacy_sents_by_channel`, the one shared parse, so
 enabling this alongside ``tense_consistency`` or any other ``parse``-cost
@@ -99,7 +121,7 @@ import re
 from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from .document import DocumentAnalysis
 from .optional import on_reset, require, shim_fastcoref_transformers
@@ -374,18 +396,28 @@ class PairScan:
 
 def bucketed_pairs(propositions: list[Proposition], *, window_sentences: int,
                    max_pairs: int, max_comparisons: int,
-                   test: Callable[[Proposition, Proposition], str | None]) -> PairScan:
-    """Candidate pairs sharing a subject and predicate, scored by ``test``.
+                   test: Callable[[Proposition, Proposition], str | None],
+                   key: Callable[[Proposition], tuple[str, str] | None] | None = None) -> PairScan:
+    """Candidate pairs sharing a bucket key, scored by ``test``.
 
     This is the one candidate-pair generator behind every contradiction-shaped
-    metric in ``logic_suite``. Propositions are bucketed by
+    metric in ``logic_suite``. By default (``key=None``, every caller before
+    the VerbNet/FrameNet cross-checks below) propositions are bucketed by
     ``(subject_key, predicate_lemma)`` -- the shared-entity-and-topic signal
     the spec asks for -- so two sentences are ever compared only if they
-    already agree on who is doing what. Within a bucket, a pair is scanned
-    only if the two sentences are within ``window_sentences`` of each other or
-    share a paragraph; ``test(a, b)`` then decides, from whatever the caller
-    considers a conflict (opposite polarity, a differing value, ...), whether
-    it is worth keeping and what to call it.
+    already agree on who is doing what. A caller that instead wants "the same
+    participants, described by a different verb" (:func:`verbnet_class_conflict`,
+    :func:`framenet_frame_conflict`) passes its own ``key`` -- see
+    :func:`participant_key` -- rather than this function growing a second,
+    parallel candidate generator for a bucketing rule that differs only in
+    which fields of a ``Proposition`` it groups by. A proposition whose ``key``
+    returns ``None`` (the default rule's pronoun-subject exclusion, or a
+    caller's own reason to skip it) is left out of every bucket, exactly as
+    before. Within a bucket, a pair is scanned only if the two sentences are
+    within ``window_sentences`` of each other or share a paragraph; ``test(a,
+    b)`` then decides, from whatever the caller considers a conflict (opposite
+    polarity, a differing value, disjoint lexical-resource classes, ...),
+    whether it is worth keeping and what to call it.
 
     Three independent caps bound the cost on a book: ``_BUCKET_SAMPLE_CAP``
     (module-level, not configurable) limits any one bucket before pairing
@@ -420,7 +452,11 @@ def bucketed_pairs(propositions: list[Proposition], *, window_sentences: int,
 
     buckets: dict[tuple[str, str], list[Proposition]] = defaultdict(list)
     for prop in propositions:
-        if prop.subject_key:
+        if key is not None:
+            bucket_key = key(prop)
+            if bucket_key is not None:
+                buckets[bucket_key].append(prop)
+        elif prop.subject_key:
             buckets[(prop.subject_key, prop.predicate_lemma)].append(prop)
 
     ordered_buckets = sorted(buckets.values(), key=len)
@@ -606,6 +642,308 @@ def wordnet_hypernym_related(a: Proposition, b: Proposition) -> bool:
             if synset_a.name() in ancestors_b:
                 return True
     return False
+
+
+# ------------------------------------------------- shared-participant bucketing
+#
+# The default ``bucketed_pairs`` key ((subject_key, predicate_lemma)) asks
+# "does this pair agree on who is doing what". VerbNet's and FrameNet's checks
+# below ask almost the opposite question -- "do two DIFFERENT verbs describing
+# the SAME participants belong to unrelated semantic classes/frames" -- so they
+# need to bucket by (subject_key, object_key) instead, with neither a pronoun
+# subject (already excluded upstream by an empty ``subject_key``; see
+# :func:`_proposition`) nor a pronoun OBJECT allowed to stand in for a real
+# participant: two sentences that merely share "it" as their object are not
+# shown to share a real-world referent, the identical shallow-key limitation
+# :func:`_normalize_key` already has for a directly-mentioned subject.
+
+def participant_key(prop: Proposition) -> tuple[str, str] | None:
+    """Bucket key for "same participants, different verb" cross-checks.
+
+    ``None`` (excluded from every bucket) when either the subject or the
+    object is missing, or when the object is a bare pronoun.
+    """
+
+    if not prop.subject_key or not prop.object_key:
+        return None
+    if prop.object_text and prop.object_text.strip().lower() in _PRONOUN_WORDS:
+        return None
+    return (prop.subject_key, prop.object_key)
+
+
+# ----------------------------------------------------- PropBank / VerbNet / FrameNet
+#
+# All three ride on the same ``nltk`` package and the same lazy-corpus-check
+# pattern :func:`load_wordnet` already established: importing ``nltk`` never
+# fails, so each resource's own downloaded corpus data (``propbank``,
+# ``verbnet``, ``framenet_v17`` -- three separate ``python -m nltk.downloader
+# <name>`` downloads, none satisfied by another) is only known to be present
+# once actually touched, and each loader below does that once, eagerly, and
+# caches whichever answer it gets. Off by default in
+# :mod:`textgrader.metrics.logic_suite` regardless of cost, like every other
+# group added since the module's first pass (see that module's docstring).
+#
+# **PropBank** (:func:`load_propbank`, :func:`propbank_best_roleset`) is used
+# for a genuinely different question than :func:`extract_srl_frames` answers
+# on its own: that function's ``srl_core_roles`` only reports which ARG-N
+# slots a model *filled*; nothing in it consults what a specific verb SENSE's
+# roleset actually declares. ``propbank_best_roleset`` closes that gap: for one
+# SRL frame's filled roles, it picks whichever of that predicate's PropBank
+# rolesets (``give.01``, ``give.02``, ...) shares the most numbered arguments
+# with what was filled, and returns that roleset's own declared numbered
+# arguments -- the thing :mod:`textgrader.metrics.logic_suite`'s
+# ``propbank_argument_structure`` feature actually needs to call an argument
+# "expected but omitted" rather than merely "not filled". This is a heuristic
+# match, not real word-sense disambiguation: no gold sense tag is available,
+# so the roleset that best explains what the model already filled is treated
+# as this occurrence's reading, which is circular by construction whenever the
+# omission itself is what changes which roleset scores highest -- the
+# logic_suite finding built from this says so, in its own warning, not just
+# here.
+#
+# **VerbNet** (:func:`load_verbnet`, :func:`verbnet_class_conflict`) and
+# **FrameNet** (:func:`load_framenet`, :func:`framenet_frame_conflict`) answer
+# a class-/frame-level question neither PropBank nor a shallow dependency
+# parse can: whether two DIFFERENT verbs used for the SAME two participants
+# (:func:`participant_key`) belong to a shared semantic class (VerbNet) or
+# evoke a shared frame (FrameNet) at all. "The workers built the tower... the
+# workers destroyed the tower" shares no VerbNet class (``build-26.1-1`` vs.
+# ``destroy-44``) and no FrameNet frame (``Building`` vs. ``Destroying``,
+# ``Experiencer_obj``, ``Killing``) -- a genuine candidate worth a human's
+# attention. "She opened the door... she closed the door" shares a VerbNet
+# class (``other_cos-45.4``, "other change of state") and a FrameNet frame
+# (``Closure``) with its opposite-direction verb, so neither channel flags it,
+# which is itself informative: an ordinary, non-contradictory scene beat reads
+# as compatible to both resources without either one needing to know the two
+# verbs are antonyms. Every check here is `zero shared class/frame -> flag`;
+# it does not attempt to reason about WHY two classes are unrelated, and a verb
+# absent from a resource's inventory (``vn.classids``/``fn.frames_by_lemma``
+# both simply return empty for a word they do not cover, never raise) makes
+# that pair unjudgeable, not a conflict -- an absent lexical-resource edge is
+# never promoted to a contradiction, the same rule :func:`wordnet_antonym_conflict`
+# already follows.
+
+_PROPBANK_CACHE: dict[str, tuple[Any, str | None]] = {}
+_PROPBANK_ROLESET_CACHE: dict[str, list] = {}
+
+
+def _reset_propbank_cache() -> None:
+    _PROPBANK_CACHE.clear()
+    _PROPBANK_ROLESET_CACHE.clear()
+
+
+on_reset(_reset_propbank_cache)
+
+
+def load_propbank() -> tuple[Any, str | None]:
+    """``(propbank_module, None)`` or ``(None, reason)``.  Never raises."""
+
+    if "pb" in _PROPBANK_CACHE:
+        return _PROPBANK_CACHE["pb"]
+    module, reason = require("nltk")
+    if module is None:
+        _PROPBANK_CACHE["pb"] = (None, reason)
+        return _PROPBANK_CACHE["pb"]
+    try:
+        from nltk.corpus import propbank as pb
+        pb.rolesets("give")  # forces the corpus-data LookupError now, not on first real use
+        outcome: tuple[Any, str | None] = (pb, None)
+    except LookupError as exc:
+        outcome = (None, f"nltk propbank corpus data unavailable ({exc}); run "
+                         f"python -m nltk.downloader propbank")
+    except Exception as exc:  # pragma: no cover - unexpected nltk failure
+        outcome = (None, f"nltk propbank unavailable ({type(exc).__name__}: {exc})")
+    _PROPBANK_CACHE["pb"] = outcome
+    return outcome
+
+
+_ARG_NUMBER_RE = re.compile(r"^ARG-?(\d+)$", re.I)
+
+
+def arg_number(role_label: str) -> str | None:
+    match = _ARG_NUMBER_RE.match(role_label)
+    return match.group(1) if match else None
+
+
+def _roleset_core_roles(roleset: Any) -> frozenset[str]:
+    roles_el = roleset.find("roles")
+    if roles_el is None:
+        return frozenset()
+    return frozenset(role.get("n") for role in roles_el.findall("role")
+                     if (role.get("n") or "").isdigit())
+
+
+def propbank_best_roleset(pb_module: Any, predicate_lemma: str,
+                          filled_roles: Iterable[str]) -> tuple[str, frozenset[str]] | None:
+    """The PropBank roleset id and its declared numbered core roles that best
+    explain one SRL frame's already-filled ``roles`` -- or ``None`` when
+    ``predicate_lemma`` has no PropBank roleset at all (an unjudgeable
+    predicate, not a zero-argument one).
+
+    "Best" is whichever roleset's own declared numbered arguments (``role
+    n="0"``, ``n="1"``, ...) overlap the most with ``filled_roles``' argument
+    numbers; a tie keeps the lowest-numbered roleset id (``give.01`` over
+    ``give.02``), matching PropBank's own convention that ``.01`` is usually a
+    verb's primary sense. See this section's module-level note above for why
+    this is a heuristic reading, never a verified word-sense annotation.
+    """
+
+    rolesets = _PROPBANK_ROLESET_CACHE.get(predicate_lemma)
+    if rolesets is None:
+        try:
+            rolesets = list(pb_module.rolesets(predicate_lemma))
+        except Exception:  # pragma: no cover - unexpected nltk failure
+            rolesets = []
+        _PROPBANK_ROLESET_CACHE[predicate_lemma] = rolesets
+    if not rolesets:
+        return None
+    filled_numbers = frozenset(number for number in (arg_number(role) for role in filled_roles)
+                               if number is not None)
+
+    def sort_key(roleset: Any) -> tuple[int, int]:
+        overlap = len(_roleset_core_roles(roleset) & filled_numbers)
+        sense = roleset.get("id", "").rsplit(".", 1)[-1]
+        return (overlap, -int(sense) if sense.isdigit() else 0)
+
+    best = max(rolesets, key=sort_key)
+    return best.get("id", predicate_lemma), _roleset_core_roles(best)
+
+
+_VERBNET_CACHE: dict[str, tuple[Any, str | None]] = {}
+_VERBNET_CLASS_CACHE: dict[str, frozenset[str]] = {}
+
+
+def _reset_verbnet_cache() -> None:
+    _VERBNET_CACHE.clear()
+    _VERBNET_CLASS_CACHE.clear()
+
+
+on_reset(_reset_verbnet_cache)
+
+
+def load_verbnet() -> tuple[Any, str | None]:
+    """``(verbnet_module, None)`` or ``(None, reason)``.  Never raises."""
+
+    if "vn" in _VERBNET_CACHE:
+        return _VERBNET_CACHE["vn"]
+    module, reason = require("nltk")
+    if module is None:
+        _VERBNET_CACHE["vn"] = (None, reason)
+        return _VERBNET_CACHE["vn"]
+    try:
+        from nltk.corpus import verbnet as vn
+        vn.classids("give")  # forces the corpus-data LookupError now, not on first real use
+        outcome: tuple[Any, str | None] = (vn, None)
+    except LookupError as exc:
+        outcome = (None, f"nltk verbnet corpus data unavailable ({exc}); run "
+                         f"python -m nltk.downloader verbnet")
+    except Exception as exc:  # pragma: no cover - unexpected nltk failure
+        outcome = (None, f"nltk verbnet unavailable ({type(exc).__name__}: {exc})")
+    _VERBNET_CACHE["vn"] = outcome
+    return outcome
+
+
+def verbnet_classes(vn_module: Any, predicate_lemma: str) -> frozenset[str]:
+    cached = _VERBNET_CLASS_CACHE.get(predicate_lemma)
+    if cached is not None:
+        return cached
+    try:
+        classes = frozenset(vn_module.classids(predicate_lemma))
+    except Exception:  # pragma: no cover - unexpected nltk failure
+        classes = frozenset()
+    _VERBNET_CLASS_CACHE[predicate_lemma] = classes
+    return classes
+
+
+def verbnet_class_conflict(a: Proposition, b: Proposition) -> str | None:
+    """Same participants (:func:`participant_key`), two verbs with zero VerbNet
+    class in common. ``None`` -- not a conflict -- whenever either verb is
+    absent from VerbNet's inventory, the two lemmas are identical, or they
+    share at least one class."""
+
+    if a.predicate_lemma == b.predicate_lemma:
+        return None
+    vn_module, _reason = load_verbnet()
+    if vn_module is None:
+        return None
+    classes_a = verbnet_classes(vn_module, a.predicate_lemma)
+    classes_b = verbnet_classes(vn_module, b.predicate_lemma)
+    if not classes_a or not classes_b:
+        return None
+    return None if classes_a & classes_b else "class_mismatch"
+
+
+_FRAMENET_CACHE: dict[str, tuple[Any, str | None]] = {}
+_FRAMENET_FRAME_CACHE: dict[str, frozenset[str]] = {}
+
+
+def _reset_framenet_cache() -> None:
+    _FRAMENET_CACHE.clear()
+    _FRAMENET_FRAME_CACHE.clear()
+
+
+on_reset(_reset_framenet_cache)
+
+
+def load_framenet() -> tuple[Any, str | None]:
+    """``(framenet_module, None)`` or ``(None, reason)``.  Never raises.
+
+    The first successful lookup through the returned module (whichever caller
+    makes it first) costs several seconds -- ``nltk``'s FrameNet reader builds
+    an internal lemma index on first use, not at import time -- which is why
+    this loader itself only touches ``fn.frames_by_lemma`` once, here, rather
+    than at import time either; every later lookup in the same process is a
+    dict access.
+    """
+
+    if "fn" in _FRAMENET_CACHE:
+        return _FRAMENET_CACHE["fn"]
+    module, reason = require("nltk")
+    if module is None:
+        _FRAMENET_CACHE["fn"] = (None, reason)
+        return _FRAMENET_CACHE["fn"]
+    try:
+        from nltk.corpus import framenet as fn
+        fn.frames_by_lemma(r"^give\.v$")  # forces the corpus-data LookupError now, not on first real use
+        outcome: tuple[Any, str | None] = (fn, None)
+    except LookupError as exc:
+        outcome = (None, f"nltk framenet corpus data unavailable ({exc}); run "
+                         f"python -m nltk.downloader framenet_v17")
+    except Exception as exc:  # pragma: no cover - unexpected nltk failure
+        outcome = (None, f"nltk framenet unavailable ({type(exc).__name__}: {exc})")
+    _FRAMENET_CACHE["fn"] = outcome
+    return outcome
+
+
+def framenet_frames(fn_module: Any, predicate_lemma: str) -> frozenset[str]:
+    cached = _FRAMENET_FRAME_CACHE.get(predicate_lemma)
+    if cached is not None:
+        return cached
+    try:
+        pattern = f"^{re.escape(predicate_lemma)}\\.v$"
+        frames = frozenset(frame.name for frame in fn_module.frames_by_lemma(pattern))
+    except Exception:  # pragma: no cover - unexpected nltk failure
+        frames = frozenset()
+    _FRAMENET_FRAME_CACHE[predicate_lemma] = frames
+    return frames
+
+
+def framenet_frame_conflict(a: Proposition, b: Proposition) -> str | None:
+    """Same participants (:func:`participant_key`), two verbs evoking zero
+    FrameNet frame in common. ``None`` -- not a conflict -- whenever either
+    verb is absent from FrameNet's inventory, the two lemmas are identical, or
+    they share at least one frame."""
+
+    if a.predicate_lemma == b.predicate_lemma:
+        return None
+    fn_module, _reason = load_framenet()
+    if fn_module is None:
+        return None
+    frames_a = framenet_frames(fn_module, a.predicate_lemma)
+    frames_b = framenet_frames(fn_module, b.predicate_lemma)
+    if not frames_a or not frames_b:
+        return None
+    return None if frames_a & frames_b else "frame_mismatch"
 
 
 # --------------------------------------------------------------- coreference
@@ -1196,4 +1534,7 @@ def extract_relations(analysis: DocumentAnalysis, cap: int,
 __all__ = ["Proposition", "Extraction", "PairScan", "CorefResolution", "SRLFrame", "SRLExtraction",
           "Relation", "RelationExtraction", "extract", "bucketed_pairs", "negation_conflict",
           "attribute_conflict", "load_wordnet", "wordnet_antonym_conflict", "wordnet_hypernym_related",
-          "resolve_coreference", "srl_core_roles", "extract_srl_frames", "extract_relations"]
+          "resolve_coreference", "srl_core_roles", "extract_srl_frames", "extract_relations",
+          "load_propbank", "propbank_best_roleset", "arg_number", "load_verbnet",
+          "verbnet_class_conflict", "verbnet_classes", "load_framenet", "framenet_frame_conflict",
+          "framenet_frames", "participant_key"]

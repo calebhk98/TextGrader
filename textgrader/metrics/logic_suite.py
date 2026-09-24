@@ -95,9 +95,9 @@ hypotheticals, quoted falsehoods), so a high contradiction share is never
 reported as an error count. Every finding below says this in its name or its
 docstring, not just once here.
 
-Eleven independently switchable measurement groups, under ``features`` in this
-suite's config block. The first four were the original pass and default to
-*on*; the other seven each need an installed model or resource and default to
+Fourteen independently switchable measurement groups, under ``features`` in
+this suite's config block. The first four were the original pass and default
+to *on*; the other ten each need an installed model or resource and default to
 *off* regardless of their own cost (see "Gating"):
 
 ``negation_and_quantifiers`` (stdlib, cost ``fast``)
@@ -213,6 +213,51 @@ default)
     ``connective_relations``) is unchanged and kept under its own honest
     name -- see this docstring's opening section.
 
+``propbank_argument_structure`` (``transformers`` SRL + ``nltk`` PropBank
+corpus, off by default)
+    Cross-checks ``semantic_role_labeling``'s own SRL frames (re-extracted
+    through the same cached :func:`textgrader.propositions.extract_srl_frames`
+    call -- never a second model run when both features share the same
+    ``srl_model``/``srl_max_predicates``) against PropBank's own downloaded
+    frame files via :func:`textgrader.propositions.propbank_best_roleset`.
+    Where ``discourse.logic_srl_argument_omission_rate`` only asks "did the
+    model fill fewer than two role slots", this asks the more principled
+    version the task named: "did THIS predicate's own PropBank roleset
+    (``give.01``'s giver/thing-given/recipient, not a generic threshold)
+    expect an argument the model never filled" -- ``discourse.logic_
+    propbank_argument_omission_rate``. Which roleset applies is picked
+    heuristically (most numbered-argument overlap with what was already
+    filled), not from a gold sense tag, so a rarer sense can be missed; the
+    finding's own warning says so, and says a fragment or an elliptical line
+    of dialogue produces exactly the same pattern as a genuinely dropped
+    argument.
+
+``verbnet_class_consistency`` (``nltk`` VerbNet corpus, off by default)
+    For two DIFFERENT verbs used with the SAME two participants (shared
+    non-pronoun subject and non-pronoun object, within ``window_sentences`` or
+    a paragraph), whether they share any VerbNet class at all --
+    ``discourse.logic_verbnet_class_conflict_candidates``. "The workers built
+    the tower... the workers destroyed the tower" shares no VerbNet class and
+    is flagged; "she opened the door... she closed the door" shares one
+    (``other_cos-45.4``) and is not, which is itself a finding -- VerbNet's
+    classing, not this module's guess, decided the ordinary same-object scene
+    beat is not a mismatch while the incompatible one is. A verb absent from
+    VerbNet's inventory makes the pair unjudgeable, never a conflict.
+
+``framenet_frame_consistency`` (``nltk`` FrameNet corpus, off by default)
+    The same "same participants, different verb" check as
+    ``verbnet_class_consistency``, against FrameNet's frame inventory instead
+    of VerbNet's classes -- ``discourse.logic_framenet_frame_conflict_
+    candidates``. Independent lexical resource, independent partition of the
+    verb lexicon, deliberately kept as its own channel rather than merged with
+    the VerbNet one: the two agreeing (as they do on both worked examples
+    above) is corroboration, not redundancy, and either one flagging alone
+    without the other is data worth keeping visible, per this project's
+    standing rule to treat library disagreement as data rather than force one
+    reading. The first FrameNet lookup in a process costs several seconds
+    (``nltk`` builds an internal lemma index on first use); every later one is
+    a dict access.
+
 Every scalar this module reports is a **candidate rate, a lexical-overlap
 score, or a labelled model score**, never a truth value on its own, and every
 one records the settings it was computed under (``window_sentences``,
@@ -244,16 +289,17 @@ for, and both must stay true:
    make this suite cheaper without re-checking this.
 2. ``features.nli_entailment``, ``coreference_resolution``,
    ``lexical_opposition``, ``temporal_ordering``, ``semantic_role_labeling``,
-   ``relation_extraction`` and ``argument_mining`` all default to ``False`` in
-   both ``MetricSpec.defaults`` and ``config.json``, and the ``on()`` helper
-   in :func:`measure` falls back to ``False`` for every one of these seven
-   when a caller's ``features`` mapping omits them -- unlike the original four
-   groups, which fall back to ``True`` for backward compatibility. Getting
-   that fallback backwards for a new group would turn on a transformer-model
-   pass for every caller that passes ``config=None`` or a partial ``features``
-   mapping, most of which are tests. ``_ON_BY_DEFAULT`` is the one place this
-   is decided; a new feature group must never be added to it without the same
-   scrutiny this note asks for.
+   ``relation_extraction``, ``argument_mining``, ``propbank_argument_structure``,
+   ``verbnet_class_consistency`` and ``framenet_frame_consistency`` all default
+   to ``False`` in both ``MetricSpec.defaults`` and ``config.json``, and the
+   ``on()`` helper in :func:`measure` falls back to ``False`` for every one of
+   these ten when a caller's ``features`` mapping omits them -- unlike the
+   original four groups, which fall back to ``True`` for backward
+   compatibility. Getting that fallback backwards for a new group would turn
+   on a transformer-model or corpus-lookup pass for every caller that passes
+   ``config=None`` or a partial ``features`` mapping, most of which are tests.
+   ``_ON_BY_DEFAULT`` is the one place this is decided; a new feature group
+   must never be added to it without the same scrutiny this note asks for.
 
 ``_load_nli_pipeline``, ``_load_argument_mining_pipeline``,
 ``prop_lib._load_coref_model``, ``prop_lib._load_srl_model`` and
@@ -261,11 +307,17 @@ for, and both must stay true:
 the ``propositions`` module it uses) ever import ``transformers`` or
 ``fastcoref``, and every one is called only from inside its own feature's
 finding function -- never at import time, never unless the owning feature is
-on. ``tests/test_logic_suite.py``'s
-``test_default_config_never_loads_nli_or_coref_model`` asserts this directly
-by monkeypatching all five loaders to raise and running ``measure()`` under
-the default config; it was extended to cover the three new loaders in this
-pass rather than left checking only the two the previous pass added.
+on. ``prop_lib.load_propbank``, ``prop_lib.load_verbnet`` and
+``prop_lib.load_framenet`` are the equivalent three places for the corpora
+this pass added; the same rule applies even though none of the three needs a
+GPU-class dependency -- a book-length pass of ``nltk``'s FrameNet lemma-index
+build (several seconds the first time; see that feature's own note above) is
+still not something a default config should ever pay for.
+``tests/test_logic_suite.py``'s ``test_default_config_never_loads_nli_or_coref_model``
+asserts this directly for the five model loaders by monkeypatching them to
+raise and running ``measure()`` under the default config; a second test,
+``test_default_config_never_touches_propbank_verbnet_or_framenet``, does the
+identical check for the three corpus loaders this pass added.
 
 Measured cost, CPU only, ``cross-encoder/nli-deberta-v3-small``: loading the
 pipeline is about 2.5s; scoring is roughly 30ms/pair batched (measured on an
@@ -293,6 +345,18 @@ This is why ``srl_max_predicates``, ``relation_extraction_max_sentences`` and
 ``nli_max_pairs``'s 60, and why every real-model test for these three
 features in ``tests/test_logic_suite.py`` caps its own run far below even
 that, the same way the existing NLI tests already do with ``nli_max_pairs``.
+
+Measured cost, CPU only, the three lexical-resource channels this pass added:
+``propbank_argument_structure`` pays nothing beyond ``semantic_role_labeling``'s
+own SRL model cost when both are on with the same settings (the SRL frames are
+the same cached call; the PropBank roleset lookup itself is a dict/XML-element
+walk, sub-millisecond per frame once ``load_propbank`` has run once).
+``verbnet_class_consistency`` is similarly cheap once ``load_verbnet`` has run
+(``vn.classids`` is a fast in-memory lookup). ``framenet_frame_consistency`` is
+the one with a real, one-time cost: the first ``fn.frames_by_lemma`` call in a
+process measured at roughly 6s (building ``nltk``'s internal FrameNet lemma
+index), after which every further lookup in the same process is a dict access
+under 1ms -- see :func:`textgrader.propositions.load_framenet`'s own docstring.
 
 No corpus-reference channel
 ----------------------------
@@ -331,27 +395,19 @@ Permanently out of scope, each for a reason checked this pass, not assumed:
   bullet used to defer -- a different model each, from the Hugging Face hub
   through the ``transformers`` this codebase already depends on -- not a
   second attempt at AllenNLP itself.
-* **FrameNet / PropBank / VerbNet.** ``nltk`` (already installed and used for
-  ``lexical_opposition``'s WordNet channel) also ships downloadable FrameNet,
-  VerbNet and PropBank corpora, the same way it ships WordNet's -- these are
-  genuinely available in this environment, not blocked the way AllenNLP is.
-  Integrating a frame-inventory or verb-class cross-check on top of them is a
-  real, additional feature a future pass could build the way ``lexical_
-  opposition`` added WordNet; it is not in this pass's scope (SRL, relation
-  extraction and argument mining were), so it is deferred by scope, not by
-  capability, and this bullet no longer claims otherwise.
 * **ConceptNet.** Not shipped via ``nltk``; using it means either a network
   call to its public API (a runtime dependency this module does not want) or
   a separate multi-hundred-megabyte downloaded database (``conceptnet-lite``
   or similar). Neither was attempted this pass -- a genuine scope decision,
   not a claim that either is impossible.
 
-Closed across this and the previous pass, with real limitations of their own
+Closed across this and earlier passes, with real limitations of their own
 (each documented at its own feature group above and, for coreference,
-WordNet, SRL and relation extraction, in ``textgrader/propositions.py``):
-pairwise NLI, coreference resolution, WordNet antonymy, temporal ordering,
-semantic role labelling, closed-schema relation extraction, and argument
-mining.
+WordNet, SRL, relation extraction, PropBank, VerbNet and FrameNet, in
+``textgrader/propositions.py``): pairwise NLI, coreference resolution,
+WordNet antonymy, temporal ordering, semantic role labelling, closed-schema
+relation extraction, argument mining, PropBank argument-structure omission,
+VerbNet class-consistency and FrameNet frame-consistency.
 """
 
 from __future__ import annotations
@@ -432,6 +488,9 @@ _METRIC_NAMES = {
     "discourse.logic_relation_extraction_proposition_overlap_rate": "Relation-extraction triples corroborated by the propositions dependency-parse proxy",
     "discourse.logic_argument_relation_label_distribution": "Argument-mining relation-label distribution over connective-linked clause pairs",
     "discourse.logic_argument_relation_connective_agreement": "Connective-polarity vs. argument-mining-model label agreement",
+    "discourse.logic_propbank_argument_omission_rate": "PropBank-roleset-expected core arguments the SRL model left unfilled",
+    "discourse.logic_verbnet_class_conflict_candidates": "Same-participants, different-verb pairs sharing no VerbNet class",
+    "discourse.logic_framenet_frame_conflict_candidates": "Same-participants, different-verb pairs evoking no shared FrameNet frame",
 }
 
 #: Reference date for :func:`dateutil.parser.parse` when a parsed string omits
@@ -1194,6 +1253,106 @@ def _wordnet_findings(context: _PropContext, *, max_evidence: int) -> list[dict[
     return out
 
 
+# -------------------------------------------------- VerbNet / FrameNet consistency
+#
+# Both ask the same shape of question -- "two DIFFERENT verbs used for the
+# SAME two participants: do they belong to any shared semantic class/frame at
+# all" -- against a different lexical resource, via
+# :func:`prop_lib.participant_key`'s (subject_key, object_key) bucketing
+# rather than :func:`prop_lib.bucketed_pairs`' default (subject_key,
+# predicate_lemma) one. See :mod:`textgrader.propositions`' own section
+# comment for the worked build/destroy (flagged, no shared class or frame) and
+# open/close (not flagged, one shared class and one shared frame) examples
+# this design was checked against, not assumed from either resource's own
+# documentation.
+
+def _verbnet_findings(context: _PropContext, *, max_evidence: int) -> list[dict[str, Any]]:
+    metric_id = "discourse.logic_verbnet_class_conflict_candidates"
+    if context.unavailable_reason:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], context.unavailable_reason, family=FAMILY)]
+    props = context.props
+    if not props:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], "no usable propositions", family=FAMILY)]
+    vn_module, reason = prop_lib.load_verbnet()
+    if vn_module is None:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], reason, family=FAMILY)]
+
+    scan = prop_lib.bucketed_pairs(
+        props, window_sentences=context.window_sentences, max_pairs=context.max_pairs,
+        max_comparisons=context.max_comparisons, test=prop_lib.verbnet_class_conflict,
+        key=prop_lib.participant_key)
+    settings = _settings(window_sentences=context.window_sentences, max_pairs=context.max_pairs,
+                         comparisons_examined=scan.comparisons, pairs_capped=scan.pairs_capped,
+                         buckets_sampled=scan.buckets_sampled, coreference_resolution=context.coref_meta)
+    evidence = [{
+        "subject": a.subject_text, "object": a.object_text,
+        "verb_a": a.predicate_lemma, "verb_b": b.predicate_lemma,
+        "verbnet_classes_a": sorted(prop_lib.verbnet_classes(vn_module, a.predicate_lemma)),
+        "verbnet_classes_b": sorted(prop_lib.verbnet_classes(vn_module, b.predicate_lemma)),
+        "sentence_a": {"index": a.sentence_index, "text": a.text},
+        "sentence_b": {"index": b.sentence_index, "text": b.text},
+    } for a, b, _label in scan.pairs[:max_evidence]]
+    return [finding(
+        metric_id, _METRIC_NAMES[metric_id], rate(len(scan.pairs), len(props), 1000.0),
+        "candidates per 1,000 propositions", family=FAMILY, sample_size=len(props), min_sample=100,
+        sample_size_sensitive=True,
+        distribution={"candidate_count": len(scan.pairs), "settings": settings},
+        evidence=evidence,
+        warning=(
+            "candidates only: flags two DIFFERENT verbs used for the SAME two participants (a shared "
+            "non-pronoun subject and non-pronoun object) whose VerbNet classes share nothing at all -- "
+            "a class-level 'this does not read as the same kind of event' signal, not a contradiction "
+            "verdict. A verb VerbNet has no entry for makes a pair unjudgeable, never flagged, so this "
+            "under-reports at least as often as it over-reports; two verbs from unrelated classes can "
+            "still describe a perfectly coherent sequence of events (a character can build something "
+            "and later, truthfully, destroy it), so a human should read the actual sentences, not treat "
+            "a candidate here as an error"))]
+
+
+def _framenet_findings(context: _PropContext, *, max_evidence: int) -> list[dict[str, Any]]:
+    metric_id = "discourse.logic_framenet_frame_conflict_candidates"
+    if context.unavailable_reason:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], context.unavailable_reason, family=FAMILY)]
+    props = context.props
+    if not props:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], "no usable propositions", family=FAMILY)]
+    fn_module, reason = prop_lib.load_framenet()
+    if fn_module is None:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], reason, family=FAMILY)]
+
+    scan = prop_lib.bucketed_pairs(
+        props, window_sentences=context.window_sentences, max_pairs=context.max_pairs,
+        max_comparisons=context.max_comparisons, test=prop_lib.framenet_frame_conflict,
+        key=prop_lib.participant_key)
+    settings = _settings(window_sentences=context.window_sentences, max_pairs=context.max_pairs,
+                         comparisons_examined=scan.comparisons, pairs_capped=scan.pairs_capped,
+                         buckets_sampled=scan.buckets_sampled, coreference_resolution=context.coref_meta)
+    evidence = [{
+        "subject": a.subject_text, "object": a.object_text,
+        "verb_a": a.predicate_lemma, "verb_b": b.predicate_lemma,
+        "framenet_frames_a": sorted(prop_lib.framenet_frames(fn_module, a.predicate_lemma)),
+        "framenet_frames_b": sorted(prop_lib.framenet_frames(fn_module, b.predicate_lemma)),
+        "sentence_a": {"index": a.sentence_index, "text": a.text},
+        "sentence_b": {"index": b.sentence_index, "text": b.text},
+    } for a, b, _label in scan.pairs[:max_evidence]]
+    return [finding(
+        metric_id, _METRIC_NAMES[metric_id], rate(len(scan.pairs), len(props), 1000.0),
+        "candidates per 1,000 propositions", family=FAMILY, sample_size=len(props), min_sample=100,
+        sample_size_sensitive=True,
+        distribution={"candidate_count": len(scan.pairs), "settings": settings},
+        evidence=evidence,
+        warning=(
+            "candidates only: flags two DIFFERENT verbs used for the SAME two participants (a shared "
+            "non-pronoun subject and non-pronoun object) whose FrameNet lexical units evoke no frame in "
+            "common -- an independent lexical resource asking the same shape of question as "
+            "discourse.logic_verbnet_class_conflict_candidates, kept as its own channel rather than "
+            "merged with it because the two agreeing is corroboration and either one flagging alone is "
+            "still data worth keeping visible (see module docstring). A verb FrameNet has no lexical "
+            "unit for makes a pair unjudgeable, never flagged; a candidate here is a 'read the actual "
+            "sentences' prompt, not a verdict -- describing the same participants through two "
+            "semantically distant verbs is not automatically an inconsistency"))]
+
+
 # ------------------------------------------------------------- temporal ordering
 
 def _temporal_findings(context: _PropContext, *, max_evidence: int) -> list[dict[str, Any]]:
@@ -1345,6 +1504,90 @@ def _srl_findings(analysis: DocumentAnalysis, *, srl_model: str, srl_max_predica
             f"{srl_model!r} filled fewer than two role slots for that predicate" if frames else
             "no SRL frame was scored (no extractable predicate within srl_max_predicates)")))
     return out
+
+
+# ---------------------------------------------- PropBank roleset argument structure
+
+def _propbank_findings(analysis: DocumentAnalysis, *, srl_model: str, srl_max_predicates: int,
+                       max_evidence: int) -> list[dict[str, Any]]:
+    """The principled version of ``discourse.logic_srl_argument_omission_rate``:
+    instead of a fixed "fewer than two roles" threshold, compares each SRL
+    frame against the specific PropBank roleset (``give.01``'s giver/thing-
+    given/recipient, not a generic count) that best explains what the model
+    already filled, via :func:`prop_lib.propbank_best_roleset`.
+
+    Re-extracts SRL frames through the same
+    :func:`prop_lib.extract_srl_frames` cache ``semantic_role_labeling`` uses
+    -- with the same ``srl_model``/``srl_max_predicates`` (this feature reuses
+    those two options rather than defining its own), the two features share
+    one model call, never two, whether one or both are on.
+
+    The PropBank corpus check runs FIRST, before the (far more expensive) SRL
+    model is ever loaded: there is no point paying for a model generation call
+    whose output cannot be interpreted without the roleset data, and a missing
+    corpus should degrade instantly regardless of whether transformers is even
+    installed here.
+    """
+
+    metric_id = "discourse.logic_propbank_argument_omission_rate"
+    pb_module, reason = prop_lib.load_propbank()
+    if pb_module is None:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], reason, family=FAMILY)]
+    extraction = prop_lib.extract_srl_frames(analysis, srl_max_predicates, srl_model)
+    if not extraction.available:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id], extraction.reason, family=FAMILY)]
+    frames = extraction.frames
+    if not frames:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id],
+                            "no SRL frame was scored (no extractable predicate within "
+                            "srl_max_predicates)", family=FAMILY)]
+
+    settings = _settings(srl_model=srl_model, srl_max_predicates=srl_max_predicates,
+                         candidates_seen=extraction.candidates_seen, truncated=extraction.truncated,
+                         sentences_scanned=extraction.sentences_scanned)
+    matched = 0
+    omitted = 0
+    evidence: list[dict[str, Any]] = []
+    for f in frames:
+        filled = prop_lib.srl_core_roles(f.roles)
+        match = prop_lib.propbank_best_roleset(pb_module, f.predicate_lemma, filled)
+        if match is None:
+            continue
+        matched += 1
+        roleset_id, expected = match
+        filled_numbers = {number for number in (prop_lib.arg_number(role) for role in filled)
+                          if number is not None}
+        missing = expected - filled_numbers
+        if missing:
+            omitted += 1
+        evidence.append({
+            "sentence_index": f.sentence_index, "text": f.text, "predicate": f.predicate_text,
+            "roleset": roleset_id, "expected_core_roles": sorted(expected),
+            "filled_roles": dict(f.roles), "missing_core_roles": sorted(missing),
+        })
+    if not matched:
+        return [unavailable(metric_id, _METRIC_NAMES[metric_id],
+                            "no scored predicate's lemma had a matching PropBank roleset (this "
+                            "environment's propbank frame files have no entry for any verb SRL scored "
+                            "within srl_max_predicates)", family=FAMILY)]
+    evidence.sort(key=lambda row: -len(row["missing_core_roles"]))
+    return [finding(
+        metric_id, _METRIC_NAMES[metric_id], rate(omitted, matched, 100.0), "percent",
+        family=FAMILY, sample_size=matched, min_sample=5, sample_size_sensitive=True,
+        distribution={"omitted_count": omitted, "matched_frames": matched, "frames_scored": len(frames),
+                     "settings": settings},
+        evidence=evidence[:max_evidence],
+        warning=(
+            f"candidate signal, not an error: for each SRL frame, the PropBank roleset (from nltk's "
+            f"downloaded propbank corpus) whose declared numbered arguments overlap most with what "
+            f"{srl_model!r} already filled is picked as this occurrence's roleset -- a heuristic match, "
+            "not real word-sense disambiguation, so a rarer sense can be missed. 'Omitted' means that "
+            "roleset declares a numbered core argument (ARG-0..ARG-4) the model's frame does not fill. "
+            "A deliberate stylistic ellipsis ('He gave.' as a sentence fragment, elliptical dialogue, a "
+            "reader-inferred argument) produces exactly the same pattern as a genuinely dropped "
+            "argument, so a high rate is not itself a defect in the writing -- and because the roleset "
+            "match is itself picked from the same filled-role overlap being measured, an 'omission' can "
+            "also just mean a different, still-valid roleset would have matched with less missing"))]
 
 
 # ------------------------------------------------- closed-schema relation extraction
@@ -1669,6 +1912,9 @@ FEATURE_METRICS: dict[str, tuple[str, ...]] = {
     "argument_mining": (
         "discourse.logic_argument_relation_label_distribution",
         "discourse.logic_argument_relation_connective_agreement"),
+    "propbank_argument_structure": ("discourse.logic_propbank_argument_omission_rate",),
+    "verbnet_class_consistency": ("discourse.logic_verbnet_class_conflict_candidates",),
+    "framenet_frame_consistency": ("discourse.logic_framenet_frame_conflict_candidates",),
 }
 
 #: Feature groups that were part of the module's original, dependency-free
@@ -1738,7 +1984,9 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     # for at most once per document. Never built at all -- so never even
     # inspecting analysis.nlp_unavailable's spaCy-parse cost -- when none of
     # the four groups that need it is enabled.
-    needs_props = on("propositions") or on("nli_entailment") or on("lexical_opposition") or on("temporal_ordering")
+    needs_props = (on("propositions") or on("nli_entailment") or on("lexical_opposition")
+                  or on("temporal_ordering") or on("verbnet_class_consistency")
+                  or on("framenet_frame_consistency"))
     context = _build_proposition_context(
         analysis, proposition_cap=proposition_cap, window_sentences=window_sentences,
         max_pairs=max_pairs, max_comparisons=max_comparisons,
@@ -1769,4 +2017,11 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         argument_mining_max_pairs=argument_mining_max_pairs, connective_min_words=connective_min_words,
         max_evidence=max_evidence)
         if on("argument_mining") else _disabled("argument_mining"))
+    out.extend(_propbank_findings(analysis, srl_model=srl_model, srl_max_predicates=srl_max_predicates,
+                                  max_evidence=max_evidence)
+              if on("propbank_argument_structure") else _disabled("propbank_argument_structure"))
+    out.extend(_verbnet_findings(context, max_evidence=max_evidence)
+              if on("verbnet_class_consistency") else _disabled("verbnet_class_consistency"))
+    out.extend(_framenet_findings(context, max_evidence=max_evidence)
+              if on("framenet_frame_consistency") else _disabled("framenet_frame_consistency"))
     return out

@@ -110,6 +110,11 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # feature. The `nltk` package alone is not enough -- its corpus data is a
     # separate download; textgrader.propositions checks for that data itself
     # and reports a LookupError as an actionable "unavailable", not a crash.
+    # The same `nltk` install also backs three more off-by-default logic_suite
+    # features -- "propbank_argument_structure", "verbnet_class_consistency"
+    # and "framenet_frame_consistency" -- each needing its own separately
+    # downloaded corpus (propbank, verbnet, framenet_v17 respectively; none
+    # satisfies another), checked and reported the identical way.
     "nltk": ("nltk", "pip install nltk"),
     # Date parsing for logic_suite's "temporal_ordering" feature: which of two
     # differing dates on the same subject+predicate is earlier, not just that
