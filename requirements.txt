@@ -216,3 +216,9 @@ confusable-homoglyphs>=3.2
 # only: it reports what fix_text() would change and never rewrites the
 # analyzed text (see mechanical_quality_suite's module docstring).
 ftfy>=6.1
+
+# An independent, pure-Python rule-based sentence/token segmenter for the
+# experimental parser_consensus suite's default segmentation/tokenization
+# comparison (no other dependency beyond 'regex', already installed above).
+# Torch-free, unlike stanza/benepar below, so it lives here.
+syntok>=1.4

@@ -50,7 +50,18 @@ isanlp-rst>=3.2
 #     python -c "import benepar; benepar.download('benepar_en3')"
 # Without it, every `syntax.complexity_constituency_*` metric id reports
 # "unavailable" with an install hint; every other feature in the suite is
-# spaCy-only and unaffected. A real transformers/benepar version-skew bug
-# (T5Tokenizer missing build_inputs_with_special_tokens under
-# transformers>=5) is worked around in-module; see that module's docstring.
+# spaCy-only and unaffected. benepar calls a T5 tokenizer method that
+# transformers 5.x removed; textgrader.optional.shim_benepar_transformers
+# restores it. parser_consensus's "constituency_benepar" feature uses the same
+# package and the same shim.
 benepar>=0.2
+
+# A second, fully independent parser for the experimental parser_consensus
+# suite's off-by-default "stanza" feature (POS/dependency/constituency
+# consensus against spaCy). Shares the torch install above. Off by default;
+# even when the suite and this feature are both on, this suite never
+# downloads stanza's models itself (every stanza.Pipeline call passes
+# download_method=None) -- see textgrader/optional.py's note and
+# parser_consensus.py's module docstring for the exact download command and
+# measured size/cost.
+stanza>=1.8

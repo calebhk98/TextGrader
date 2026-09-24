@@ -160,7 +160,7 @@ from typing import Any, Mapping, Sequence
 
 from .. import coherence as coh
 from ..document import DocumentAnalysis
-from ..optional import on_reset, require
+from ..optional import on_reset, require, shim_benepar_transformers
 from .common import PARSE, finding, option, rate, shape, summarize, unavailable
 
 FAMILY = "syntax"
@@ -837,36 +837,12 @@ on_reset(_reset_benepar_cache)
 
 
 def _shim_t5_retokenizer() -> None:
-    """Restore ``T5Tokenizer(Fast).build_inputs_with_special_tokens``.
-
-    benepar's retokenizer (``benepar/retokenization.py``) calls this method
-    to locate a T5 tokenizer's special-token positions. ``transformers``
-    5.17.0's rewritten tokenizer classes (``TokenizersBackend``) no longer
-    define it at all, so loading ``benepar_en3`` (a T5-based checkpoint)
-    raises ``AttributeError: T5Tokenizer has no attribute
-    build_inputs_with_special_tokens`` -- reproduced directly in this
-    environment before this shim existed. The restored method is exactly
-    T5's own pre-5.x rule: a single sequence gets one trailing EOS id, a
-    pair gets EOS after each sequence. Installed only when the attribute is
-    actually missing (``hasattr`` guard), so a future transformers release
-    that restores it is left alone -- the same one-attribute, defensive
-    pattern :func:`textgrader.coherence._shim_transformers_tied_weights`
-    already uses for an analogous fastcoref/transformers version skew.
+    """Kept as a name this module's docstring references; the implementation
+    lives in :func:`textgrader.optional.shim_benepar_transformers` so this
+    suite and ``parser_consensus`` cannot disagree about whether benepar loads.
     """
 
-    try:
-        from transformers import T5Tokenizer, T5TokenizerFast
-    except Exception:  # pragma: no cover - transformers itself unavailable
-        return
-
-    def _build(self, token_ids_0, token_ids_1=None):
-        if token_ids_1 is None:
-            return token_ids_0 + [self.eos_token_id]
-        return token_ids_0 + [self.eos_token_id] + token_ids_1 + [self.eos_token_id]
-
-    for cls in (T5Tokenizer, T5TokenizerFast):
-        if not hasattr(cls, "build_inputs_with_special_tokens"):
-            cls.build_inputs_with_special_tokens = _build
+    shim_benepar_transformers()
 
 
 def _load_benepar(model_name: str) -> tuple[Any, str | None]:

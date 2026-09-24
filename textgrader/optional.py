@@ -231,6 +231,26 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # the analyzed text (see that module's docstring). Verified for real:
     # fix_text('MÃ¼nchen') returns 'München'.
     "ftfy": ("ftfy", "pip install ftfy"),
+    # An independent, pure-Python rule-based sentence/token segmenter for
+    # parser_consensus's default "segmentation"/"tokenization" features (the
+    # 'syntok' segmenter/tokenizer sources). Verified for real: correctly
+    # keeps "Mr." and "Dr." sentence-final and gives exact character-span
+    # boundaries via token.offset (see parser_consensus.py's docstring).
+    # Lightweight (only 'regex' as its own dependency, already installed).
+    "syntok": ("syntok", "pip install syntok"),
+    # Independent tokenization/POS/dependency parsing (and, with the right
+    # processors, constituency parsing) for parser_consensus's off-by-default
+    # "stanza" feature (POS/dependency/chunk consensus's second parser) and
+    # the "chunks" feature's constituency source. The package alone is not
+    # enough: its English models are a separate, non-PyPI download this
+    # module never triggers itself (every stanza.Pipeline call passes
+    # download_method=None) -- run e.g.
+    # `python -c "import stanza; stanza.download('en', processors='tokenize,mwt,pos,lemma,depparse')"`
+    # first (~320MB on disk, verified in this environment). Depends on torch,
+    # so it lives in requirements-embeddings.txt rather than requirements.txt.
+    "stanza": ("stanza", "pip install stanza (in requirements-embeddings.txt; also needs "
+                        "stanza.download('en', processors=...) models, ~320MB, never "
+                        "triggered by this codebase itself)"),
 }
 
 _lock = threading.Lock()
@@ -265,6 +285,42 @@ def require(name: str) -> tuple[Any, str | None]:
     with _lock:
         _cache.setdefault(name, outcome)
         return _cache[name]
+
+
+def shim_benepar_transformers() -> None:
+    """Restore ``T5Tokenizer(Fast).build_inputs_with_special_tokens``.
+
+    benepar's retokenizer (``benepar/retokenization.py``) calls this method
+    to locate a T5 tokenizer's special-token positions. ``transformers``
+    5.17.0's rewritten tokenizer classes (``TokenizersBackend``) no longer
+    define it at all, so loading ``benepar_en3`` (a T5-based checkpoint)
+    raises ``AttributeError: T5Tokenizer has no attribute
+    build_inputs_with_special_tokens`` -- reproduced directly in this
+    environment before this shim existed. The restored method is exactly
+    T5's own pre-5.x rule: a single sequence gets one trailing EOS id, a
+    pair gets EOS after each sequence. Installed only when the attribute is
+    actually missing (``hasattr`` guard), so a future transformers release
+    that restores it is left alone, the same pattern as
+    :func:`shim_fastcoref_transformers`.
+
+    Both suites that load benepar (``syntax_complexity_suite`` and
+    ``parser_consensus``) go through here.  Before they shared it, one loaded
+    benepar and the other reported it unavailable in the same environment.
+    """
+
+    try:
+        from transformers import T5Tokenizer, T5TokenizerFast
+    except Exception:  # pragma: no cover - transformers itself unavailable
+        return
+
+    def _build(self, token_ids_0, token_ids_1=None):
+        if token_ids_1 is None:
+            return token_ids_0 + [self.eos_token_id]
+        return token_ids_0 + [self.eos_token_id] + token_ids_1 + [self.eos_token_id]
+
+    for cls in (T5Tokenizer, T5TokenizerFast):
+        if not hasattr(cls, "build_inputs_with_special_tokens"):
+            cls.build_inputs_with_special_tokens = _build
 
 
 def shim_fastcoref_transformers() -> None:
