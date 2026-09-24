@@ -204,7 +204,7 @@ def test_lexical_paraphrase_tfidf_differs_more_than_embeddings(monkeypatch):
     sentences = analysis.sentences
     assert len(sentences) == 2
 
-    _ok, tfidf_sim, _scale, _note = sss._build_lexical_tfidf(sentences, analysis, "sentence", {})
+    _ok, tfidf_sim, _group, _scale, _note = sss._build_lexical_tfidf(sentences, analysis, "sentence", {})
     tfidf_value = tfidf_sim(0, 1)
 
     # Stand in for a real sentence-transformer embedding backend without a
@@ -228,7 +228,7 @@ def test_repeated_terms_with_semantic_discontinuity_bm25_vs_disagreement():
     analysis = DocumentAnalysis.from_text(text)
     sentences = analysis.sentences
     assert len(sentences) == 3
-    _ok, bm25_sim, _scale, _note = sss._build_bm25(sentences, analysis, "sentence", {})
+    _ok, bm25_sim, _group, _scale, _note = sss._build_bm25(sentences, analysis, "sentence", {})
     # "bank" recurs across the discontinuous transition (0->1), so BM25 must
     # not report a zero score there even though the topic genuinely shifted.
     assert bm25_sim(0, 1) > 0.0
@@ -332,6 +332,107 @@ def test_disagreement_needs_two_active_representations():
     correlation = by_id[f"{PREFIX}disagreement_rank_correlation"]
     assert correlation["value"] is None
     assert "at least two" in correlation["warning"]
+
+
+def test_consensus_low_coherence_stays_near_configured_quantile_under_zero_inflation():
+    """A zero-inflated representation's own 10th-PERCENTILE VALUE is often
+    0.0 itself (real lexical_tfidf/bm25 adjacent-sentence scores on real
+    prose: confirmed 98.3-99.7% "consensus" on real books under the old
+    absolute-threshold design, since "flag everything <= 0.0" flags nearly
+    every zero transition). Rank-based flagging must instead flag close to
+    the configured quantile share regardless of how zero-inflated the
+    representation is.
+    """
+
+    zero_inflated_a = [0.0] * 180 + [float(i) for i in range(1, 21)]
+    zero_inflated_b = [0.0] * 170 + [float(i) * 0.5 for i in range(1, 31)]
+    varied_c = [float(i % 50) / 50.0 for i in range(200)]
+    rep_values = {"repA": zero_inflated_a, "repB": zero_inflated_b, "repC": varied_c}
+    analysis = _analysis("Placeholder text for this synthetic disagreement test. " * 3)
+
+    findings = sss._disagreement_findings(rep_values, analysis,
+                                          {"disagreement_low_tail_quantile": 0.10})
+    by_id = _by_id(findings)
+    consensus = by_id[f"{PREFIX}disagreement_consensus_low_coherence"]
+    single = by_id[f"{PREFIX}disagreement_single_representation_only"]
+
+    assert consensus["value"] is not None
+    assert consensus["value"] < 40.0, (
+        f"consensus share {consensus['value']} is not near the configured 10% quantile -- "
+        f"zero-inflation is still dominating the flag")
+    assert single["value"] is not None
+
+    diagnostics = consensus["distribution"]["per_representation"]
+    assert set(diagnostics) == {"repA", "repB", "repC"}
+    for rep, diag in diagnostics.items():
+        assert diag["flagged_share_percent"] == pytest.approx(10.0, abs=2.0), (rep, diag)
+    # repA and repB are heavily zero-inflated: far more than the flag quota
+    # (20 of 200) sits tied at the boundary value (0.0), so the selection at
+    # that boundary is reported as an arbitrary (though deterministic) tie.
+    assert diagnostics["repA"]["degenerate_tie"] is True
+    assert diagnostics["repA"]["tied_at_boundary_value"] == 180
+    assert diagnostics["repC"]["degenerate_tie"] is False
+
+
+# ---------------------------------------------------- intro/conclusion (not degenerate)
+
+_LSA_DIFFERENT_ENDS_TEXT = (
+    "The dog ran through the forest chasing a rabbit under tall green trees. "
+    "Birds sang in the morning light as the dog kept running past the old oak. "
+    "The forest grew quiet as afternoon came and the dog rested by a stream. "
+    "Stock markets crashed overnight as investors panicked over bond yields. "
+    "The central bank held an emergency meeting to discuss the falling economy. "
+    "Traders on the exchange floor shouted prices as futures kept falling fast."
+)
+
+
+@requires_sklearn
+@requires_bm25
+def test_intro_conclusion_similarity_is_not_degenerate():
+    """A fresh, separate fit on just the opening/closing snippet degenerates:
+    a 2-document TruncatedSVD has at most one meaningful dimension, forcing
+    cosine to exactly 1.0 regardless of content, and Okapi BM25's IDF goes
+    negative for any term in more than half of a 2-document corpus.
+    Confirmed on three real books under the old design: lsa_intro_conclusion_
+    similarity was exactly 1.0 and bm25_intro_conclusion_similarity was
+    negative on every one. Scoring within the whole-document fit instead
+    must not reproduce either failure."""
+
+    analysis = DocumentAnalysis.from_text(_LSA_DIFFERENT_ENDS_TEXT)
+    findings = sss.measure(analysis, config={
+        "features": {"lexical_tfidf": False, "bm25": True, "lsa": True, "topic_models": False,
+                    "disagreement": False},
+        "intro_conclusion_sentences": 2})
+    by_id = _by_id(findings)
+    lsa = by_id[f"{PREFIX}lsa_intro_conclusion_similarity"]
+    bm25 = by_id[f"{PREFIX}bm25_intro_conclusion_similarity"]
+    assert lsa["value"] is not None
+    assert lsa["value"] < 0.95, lsa["value"]
+    assert bm25["value"] is not None
+    assert bm25["value"] >= 0.0, bm25["value"]
+
+
+@requires_sklearn
+def test_intro_conclusion_similarity_ranks_identical_ends_above_unrelated_ends():
+    identical_ends_text = (
+        "The dog ran through the forest chasing a rabbit under tall green trees. "
+        "Birds sang in the morning light as the dog kept running past the old oak. "
+        "Something happened in between that is unrelated filler text here now. "
+        "More unrelated filler text about nothing in particular occurs here too. "
+        "The dog ran through the forest chasing a rabbit under tall green trees. "
+        "Birds sang in the morning light as the dog kept running past the old oak."
+    )
+    config = {"features": {"lexical_tfidf": False, "bm25": False, "lsa": True,
+                          "topic_models": False, "disagreement": False},
+             "intro_conclusion_sentences": 2}
+    identical_value = _by_id(sss.measure(DocumentAnalysis.from_text(identical_ends_text),
+                                         config=config))[
+        f"{PREFIX}lsa_intro_conclusion_similarity"]["value"]
+    unrelated_value = _by_id(sss.measure(DocumentAnalysis.from_text(_LSA_DIFFERENT_ENDS_TEXT),
+                                         config=config))[
+        f"{PREFIX}lsa_intro_conclusion_similarity"]["value"]
+    assert identical_value is not None and unrelated_value is not None
+    assert identical_value > unrelated_value
 
 
 # ------------------------------------------------------------- corpus topic models

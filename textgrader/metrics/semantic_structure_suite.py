@@ -83,11 +83,17 @@ every cosine-scale representation, "bm25_score" for BM25):
 
 * ``semantic.structure_<rep>_adjacent_sentence`` / ``_adjacent_paragraph`` --
   the spec's "adjacent-sentence"/"adjacent-paragraph similarity/distance",
-  reported as a full distribution (median headline) with the ten
-  lowest-similarity transitions as evidence ("lowest-similarity
-  transitions" from the spec is folded into this finding's evidence rather
-  than becoming a 37th metric id, the same pattern
-  :mod:`semantic_adjacent` itself already uses).
+  reported as a full distribution with the ten lowest-similarity transitions
+  as evidence ("lowest-similarity transitions" from the spec is folded into
+  this finding's evidence rather than becoming a 37th metric id, the same
+  pattern :mod:`semantic_adjacent` itself already uses). The headline is
+  usually the median, but real prose makes lexical_tfidf/bm25 adjacent-
+  sentence scores zero-inflated (most sentence pairs share no content
+  word), so the median can sit at exactly 0.0 and never move; see
+  :func:`_resolve_headline` for the mean fallback this and every other
+  median-based headline in this suite uses, and the finding's
+  ``distribution["aggregation"]``/``["zero_share_percent"]`` for which one
+  fired and how zero-inflated the sample was.
 * ``semantic.structure_<rep>_centroid_relatedness`` -- "similarity to
   document centroid".  Rather than a true vector centroid (which does not
   exist for BM25's asymmetric query/document scoring), every representation
@@ -96,22 +102,36 @@ every cosine-scale representation, "bm25_score" for BM25):
   sample of the document's own sentences.  This is deliberately O(n *
   cap), not O(n^2) (see "Bound O(n^2) work" below), and is directly
   comparable across cosine-scale representations even though it is a proxy,
-  not the literal mean-vector cosine, for any of them.
+  not the literal mean-vector cosine, for any of them. Headline: median,
+  with the same mean fallback as above.
 * ``semantic.structure_<rep>_window_drift`` -- "local-window semantic
   drift": adjacent-similarity values are pooled into non-overlapping blocks
   of ``structure_window`` sentences (default 5) and the headline is the
-  median absolute change between consecutive block means.
+  median (mean fallback as above) absolute change between consecutive
+  block means.
 * ``semantic.structure_<rep>_global_dispersion`` -- "global semantic
-  dispersion": the standard deviation (not the median -- dispersion is a
-  spread statistic, and the finding's ``distribution`` says so explicitly)
-  of a capped (``dispersion_pair_cap``, default 300), seeded random sample of
-  NON-adjacent sentence-pair similarities.
+  dispersion": the standard deviation (never a mean/median fallback --
+  dispersion is itself a spread statistic, and the finding's
+  ``distribution`` says so explicitly) of a capped (``dispersion_pair_cap``,
+  default 300), seeded random sample of NON-adjacent sentence-pair
+  similarities.
 * ``semantic.structure_<rep>_intro_conclusion_similarity`` -- "conclusion-to-
   introduction similarity" and "opening-to-closing semantic distance" are the
   same measurement asked two ways (distance = 1 - similarity for a
-  cosine-scale representation); this suite reports the one finding, backed
-  by the SAME per-representation builder, over the concatenation of the
-  first/last ``intro_conclusion_sentences`` sentences (default 3).
+  cosine-scale representation); this suite reports the one finding, as the
+  cosine (or, for bm25, the query-vs-synthetic-document score) between the
+  AVERAGE of the first/last ``intro_conclusion_sentences`` sentences'
+  (default 3) vectors/statistics -- taken from the SAME sentence-level fit
+  every other metric above already uses (``group_sim``, see the
+  representation-registry comment below), never a fresh, separate fit on
+  just the two snippets. A fresh 2-document fit is exactly what made this
+  metric degenerate in an earlier version of this suite: TruncatedSVD on two
+  documents has at most one meaningful dimension (forcing cosine to exactly
+  1.0 regardless of content) and Okapi BM25's IDF goes negative for a term
+  in more than half of a 2-document corpus -- confirmed on three real books
+  (Alice, The Secret Agent, Flatland), where ``lsa_intro_conclusion_
+  similarity`` was exactly 1.0 and ``bm25_intro_conclusion_similarity`` was
+  negative on every one of them under that design.
 
 **Corpus-trained topic models -- the hard design problem.**  LDA/NMF/HDP must
 be trained on the reference corpus, never on the graded text, and versioned
@@ -221,13 +241,30 @@ adjacent-sentence transition sequences directly:
   ``distribution``). Rank correlation, not a raw-value comparison, is what
   lets a bounded cosine score and an unbounded BM25 score be compared at all.
 * ``semantic.structure_disagreement_single_representation_only`` -- the share
-  of transitions flagged "low-coherence" (bottom decile, WITHIN each
-  representation's own distribution -- never a shared absolute threshold,
-  which BM25's unbounded scale would make meaningless) by exactly one active
+  of transitions flagged "low-coherence" by exactly one active
   representation.
 * ``semantic.structure_disagreement_consensus_low_coherence`` -- the share
   flagged by a majority of active representations, with the actual sentence
   pairs as evidence.
+
+  Both flag the lowest ``disagreement_low_tail_quantile`` (default 10%) of
+  each representation's OWN adjacent-transition scores BY RANK (see
+  :func:`_low_tail_flags_by_rank`), never a shared absolute threshold (which
+  BM25's unbounded scale would make meaningless) and never an absolute
+  quantile THRESHOLD either: lexical_tfidf/bm25 scores on real prose are
+  zero-inflated enough that their own 10th-percentile threshold is 0.0
+  itself, so "flag every value <= 0.0" flagged 98.3-99.7% of transitions as
+  "consensus" on three real books in an earlier version of this suite --
+  nowhere near the configured 10%. Picking a fixed COUNT of the lowest
+  values by rank (deterministic, per-representation-seeded tie-break --
+  see :func:`_rep_tie_seed`'s docstring for why plain index order would
+  itself manufacture spurious cross-representation agreement out of a
+  shared tied block) flags close to the configured share regardless of
+  zero-inflation. Each finding's ``distribution["per_representation"]``
+  reports exactly how many transitions each active representation flagged
+  and whether the flag boundary landed inside a tie too large to resolve
+  (``degenerate_tie``), so a reader is never left assuming the boundary was
+  informative when it was not.
 
 **Overlap with existing metrics.** Where a channel here measures
 substantially the same thing as an existing metric id, the overlap is named
@@ -302,6 +339,7 @@ import itertools
 import math
 import random
 import statistics
+import zlib
 from collections import Counter
 from typing import Any, Callable, Mapping, Sequence
 
@@ -418,6 +456,28 @@ def _sparse_dot(a: Mapping[str, float], b: Mapping[str, float]) -> float:
     return sum(value * b.get(word, 0.0) for word, value in a.items())
 
 
+def _sparse_group_cosine(vectors: Sequence[Mapping[str, float]], indices_a: Sequence[int],
+                         indices_b: Sequence[int]) -> float | None:
+    """Cosine similarity between the (re-normalized) SUM of the sparse
+    vectors at ``indices_a`` and at ``indices_b`` -- the sparse-vector
+    equivalent of averaging dense embeddings, used by group_sim so the
+    intro/conclusion metric scores a group of sentences within the SAME
+    whole-document TF-IDF space every other lexical_tfidf metric already
+    uses, rather than refitting IDF on just the two groups (which is what
+    made this metric degenerate -- see the module docstring)."""
+
+    def merged(indices: Sequence[int]) -> dict[str, float]:
+        total: dict[str, float] = {}
+        for index in indices:
+            for word, value in vectors[index].items():
+                total[word] = total.get(word, 0.0) + value
+        norm = math.sqrt(sum(value * value for value in total.values()))
+        return {word: value / norm for word, value in total.items()} if norm else {}
+
+    a, b = merged(indices_a), merged(indices_b)
+    return _sparse_dot(a, b) if a and b else None
+
+
 def _features(config: Mapping[str, Any] | None) -> dict[str, bool]:
     merged = dict(DEFAULT_FEATURES)
     merged.update(option(config, "features", {}) or {})
@@ -464,43 +524,65 @@ def _sample_non_adjacent_pairs(n: int, cap: int, seed: int, min_gap: int = 2
 # ----------------------------------------------------------- representation registry
 #
 # Every builder has the signature ``build(units, analysis, kind, config) ->
-# (ok, sim_fn, scale, note)``.  ``kind`` is "sentence", "paragraph" or "pair"
-# (the two-item opening/closing snippet used by the intro/conclusion metric);
-# only the sentence_transformer builder uses it, to reuse semantic_adjacent's
-# cache for "sentence"/"paragraph" and fall through to a direct embed_texts
-# call for "pair" (see the module docstring). ``sim_fn(i, j)`` returns a
-# float or ``None`` (a comparable pair could not be formed, e.g. both units
-# were out-of-vocabulary for a static embedding).  ``scale`` is "cosine" or
-# "unbounded".
+# (ok, sim_fn, group_sim, scale, note)``.  ``kind`` is "sentence" or
+# "paragraph"; only the sentence_transformer builder reads it, to reuse
+# semantic_adjacent's cache for either one (see the module docstring).
+# ``sim_fn(i, j)`` returns a float or ``None`` (a comparable pair could not be
+# formed, e.g. both units were out-of-vocabulary for a static embedding).
+# ``group_sim(indices_a, indices_b)`` scores the AVERAGE of the vectors/stats
+# at ``indices_a`` against the average at ``indices_b``, all within the SAME
+# fit this builder call already produced for ``units`` -- this is what the
+# ``intro_conclusion_similarity`` metric uses (opening-k vs. closing-k
+# sentence indices), rather than a fresh, separate fit on just those two
+# snippets. A fresh 2-document fit is exactly the bug this design avoids: a
+# TruncatedSVD or BM25 index fit on only two documents degenerates (at most
+# one meaningful SVD dimension forces cosine to +-1 outright; BM25's IDF goes
+# negative for any term in more than half of a 2-document corpus) --
+# confirmed on three real books, where ``lsa_intro_conclusion_similarity``
+# was exactly 1.0 and ``bm25_intro_conclusion_similarity`` was negative on
+# every one of them under the old design. Scoring group averages within the
+# SAME whole-document fit instead means every representation answers this
+# metric with the real corpus/document statistics it already computed for
+# every other metric, never a degenerate miniature refit. ``scale`` is
+# "cosine" or "unbounded".
 
-BuildResult = tuple[bool, Callable[[int, int], float | None] | None, str, str]
+BuildResult = tuple[
+    bool,
+    Callable[[int, int], float | None] | None,
+    Callable[[Sequence[int], Sequence[int]], float | None] | None,
+    str, str,
+]
 
 
 def _build_lexical_tfidf(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
                          config: Mapping[str, Any]) -> BuildResult:
     if len(units) < 1:
-        return False, None, "cosine", "no units to compare"
+        return False, None, None, "cosine", "no units to compare"
     vectors = sem.lexical_vectors(list(units))
 
     def sim(i: int, j: int) -> float:
         return _sparse_dot(vectors[i], vectors[j])
 
-    return True, sim, "cosine", ("backend=lexical_tfidf: document-local TF-IDF content-word "
-                                 "cosine (dependency-free; IDF built from this unit list itself)")
+    def group_sim(indices_a: Sequence[int], indices_b: Sequence[int]) -> float | None:
+        return _sparse_group_cosine(vectors, indices_a, indices_b)
+
+    return True, sim, group_sim, "cosine", (
+        "backend=lexical_tfidf: document-local TF-IDF content-word cosine (dependency-free; IDF "
+        "built from this unit list itself)")
 
 
 def _build_bm25(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
                 config: Mapping[str, Any]) -> BuildResult:
     module, reason = require("rank_bm25")
     if module is None:
-        return False, None, "unbounded", f"bm25 unavailable: {reason}"
+        return False, None, None, "unbounded", f"bm25 unavailable: {reason}"
     tokenized = [_content_tokens(unit) for unit in units]
     if not tokenized or not any(tokenized):
-        return False, None, "unbounded", "no content tokens in any unit"
+        return False, None, None, "unbounded", "no content tokens in any unit"
     try:
         model = module.BM25Okapi(tokenized)
     except Exception as exc:  # pragma: no cover - malformed corpus
-        return False, None, "unbounded", f"rank_bm25 fit failed ({type(exc).__name__}: {exc})"
+        return False, None, None, "unbounded", f"rank_bm25 fit failed ({type(exc).__name__}: {exc})"
 
     # rank_bm25's own get_scores/get_batch_scores each rebuild a length-n numpy
     # array from self.doc_len on EVERY call, regardless of how many doc_ids are
@@ -513,6 +595,7 @@ def _build_bm25(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
     # docstring. If a future rank_bm25 release renames or drops one of these,
     # the AttributeError/IndexError falls back to the (slower but correct)
     # public get_batch_scores rather than crashing the representation.
+    group_sim: Callable[[Sequence[int], Sequence[int]], float | None] | None
     try:
         idf, doc_freqs, doc_len, avgdl = model.idf, model.doc_freqs, model.doc_len, model.avgdl
         k1, b = model.k1, model.b
@@ -531,24 +614,59 @@ def _build_bm25(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
                 total += term_idf * (frequency * (k1 + 1)
                                      / (frequency + k1 * (1 - b + b * length / avgdl)))
             return total
+
+        def group_sim(indices_a: Sequence[int], indices_b: Sequence[int]) -> float | None:
+            # "closing queried against the whole-document index": indices_a's
+            # term frequencies and lengths are merged into one synthetic
+            # document, indices_b's tokens are concatenated into one query,
+            # and both are scored with the SAME idf/avgdl/k1/b the whole
+            # document was fit with -- never a fresh 2-document BM25Okapi
+            # fit, which is what made this degenerate (Okapi IDF goes
+            # negative for a term in more than half of a 2-document corpus;
+            # confirmed on three real books, where this metric was negative
+            # for all of them under the old design -- see the module
+            # docstring).
+            document_terms: Counter = Counter()
+            length = 0
+            for index in indices_a:
+                document_terms.update(doc_freqs[index])
+                length += doc_len[index]
+            if length == 0:
+                return None
+            query_tokens = [term for index in indices_b for term in tokenized[index]]
+            if not query_tokens:
+                return None
+            total = 0.0
+            for term in query_tokens:
+                term_idf = idf.get(term)
+                if not term_idf:
+                    continue
+                frequency = document_terms.get(term, 0)
+                if not frequency:
+                    continue
+                total += term_idf * (frequency * (k1 + 1)
+                                     / (frequency + k1 * (1 - b + b * length / avgdl)))
+            return total
     except (AttributeError, IndexError):  # pragma: no cover - rank_bm25 internals changed
         def sim(i: int, j: int) -> float:
             return float(model.get_batch_scores(tokenized[i], [j])[0])
+
+        group_sim = None
 
     note = ("backend=bm25: Okapi BM25 relevance of unit i (query) against unit j (document), "
             "over this document's own sentence/paragraph corpus (rank_bm25.BM25Okapi). "
             "UNBOUNDED, not a cosine similarity in [-1, 1] -- never compare its magnitude "
             "against a cosine-scale representation, only its rank/ordering within this document.")
-    return True, sim, "unbounded", note
+    return True, sim, group_sim, "unbounded", note
 
 
 def _build_lsa(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
               config: Mapping[str, Any]) -> BuildResult:
     sk, reason = require("sklearn")
     if sk is None:
-        return False, None, "cosine", f"sklearn unavailable: {reason}"
+        return False, None, None, "cosine", f"sklearn unavailable: {reason}"
     if len(units) < 2:
-        return False, None, "cosine", "needs at least two units"
+        return False, None, None, "cosine", "needs at least two units"
     from sklearn.decomposition import TruncatedSVD
     from sklearn.feature_extraction.text import TfidfVectorizer
     # max_features bounds the TF-IDF matrix width; a full novel's distinct
@@ -562,9 +680,9 @@ def _build_lsa(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
         vectorizer = TfidfVectorizer(stop_words="english", min_df=1, max_features=max_features)
         matrix = vectorizer.fit_transform(list(units))
     except Exception as exc:
-        return False, None, "cosine", f"TF-IDF vectorization failed ({type(exc).__name__}: {exc})"
+        return False, None, None, "cosine", f"TF-IDF vectorization failed ({type(exc).__name__}: {exc})"
     if matrix.shape[1] < 2:
-        return False, None, "cosine", "too little distinct vocabulary to fit LSA"
+        return False, None, None, "cosine", "too little distinct vocabulary to fit LSA"
     n_components = max(1, min(int(option(config, "lsa_components", 10)),
                               matrix.shape[1] - 1, len(units) - 1))
     seed = int(option(config, "seed", 0))
@@ -581,10 +699,10 @@ def _build_lsa(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
         svd.fit(matrix[fit_rows])
         reduced = svd.transform(matrix)
     except Exception as exc:
-        return False, None, "cosine", f"TruncatedSVD failed ({type(exc).__name__}: {exc})"
+        return False, None, None, "cosine", f"TruncatedSVD failed ({type(exc).__name__}: {exc})"
     np, _ = require("numpy")
     if np is None:  # pragma: no cover - numpy ships with sklearn
-        return False, None, "cosine", "numpy unavailable (required by sklearn itself)"
+        return False, None, None, "cosine", "numpy unavailable (required by sklearn itself)"
     norms = np.linalg.norm(reduced, axis=1)
     norms[norms == 0] = 1.0
     reduced = reduced / norms[:, None]
@@ -592,12 +710,25 @@ def _build_lsa(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
     def sim(i: int, j: int) -> float:
         return float(reduced[i] @ reduced[j])
 
+    def group_sim(indices_a: Sequence[int], indices_b: Sequence[int]) -> float | None:
+        # Mean of the ALREADY-fitted (whole-document-basis) per-unit vectors
+        # for each group, re-normalized, then cosine -- never a fresh SVD fit
+        # on just the two groups. A 2-document TruncatedSVD has at most one
+        # meaningful dimension, which forces every pair's cosine to exactly
+        # +-1 regardless of content; confirmed on three real books, where
+        # this metric was exactly 1.0 for all of them under that design (see
+        # the module docstring).
+        a = np.asarray(reduced[list(indices_a)]).mean(axis=0)
+        b = np.asarray(reduced[list(indices_b)]).mean(axis=0)
+        norm_a, norm_b = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+        return float((a / norm_a) @ (b / norm_b)) if norm_a and norm_b else None
+
     explained = float(getattr(svd, "explained_variance_ratio_", [0.0]).sum())
     note = (f"backend=lsa: within-document TruncatedSVD over this document's own TF-IDF matrix "
             f"({n_components} components, explained_variance_ratio sum={explained:.3f}); a "
             f"linear-algebra re-projection of THIS document, not a corpus-trained topic model "
             f"-- see the 'topic_models' feature for the leave-one-out corpus-trained channel.")
-    return True, sim, "cosine", note
+    return True, sim, group_sim, "cosine", note
 
 
 _GLOVE_CACHE: dict[str, tuple[Any, str | None]] = {}
@@ -639,30 +770,55 @@ def _mean_pool(vectors_kv: Any, text: str, np: Any) -> Any:
     return vector / norm if norm else None
 
 
+def _dense_group_cosine(vectors: Sequence[Any], indices_a: Sequence[int],
+                        indices_b: Sequence[int], np: Any) -> float | None:
+    """Cosine between the mean of the (already-normalized, possibly-missing)
+    dense vectors at ``indices_a`` and at ``indices_b``, skipping units with
+    no vector (e.g. every content word was out-of-vocabulary). Used by
+    every dense-vector representation's ``group_sim`` for the
+    intro/conclusion metric, so it scores within the SAME per-unit vectors
+    already computed for every other metric rather than a fresh, separate
+    embedding of two new snippets."""
+
+    def merged(indices: Sequence[int]) -> Any:
+        present = [vectors[index] for index in indices if vectors[index] is not None]
+        if not present:
+            return None
+        average = np.mean(np.stack(present), axis=0)
+        norm = float(np.linalg.norm(average))
+        return average / norm if norm else None
+
+    a, b = merged(indices_a), merged(indices_b)
+    return float(np.dot(a, b)) if a is not None and b is not None else None
+
+
 def _build_glove(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
                  config: Mapping[str, Any]) -> BuildResult:
     model_name = option(config, "glove_model", DEFAULT_GLOVE_MODEL)
     kv, reason = _load_glove(model_name)
     if kv is None:
-        return False, None, "cosine", f"static_embedding_glove unavailable: {reason}"
+        return False, None, None, "cosine", f"static_embedding_glove unavailable: {reason}"
     np, np_reason = require("numpy")
     if np is None:  # pragma: no cover - numpy ships with gensim
-        return False, None, "cosine", f"numpy unavailable: {np_reason}"
+        return False, None, None, "cosine", f"numpy unavailable: {np_reason}"
     vectors = [_mean_pool(kv, unit, np) for unit in units]
     missing = sum(1 for vector in vectors if vector is None)
     if missing == len(vectors):
-        return False, None, "cosine", (f"no unit had a recognized word in {model_name!r} "
-                                       f"(aggregation=mean, content words only)")
+        return False, None, None, "cosine", (f"no unit had a recognized word in {model_name!r} "
+                                             f"(aggregation=mean, content words only)")
 
     def sim(i: int, j: int) -> float | None:
         a, b = vectors[i], vectors[j]
         return None if a is None or b is None else float(np.dot(a, b))
 
+    def group_sim(indices_a: Sequence[int], indices_b: Sequence[int]) -> float | None:
+        return _dense_group_cosine(vectors, indices_a, indices_b, np)
+
     note = (f"backend=static_embedding_glove: {model_name!r} vectors via gensim's downloader "
             f"API, mean-pooled over content words (aggregation=mean; TF-IDF-weighted mean and "
             f"SIF are documented, not implemented), cosine similarity. {missing}/{len(vectors)} "
             f"units had no recognized vocabulary word and are excluded pairwise.")
-    return True, sim, "cosine", note
+    return True, sim, group_sim, "cosine", note
 
 
 _SPACY_VECTOR_CACHE: dict[str, tuple[Any, str | None]] = {}
@@ -707,14 +863,15 @@ def _build_spacy_vectors(units: Sequence[str], analysis: DocumentAnalysis, kind:
     model_name = option(config, "spacy_vector_model", DEFAULT_SPACY_VECTOR_MODEL)
     nlp, reason = _load_spacy_vectors(model_name)
     if nlp is None:
-        return False, None, "cosine", f"static_embedding_spacy unavailable: {reason}"
+        return False, None, None, "cosine", f"static_embedding_spacy unavailable: {reason}"
     np, np_reason = require("numpy")
     if np is None:  # pragma: no cover - numpy ships with spacy
-        return False, None, "cosine", f"numpy unavailable: {np_reason}"
+        return False, None, None, "cosine", f"numpy unavailable: {np_reason}"
     try:
         docs = list(nlp.pipe(list(units)))
     except Exception as exc:  # pragma: no cover - runtime failure
-        return False, None, "cosine", f"spaCy vector pipeline failed ({type(exc).__name__}: {exc})"
+        return False, None, None, "cosine", (f"spaCy vector pipeline failed "
+                                             f"({type(exc).__name__}: {exc})")
     vectors = []
     for doc in docs:
         if doc.has_vector and doc.vector_norm:
@@ -723,38 +880,48 @@ def _build_spacy_vectors(units: Sequence[str], analysis: DocumentAnalysis, kind:
             vectors.append(None)
     missing = sum(1 for vector in vectors if vector is None)
     if missing == len(vectors):
-        return False, None, "cosine", f"no unit had a recognized {model_name!r} vector"
+        return False, None, None, "cosine", f"no unit had a recognized {model_name!r} vector"
 
     def sim(i: int, j: int) -> float | None:
         a, b = vectors[i], vectors[j]
         return None if a is None or b is None else float(np.dot(a, b))
 
+    def group_sim(indices_a: Sequence[int], indices_b: Sequence[int]) -> float | None:
+        return _dense_group_cosine(vectors, indices_a, indices_b, np)
+
     note = (f"backend=static_embedding_spacy: {model_name!r} static word vectors, mean-pooled "
             f"by spaCy's own doc.vector (aggregation=mean), cosine similarity. "
             f"{missing}/{len(vectors)} units had no recognized vector and are excluded "
             f"pairwise.")
-    return True, sim, "cosine", note
+    return True, sim, group_sim, "cosine", note
 
 
 def _build_sentence_transformer(units: Sequence[str], analysis: DocumentAnalysis, kind: str,
                                 config: Mapping[str, Any]) -> BuildResult:
     model_name = option(config, "sentence_transformer_model", sem.DEFAULT_MODEL)
-    if kind == "sentence":
-        backend, vectors, note = sem.get_sentence_vectors(analysis, model_name)
-    elif kind == "paragraph":
+    if kind == "paragraph":
         backend, vectors, note = sem.get_paragraph_vectors(analysis, model_name)
     else:
-        vectors, reason = sem.embed_texts(list(units), model_name)
-        backend = "embedding" if vectors is not None else "lexical"
-        note = sem.backend_note(backend, model_name, reason)
+        backend, vectors, note = sem.get_sentence_vectors(analysis, model_name)
     if backend != "embedding" or vectors is None or len(vectors) == 0:
-        return False, None, "cosine", (f"sentence_transformer representation unavailable or "
-                                       f"fell back to a lexical proxy: {note}")
+        return False, None, None, "cosine", (f"sentence_transformer representation unavailable "
+                                             f"or fell back to a lexical proxy: {note}")
 
     def sim(i: int, j: int) -> float:
         return float(vectors[i].dot(vectors[j]))
 
-    return True, sim, "cosine", f"backend=sentence_transformer: {note}"
+    def group_sim(indices_a: Sequence[int], indices_b: Sequence[int]) -> float | None:
+        # Mean of the ALREADY-encoded (whole-document) sentence-transformer
+        # vectors for each group, re-normalized, then cosine -- reuses
+        # semantic_adjacent's cache exactly like every other metric here;
+        # never a fresh embed_texts call on two new concatenated snippets.
+        a = vectors[list(indices_a)].mean(axis=0)
+        b = vectors[list(indices_b)].mean(axis=0)
+        norm_a = float((a * a).sum() ** 0.5)
+        norm_b = float((b * b).sum() ** 0.5)
+        return float((a / norm_a).dot(b / norm_b)) if norm_a and norm_b else None
+
+    return True, sim, group_sim, "cosine", f"backend=sentence_transformer: {note}"
 
 
 REPRESENTATIONS: dict[str, Callable[..., BuildResult]] = {
@@ -771,6 +938,43 @@ REPRESENTATIONS: dict[str, Callable[..., BuildResult]] = {
 
 def _unit_label(scale: str) -> str:
     return "cosine" if scale == "cosine" else "bm25_score"
+
+
+def _resolve_headline(values: Sequence[float], summary: Mapping[str, Any]
+                      ) -> tuple[float | None, str]:
+    """Median normally; the mean when the median cannot resolve anything.
+
+    Real prose makes adjacent-sentence lexical/BM25 similarity zero-inflated:
+    most sentence pairs share no content word at all, so the median (and
+    often several neighbouring quantiles) sits at exactly 0.0 regardless of
+    how the document actually varies -- confirmed on real books (Alice,
+    The Secret Agent, Flatland) during this suite's own review, where
+    ``bm25_adjacent_sentence`` medianed 0.0 on all three while the mean was
+    2.08 / 0.75 / 1.94. A corpus comparison that only ever reads the
+    headline would then compare "0.0" against "0.0" forever and never
+    resolve anything.
+
+    ``summary["mad"] == 0`` is exactly the condition "at least half the
+    sample is tied at the median" (that is what a zero median absolute
+    deviation means), which is the general form of "the median sits at a
+    single tied value" -- not only the zero-inflated case, though that is
+    the one seen in practice here. When that holds, the mean is reported as
+    the headline instead; the median is still kept, alongside this choice
+    and the exact zero-share, in the finding's ``distribution`` -- see every
+    caller's ``"aggregation"``/``"zero_share_percent"`` fields.
+    """
+
+    median = summary.get("median")
+    mean = summary.get("mean")
+    if median is not None and mean is not None and summary.get("mad") == 0:
+        return mean, ("mean (the median was degenerate: at least half the sample is tied at "
+                      "the median value, so median absolute deviation is 0 and the median "
+                      "cannot resolve anything)")
+    return median, "median"
+
+
+def _zero_share_percent(values: Sequence[float]) -> float:
+    return 100.0 * sum(1 for value in values if value == 0) / len(values) if values else 0.0
 
 
 def _adjacent_raw(units: Sequence[str], ok: bool,
@@ -806,13 +1010,16 @@ def _adjacent_finding(rep: str, kind: str, units: Sequence[str], raw: list[float
     evidence = [{"index": idxs[k], "value": values[k],
                 "unit_a": sem.truncate(units[idxs[k]]), "unit_b": sem.truncate(units[idxs[k] + 1])}
                for k in ranked]
+    headline, method = _resolve_headline(values, summary)
     distribution = dict(summary)
     distribution["scale"] = scale
     distribution["low_tail_p10"] = quantile(values, 0.10)
+    distribution["zero_share_percent"] = _zero_share_percent(values)
+    distribution["aggregation"] = f"headline is the {method} of the per-pair values"
     overlap = _OVERLAP_NOTES.get((rep, f"adjacent_{kind}"))
     if overlap:
         distribution["overlaps_existing_metric_id"] = overlap
-    return finding(metric_id, name, summary.get("median"), unit_label, family=FAMILY,
+    return finding(metric_id, name, headline, unit_label, family=FAMILY,
                   sample_size=len(values), min_sample=min_sample, distribution=distribution,
                   evidence=evidence, warning=note)
 
@@ -853,14 +1060,17 @@ def _centroid_finding(rep: str, sentences: Sequence[str], ok: bool,
         return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=0,
                        min_sample=3, warning=f"{note}; no comparable pair")
     summary = summarize(means)
+    headline, method = _resolve_headline(means, summary)
     distribution = dict(summary)
     distribution.update({"scale": scale, "reference_sample_size": len(reference),
                          "query_sample_size": len(queries), "document_sentence_count": n,
-                         "seed": seed})
+                         "seed": seed, "zero_share_percent": _zero_share_percent(means),
+                         "aggregation": f"headline is the {method} of each queried sentence's own "
+                                       f"mean relatedness to the reference sample"})
     overlap = _OVERLAP_NOTES.get((rep, "centroid_relatedness"))
     if overlap:
         distribution["overlaps_existing_metric_id"] = overlap
-    return finding(metric_id, name, summary.get("median"), unit_label, family=FAMILY,
+    return finding(metric_id, name, headline, unit_label, family=FAMILY,
                   sample_size=len(means), min_sample=3, distribution=distribution, warning=note)
 
 
@@ -892,9 +1102,14 @@ def _window_drift_finding(rep: str, sentences: Sequence[str], ok: bool,
                        min_sample=window * 2, warning="fewer than two windows to compare")
     deltas = [abs(block_means[i] - block_means[i - 1]) for i in range(1, len(block_means))]
     summary = summarize(deltas)
+    headline, method = _resolve_headline(deltas, summary)
     distribution = dict(summary)
-    distribution.update({"scale": scale, "window_size": window, "block_count": len(block_means)})
-    return finding(metric_id, name, summary.get("median"), unit_label, family=FAMILY,
+    distribution.update({
+        "scale": scale, "window_size": window, "block_count": len(block_means),
+        "zero_share_percent": _zero_share_percent(deltas),
+        "aggregation": f"headline is the {method} of the block-to-block absolute mean change",
+    })
+    return finding(metric_id, name, headline, unit_label, family=FAMILY,
                   sample_size=len(deltas), min_sample=1, distribution=distribution, warning=note)
 
 
@@ -926,46 +1141,62 @@ def _dispersion_finding(rep: str, sentences: Sequence[str], ok: bool,
     distribution = dict(summary)
     distribution.update({
         "scale": scale, "pairs_sampled": len(values), "pair_cap": cap, "seed": seed,
+        "zero_share_percent": _zero_share_percent(values),
         "aggregation": "the headline value is the STANDARD DEVIATION of the sampled "
-                       "similarities (dispersion is a spread statistic); 'median' above "
-                       "describes the sampled similarities themselves, not the dispersion",
+                       "similarities (dispersion is a spread statistic, never a median or mean "
+                       "fallback -- see _resolve_headline's docstring for why that choice is "
+                       "specific to a central-tendency headline); 'median'/'mean' above describe "
+                       "the sampled similarities themselves, not the dispersion",
     })
     return finding(metric_id, name, summary.get("std"), unit_label, family=FAMILY,
                   sample_size=len(values), min_sample=4, distribution=distribution, warning=note)
 
 
-def _intro_conclusion_finding(rep: str, sentences: Sequence[str],
-                              builder: Callable[..., BuildResult], analysis: DocumentAnalysis,
+def _intro_conclusion_finding(rep: str, sentences: Sequence[str], ok: bool,
+                              group_sim: Callable[[Sequence[int], Sequence[int]], float | None]
+                              | None, scale: str, note: str,
                               config: Mapping[str, Any]) -> dict[str, Any]:
     metric_id = f"semantic.structure_{rep}_intro_conclusion_similarity"
     name = (f"{REP_LABELS[rep]} opening-to-closing similarity (conclusion-to-introduction "
             f"similarity; opening-to-closing semantic DISTANCE is 1 - this value on a "
             f"cosine-scale representation)")
+    unit_label = _unit_label(scale)
     k = max(1, int(option(config, "intro_conclusion_sentences", 3)))
-    if len(sentences) < 2 * k:
-        return finding(metric_id, name, None, "cosine", family=FAMILY, sample_size=len(sentences),
+    n = len(sentences)
+    if n < 2 * k:
+        return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=n,
                        min_sample=2 * k,
                        warning=f"needs at least {2 * k} sentences (2x intro_conclusion_sentences); "
-                               f"this text has {len(sentences)}")
-    opening = " ".join(sentences[:k])
-    closing = " ".join(sentences[-k:])
-    ok, sim_fn, scale, note = builder([opening, closing], analysis, "pair", config)
-    unit_label = _unit_label(scale)
-    if not ok or sim_fn is None:
+                               f"this text has {n}")
+    if not ok or group_sim is None:
         return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=0,
-                       min_sample=1, warning=note)
-    value = sim_fn(0, 1)
-    return finding(metric_id, name, value, unit_label, family=FAMILY, sample_size=2 * k,
-                  min_sample=2 * k, distribution={"opening_sentences": k, "closing_sentences": k,
-                                                  "scale": scale}, warning=note)
+                       min_sample=2 * k, warning=note)
+    opening_indices = list(range(k))
+    closing_indices = list(range(n - k, n))
+    value = group_sim(opening_indices, closing_indices)
+    if value is None:
+        return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=0,
+                       min_sample=2 * k,
+                       warning=f"{note}; no comparable pair (every unit vector was missing)")
+    return finding(
+        metric_id, name, value, unit_label, family=FAMILY, sample_size=2 * k, min_sample=2 * k,
+        distribution={
+            "opening_sentences": k, "closing_sentences": k, "scale": scale,
+            "aggregation": "cosine (or, for bm25, the query-vs-synthetic-document score) between "
+                          "the AVERAGE of the opening-k and the AVERAGE of the closing-k sentence "
+                          "vectors/statistics, both drawn from the SAME whole-document fit this "
+                          "representation already produced for every other metric -- never a "
+                          "fresh, separate fit on just the two snippets, which degenerates (see "
+                          "the module docstring)",
+        }, warning=note)
 
 
 def _representation_findings(rep: str, analysis: DocumentAnalysis, config: Mapping[str, Any]
                              ) -> tuple[list[dict[str, Any]], list[float | None]]:
     builder = REPRESENTATIONS[rep]
     sentences, paragraphs = analysis.sentences, analysis.paragraphs
-    sok, ssim, sscale, snote = builder(sentences, analysis, "sentence", config)
-    pok, psim, pscale, pnote = builder(paragraphs, analysis, "paragraph", config)
+    sok, ssim, sgroup, sscale, snote = builder(sentences, analysis, "sentence", config)
+    pok, psim, _pgroup, pscale, pnote = builder(paragraphs, analysis, "paragraph", config)
     raw_sentence_values = _adjacent_raw(sentences, sok, ssim)
     findings = [
         _adjacent_finding(rep, "sentence", sentences, raw_sentence_values, sscale, snote),
@@ -974,7 +1205,7 @@ def _representation_findings(rep: str, analysis: DocumentAnalysis, config: Mappi
         _centroid_finding(rep, sentences, sok, ssim, sscale, snote, config),
         _window_drift_finding(rep, sentences, sok, ssim, sscale, snote, config),
         _dispersion_finding(rep, sentences, sok, ssim, sscale, snote, config),
-        _intro_conclusion_finding(rep, sentences, builder, analysis, config),
+        _intro_conclusion_finding(rep, sentences, sok, sgroup, sscale, snote, config),
     ]
     return findings, raw_sentence_values
 
@@ -1015,6 +1246,74 @@ def _spearman(a: Sequence[float], b: Sequence[float]) -> float | None:
     if variance_a <= 0 or variance_b <= 0:
         return None
     return covariance / math.sqrt(variance_a * variance_b)
+
+
+def _rep_tie_seed(rep: str, base_seed: int) -> int:
+    """A deterministic, per-representation tie-break seed.
+
+    Not Python's built-in ``hash(str)``: that is salted per-process
+    (``PYTHONHASHSEED``) unless explicitly disabled, which would make the
+    tie-break -- and therefore which transitions get flagged -- silently
+    different between two runs of an identical grading job. ``zlib.crc32``
+    is a stable, dependency-free hash across processes and Python versions.
+    """
+
+    return (base_seed * 1_000_003) ^ zlib.crc32(rep.encode("utf-8"))
+
+
+def _low_tail_flags_by_rank(clean: Sequence[tuple[int, float]], quantile_share: float,
+                            tie_break_seed: int) -> tuple[set[int], dict[str, Any]]:
+    """The lowest ``quantile_share`` of ``clean`` (``(index, value)`` pairs),
+    chosen BY RANK rather than by an absolute quantile threshold.
+
+    An absolute threshold (this suite's earlier approach: flag every value
+    ``<= quantile(values, quantile_share)``) is what a zero-inflated
+    representation breaks: lexical_tfidf and BM25 adjacent-sentence scores on
+    real prose are mostly exactly 0.0 (most sentence pairs share no content
+    word), so their own 10th-percentile THRESHOLD is 0.0 too, and "every
+    value <= 0.0" flags nearly the whole document -- confirmed on three real
+    books, where the resulting consensus share was 98.3-99.7% instead of
+    anywhere near the configured 10%. Picking a fixed COUNT of the lowest
+    values by rank flags close to ``quantile_share`` of the sample regardless
+    of how many values are tied at the bottom.
+
+    The tie-break is a deterministic pseudo-random order SEEDED PER
+    REPRESENTATION (``tie_break_seed``, from :func:`_rep_tie_seed`), not
+    "lowest index first": two lexical representations (lexical_tfidf and
+    BM25 both measure the same content-word overlap) routinely share the
+    exact same large block of zero-valued transitions on real prose, and
+    breaking ties by plain index order would make both representations pick
+    the identical arbitrary subset of that shared block every time --
+    manufacturing spurious cross-representation "agreement" out of nothing
+    but a shared tie-break rule rather than real agreement about which
+    transition is least coherent. A per-representation seed avoids that
+    while staying fully deterministic and reproducible.
+
+    The tie is not hidden either way: when more values are tied at the exact
+    value that sits at the flag boundary than the flag quota itself, WHICH
+    of those tied transitions ends up flagged is an arbitrary (though
+    deterministic) choice, and ``degenerate_tie`` says so, alongside how many
+    were tied there, so a reader is never left assuming the boundary was
+    informative when it was not.
+    """
+
+    n = len(clean)
+    if n == 0:
+        return set(), {"flagged": 0, "total": 0, "flagged_share_percent": None,
+                       "tied_at_boundary_value": 0, "degenerate_tie": False}
+    count = min(n, max(1, round(quantile_share * n)))
+    rng = random.Random(tie_break_seed)
+    tie_keys = {index: rng.random() for index, _ in clean}
+    ordered = sorted(clean, key=lambda pair: (pair[1], tie_keys[pair[0]]))
+    boundary_value = ordered[count - 1][1]
+    tied_at_boundary = sum(1 for _, value in clean if value == boundary_value)
+    flagged = {index for index, _ in ordered[:count]}
+    return flagged, {
+        "flagged": len(flagged), "total": n,
+        "flagged_share_percent": 100.0 * len(flagged) / n,
+        "boundary_value": boundary_value, "tied_at_boundary_value": tied_at_boundary,
+        "degenerate_tie": tied_at_boundary > count,
+    }
 
 
 def _disagreement_findings(rep_values: Mapping[str, list[float | None]],
@@ -1061,19 +1360,32 @@ def _disagreement_findings(rep_values: Mapping[str, list[float | None]],
     finding_correlation = finding(
         correlation_id, correlation_name, statistics.median(rho_values) if rho_values else None,
         "spearman_rho", family=FAMILY, sample_size=len(rho_values), min_sample=1,
-        distribution={"pairwise": correlations, "representations": reps},
+        distribution={
+            "pairwise": correlations, "representations": reps,
+            # Left as the median deliberately, unlike the adjacent/centroid/
+            # window headlines above: rho_values is a small set of pairwise
+            # Spearman correlations (continuous in [-1, 1], one per
+            # representation PAIR, not per transition), so exact ties are not
+            # the zero-inflation pattern _resolve_headline exists for --
+            # checked directly on real books (Alice, The Secret Agent,
+            # Flatland) and the median never sat at a degenerate tied value.
+            "aggregation": "headline is the median pairwise Spearman rank correlation",
+        },
         warning=None if rho_values else
         "no representation pair had enough paired transitions to correlate")
 
     low_tail_q = float(option(config, "disagreement_low_tail_quantile", 0.10))
+    base_seed = int(option(config, "seed", 0))
     per_rep_low: dict[str, set[int]] = {}
+    per_rep_diagnostics: dict[str, dict[str, Any]] = {}
     for rep, values in active.items():
         clean = [(i, v) for i, v in enumerate(values) if v is not None]
         if len(clean) < MIN_SAMPLE_DISAGREEMENT:
             continue
-        values_only = [v for _, v in clean]
-        threshold = quantile(values_only, low_tail_q)
-        per_rep_low[rep] = {i for i, v in clean if threshold is not None and v <= threshold}
+        flagged, diagnostics = _low_tail_flags_by_rank(clean, low_tail_q,
+                                                       _rep_tie_seed(rep, base_seed))
+        per_rep_low[rep] = flagged
+        per_rep_diagnostics[rep] = diagnostics
 
     all_indices: set[int] = set()
     for flagged in per_rep_low.values():
@@ -1094,12 +1406,27 @@ def _disagreement_findings(rep_values: Mapping[str, list[float | None]],
                                     sample_size=0, min_sample=1, warning=warning)
     else:
         sentences = analysis.sentences
+        # Every representation flags close to low_tail_q of its OWN transitions
+        # by rank (deterministic tie-break: lowest value, then lowest index),
+        # never by an absolute quantile threshold -- a zero-inflated
+        # representation's 10th-percentile THRESHOLD is often 0.0 itself, which
+        # would otherwise flag nearly every zero transition (confirmed on real
+        # books: lexical_tfidf/bm25 flagged 98-99.7% of transitions under the
+        # old threshold rule). ``per_representation`` below reports exactly how
+        # many each representation flagged and whether that flag boundary sat
+        # inside a large tie (``degenerate_tie``), so a reader can see when the
+        # selection at the edge was effectively arbitrary rather than hiding it.
         finding_single = finding(
             single_id, single_name,
             rate(len(single_flags), len(all_indices), 100.0) if all_indices else None, "%",
             family=FAMILY, sample_size=len(all_indices), min_sample=1,
             distribution={"representations_compared": sorted(per_rep_low),
                          "low_tail_quantile": low_tail_q,
+                         "flagging_method": "lowest low_tail_quantile share BY RANK per "
+                                           "representation (deterministic tie-break: value then "
+                                           "index), not an absolute quantile threshold -- see "
+                                           "per_representation for exactly how many each flagged",
+                         "per_representation": per_rep_diagnostics,
                          "flagged_by_exactly_one": len(single_flags),
                          "total_flagged_by_any": len(all_indices)},
             evidence=[{"sentence_index": index,
@@ -1112,6 +1439,12 @@ def _disagreement_findings(rep_values: Mapping[str, list[float | None]],
             rate(len(consensus_flags), len(all_indices), 100.0) if all_indices else None, "%",
             family=FAMILY, sample_size=len(all_indices), min_sample=1,
             distribution={"representations_compared": sorted(per_rep_low),
+                         "low_tail_quantile": low_tail_q,
+                         "flagging_method": "lowest low_tail_quantile share BY RANK per "
+                                           "representation (deterministic tie-break: value then "
+                                           "index), not an absolute quantile threshold -- see "
+                                           "per_representation for exactly how many each flagged",
+                         "per_representation": per_rep_diagnostics,
                          "consensus_threshold": consensus_threshold,
                          "flagged_by_consensus": len(consensus_flags)},
             evidence=[{"sentence_index": index,
@@ -1515,47 +1848,82 @@ def _topic_findings(model_name: str, entry: Mapping[str, Any], meta: Mapping[str
     usage_max = math.log2(len(usage)) if len(usage) > 1 else 0.0
     concentration = (1.0 - usage_entropy / usage_max) if usage_max else 1.0
 
+    entropy_summary = summarize(entropies)
+    entropy_headline, entropy_method = _resolve_headline(entropies, entropy_summary)
+    confidence_summary = summarize(confidences)
+    confidence_headline, confidence_method = _resolve_headline(confidences, confidence_summary)
+    active_summary = summarize(actives)
+    active_headline, active_method = _resolve_headline(actives, active_summary)
+    gap_headline, gap_method = ((_resolve_headline(gaps, summarize(gaps))) if gaps else
+                               (None, "median"))
+    run_summary = summarize(runs)
+    run_headline, run_method = _resolve_headline(runs, run_summary)
+
     prefix = f"semantic.structure_topic_{model_name}"
     return [
         finding(f"{prefix}_distribution_entropy",
                f"{model_name.upper()} corpus-trained topic distribution entropy",
-               statistics.median(entropies), "bits", family=FAMILY, sample_size=n,
+               entropy_headline, "bits", family=FAMILY, sample_size=n,
                min_sample=MIN_TOPIC_PARAGRAPHS,
                distribution={**base, "n_topics": n_topics, "max_possible_bits": max_entropy,
-                            "mean": statistics.fmean(entropies)}),
+                            "mean": statistics.fmean(entropies),
+                            "zero_share_percent": _zero_share_percent(entropies),
+                            "aggregation": f"headline is the {entropy_method} of the per-paragraph "
+                                          f"topic-distribution entropy"}),
         finding(f"{prefix}_dominant_confidence",
                f"{model_name.upper()} corpus-trained dominant-topic probability",
-               statistics.median(confidences), "probability", family=FAMILY, sample_size=n,
-               min_sample=MIN_TOPIC_PARAGRAPHS, distribution={**base, "n_topics": n_topics}),
+               confidence_headline, "probability", family=FAMILY, sample_size=n,
+               min_sample=MIN_TOPIC_PARAGRAPHS,
+               distribution={**base, "n_topics": n_topics,
+                            "zero_share_percent": _zero_share_percent(confidences),
+                            "aggregation": f"headline is the {confidence_method} of the "
+                                          f"per-paragraph dominant-topic probability"}),
         finding(f"{prefix}_switch_rate",
                f"{model_name.upper()} corpus-trained topic-switch rate between adjacent "
                f"paragraphs", switch_rate, "%", family=FAMILY, sample_size=len(switches),
                min_sample=max(1, MIN_TOPIC_PARAGRAPHS - 1),
-               distribution={**base, "n_topics": n_topics},
+               distribution={**base, "n_topics": n_topics,
+                            "aggregation": "share of adjacent paragraph pairs whose dominant "
+                                          "topic differs (a rate, not a median/mean of samples)"},
                warning=None if switches else
                "fewer than two paragraphs with a valid topic distribution"),
         finding(f"{prefix}_recurrence_interval",
                f"{model_name.upper()} corpus-trained topic recurrence interval",
-               statistics.median(gaps) if gaps else None, "paragraphs", family=FAMILY,
+               gap_headline, "paragraphs", family=FAMILY,
                sample_size=len(gaps), min_sample=max(1, MIN_TOPIC_PARAGRAPHS - 1),
-               distribution={**base, "n_topics": n_topics},
+               distribution={**base, "n_topics": n_topics,
+                            "zero_share_percent": _zero_share_percent(gaps) if gaps else 0.0,
+                            "aggregation": f"headline is the {gap_method} of the paragraph gap "
+                                          f"between successive occurrences of the same dominant "
+                                          f"topic"},
                warning=None if gaps else "no dominant topic recurred"),
         finding(f"{prefix}_run_length",
                f"{model_name.upper()} corpus-trained dominant-topic persistence (run length)",
-               statistics.median(runs), "paragraphs", family=FAMILY, sample_size=len(runs),
-               min_sample=1, distribution={**base, "n_topics": n_topics, "longest_run": max(runs)}),
+               run_headline, "paragraphs", family=FAMILY, sample_size=len(runs),
+               min_sample=1,
+               distribution={**base, "n_topics": n_topics, "longest_run": max(runs),
+                            "zero_share_percent": _zero_share_percent(runs),
+                            "aggregation": f"headline is the {run_method} of the dominant-topic "
+                                          f"run lengths"}),
         finding(f"{prefix}_active_topics",
                f"{model_name.upper()} corpus-trained active-topic count per paragraph "
-               f"(probability >= {threshold:g})", statistics.median(actives), "count",
+               f"(probability >= {threshold:g})", active_headline, "count",
                family=FAMILY, sample_size=n, min_sample=MIN_TOPIC_PARAGRAPHS,
-               distribution={**base, "n_topics": n_topics, "active_threshold": threshold}),
+               distribution={**base, "n_topics": n_topics, "active_threshold": threshold,
+                            "zero_share_percent": _zero_share_percent(actives),
+                            "aggregation": f"headline is the {active_method} of the per-paragraph "
+                                          f"active-topic count"}),
         finding(f"{prefix}_concentration",
                f"{model_name.upper()} corpus-trained dominant-topic balance/concentration "
                f"(0=perfectly even topic use across the document, 1=one topic dominates every "
                f"paragraph)", concentration, "ratio", family=FAMILY, sample_size=n,
                min_sample=MIN_TOPIC_PARAGRAPHS,
                distribution={**base, "n_topics": n_topics,
-                            "distinct_dominant_topics_used": len(usage)}),
+                            "distinct_dominant_topics_used": len(usage),
+                            "aggregation": "1 - normalized Shannon entropy of the document-wide "
+                                          "dominant-topic usage distribution (a single "
+                                          "whole-document statistic, not a median/mean of "
+                                          "per-paragraph samples)"}),
     ]
 
 
