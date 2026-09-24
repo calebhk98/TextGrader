@@ -297,3 +297,22 @@ afinn>=0.1
 textblob>=0.15
 empath>=0.89
 liwc>=0.5
+# Lexical retrieval-style BM25 scoring for the experimental
+# semantic_structure_suite metric's "bm25" representation (on by default).
+# Pure Python, no model download, torch-free.
+rank_bm25>=0.2
+
+# Used by semantic_structure_suite ONLY as the loader for pretrained static
+# word-vector sets (GloVe via gensim's downloader API, "static_embedding_glove"
+# feature, off by default) -- not for its own LDA/LSI/HDP implementations,
+# which that suite gets from scikit-learn (LDA/NMF/LSA, already a project
+# dependency above) and tomotopy (HDP) instead. Torch-free; confirmed
+# installing cleanly against this project's pinned numpy/scipy before use.
+gensim>=4.3
+
+# An efficient, Python-native (C++-backed, no JVM) topic-model library used by
+# semantic_structure_suite for its corpus-trained HDP channel, since neither
+# scikit-learn nor gensim ships an HDP implementation. MALLET, the tool this
+# project's task table names first for this role, is explicitly out of scope:
+# it is a Java program, and this project is Python-only. Torch-free.
+tomotopy>=0.12
