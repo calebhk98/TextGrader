@@ -179,6 +179,32 @@ def test_a_closing_quote_stays_with_the_sentence_it_closes():
     assert sentences[2] == "He sat."
 
 
+@pytest.mark.parametrize("text, expected", [
+    ('He waited. "Well?" she asked. "Nothing," he said.',
+     ['He waited.', '"Well?" she asked.', '"Nothing," he said.']),
+    ('"I am here," she said. "You are late." He shrugged.',
+     ['"I am here," she said.', '"You are late."', 'He shrugged.']),
+    ('"It is late. We should go." "Not yet," he said.',
+     ['"It is late.', 'We should go."', '"Not yet," he said.']),
+    ('She said, "No." Then she left. "Wait!" he called.',
+     ['She said, "No."', 'Then she left.', '"Wait!" he called.']),
+    ('"Go home." "Why?" "Because I said so."',
+     ['"Go home."', '"Why?"', '"Because I said so."']),
+    ("He waited. 'Well?' she asked. 'Nothing,' he said.",
+     ["He waited.", "'Well?' she asked.", "'Nothing,' he said."]),
+    ("'Is it you?' she asked. 'Yes.' He nodded.",
+     ["'Is it you?' she asked.", "'Yes.'", "He nodded."]),
+    ("“We were one flesh all the time. ’Tis true.” He sat.",
+     ["“We were one flesh all the time.", "’Tis true.”", "He sat."]),
+])
+@needs_pysbd
+def test_a_straight_quote_goes_to_the_sentence_it_belongs_to(text, expected):
+    # A straight quote does not say which way it faces.  Counting sentences
+    # cannot catch this: version 1 split these into the right number of
+    # sentences and still moved each opening quote onto the sentence before.
+    assert _sentences(text) == expected
+
+
 @needs_pysbd
 def test_unquoted_text_is_segmented_exactly_as_plain_pysbd():
     text = ("Mr. Darcy bowed at 4 p.m. on the 4th. J. R. R. Tolkien wrote it. "

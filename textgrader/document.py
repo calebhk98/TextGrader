@@ -145,8 +145,10 @@ class NlpSettings:
 
 #: The name recorded for pySBD with the quotation fix below.  It is a distinct
 #: name, not "pysbd", because it produces different sentences: a corpus
-#: profile built with plain pySBD must not be compared against it.
-QUOTE_AWARE_PYSBD = "pysbd-quote-aware-1"
+#: profile built with plain pySBD must not be compared against it.  The
+#: number moves whenever the sentences it produces change: version 1 moved a
+#: straight opening quote back onto the previous sentence.
+QUOTE_AWARE_PYSBD = "pysbd-quote-aware-2"
 
 #: pySBD's BetweenPunctuation step refuses to split inside any of these pairs,
 #: treating the enclosed text as one unit: straight and curly single and
@@ -165,6 +167,38 @@ _CLOSERS = "'\u2019\"\u201d\u00bb)]"
 #: on the masked text is a valid span of the original.
 _MASK = "\u2063"
 _MASK_TABLE = {ord(char): _MASK for char in _PAIRED}
+
+
+def _stranded_closers(open_doubles: bool, lead_text: str) -> int:
+    """How many leading characters of ``lead_text`` close the text before it.
+
+    Curly double quotes, guillemets and brackets say which way they face.  A
+    straight ``"`` does not: at the start of a piece it is as often the next
+    quotation's opener as the last one's closer, and moving an opener back
+    leaves 'He waited."' followed by 'Well?" she asked.'  So it only counts
+    as a closer while a double quotation is still open in the paragraph so far
+    (``open_doubles``, an odd count of them).
+
+    A straight ``'`` or a curly ``\u2019`` only counts when no letter or digit
+    follows it.  Both double as apostrophes, which makes counting them
+    meaningless, but a closing quote is never followed directly by a letter,
+    while an opening quote and an elision (Hardy's "\u2019Tis", "\u2019em") are.
+    """
+
+    count = 0
+    for index, char in enumerate(lead_text):
+        if char not in _CLOSERS:
+            break
+        if char == '"':
+            if not open_doubles:
+                break
+            open_doubles = False
+        elif char in "'\u2019":
+            following = lead_text[index + 1:index + 2]
+            if following.isalnum():
+                break
+        count += 1
+    return count
 
 
 def resolved_segmenter(processing: "TextProcessing") -> str:
@@ -243,11 +277,17 @@ class Segmenter:
     def _quote_aware(self, body: str) -> list[str]:
         masked = body.replace("--", _MASK * 2).translate(_MASK_TABLE)
         out: list[str] = []
+        # Straight double quotes in the body before the current piece.
+        doubles = 0
+        consumed = 0
         for span in self._impl.segment(masked):
             piece = body[span.start:span.end]
+            doubles += body[consumed:span.start].count('"')
+            consumed = span.end
             if out:
                 lead_text = piece.lstrip()
-                stranded = len(lead_text) - len(lead_text.lstrip(_CLOSERS))
+                stranded = _stranded_closers(bool(doubles % 2), lead_text)
+                doubles += piece.count('"')
                 if stranded:
                     # A closing quote belongs to the sentence it closes.
                     out[-1] = out[-1].rstrip() + lead_text[:stranded]
@@ -258,6 +298,8 @@ class Segmenter:
                         # decisions elsewhere are left exactly as they were.
                         out[-1] = out[-1].rstrip() + " " + piece.strip()
                         continue
+            else:
+                doubles += piece.count('"')
             if piece.strip():
                 out.append(piece.strip())
         return out
