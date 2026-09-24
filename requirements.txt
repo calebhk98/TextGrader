@@ -54,6 +54,20 @@ scikit-learn>=1.3
 # statistic no other metric needed.
 networkx>=3.0
 
+# A second, independent graph library for the experimental graph_suite metric's
+# disagreement channel (density/transitivity/components/modularity recomputed
+# separately from networkx and reported side by side, never averaged with it --
+# see textgrader/graphs.py's module docstring). Torch-free; confirmed to
+# install cleanly alongside this project's pinned numpy/scipy/scikit-learn
+# with no version changes to any of them.
+igraph>=0.11
+
+# A third, fast graph implementation, installed for graph_suite but not
+# currently wired into a second cross-check (one independent disagreement
+# channel, igraph, already answers "do two implementations agree" -- see
+# textgrader/graphs.py's module docstring). Torch-free.
+rustworkx>=0.15
+
 # WordNet synonymy/hypernymy for the experimental discourse-coherence suite's
 # optional "lexical_wordnet" feature (off by default). The package alone is
 # not the corpus: run `python -m nltk.downloader wordnet` once, or the

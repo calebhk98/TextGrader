@@ -12,6 +12,7 @@ checks graceful degradation.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import os
 import threading
@@ -251,6 +252,36 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "stanza": ("stanza", "pip install stanza (in requirements-embeddings.txt; also needs "
                         "stanza.download('en', processors=...) models, ~320MB, never "
                         "triggered by this codebase itself)"),
+    # A second, independent graph library for graph_suite's disagreement
+    # channel (density/transitivity/components/modularity recomputed
+    # separately from networkx, never averaged with it -- see
+    # textgrader/graphs.py's module docstring). Confirmed for real: pip
+    # installs cleanly alongside the current numpy/scipy/scikit-learn with no
+    # version changes to any of them.
+    "igraph": ("igraph", "pip install igraph"),
+    # A third, fast graph implementation, installed and available for
+    # graph_suite but not currently wired into the disagreement channel
+    # (igraph already answers "do two implementations agree"; see
+    # textgrader/graphs.py's module docstring for why a third recomputation
+    # of the same statistics was judged not worth the extra code to keep in
+    # sync). Torch-free, no version conflicts with anything else installed.
+    "rustworkx": ("rustworkx", "pip install rustworkx"),
+    # Real character/entity/coreference/quote-speaker extraction for
+    # graph_suite's optional "booknlp" feature (off by default; very heavy --
+    # see that module's docstring for measured time/memory). Installed with
+    # --no-deps deliberately: BookNLP's own declared dependencies include
+    # tensorflow (an unused ~570MB download; nothing in the installed
+    # package tree imports it -- confirmed with
+    # `grep -rn tensorflow site-packages/booknlp` returning nothing) and an
+    # unconstrained numpy bound that would upgrade this project's pinned
+    # numpy 1.x to 2.x, which this project's pip-install rules refuse to do
+    # for a dependency this project does not otherwise need upgraded.
+    # `--no-deps` avoids both; spacy/torch/transformers, which BookNLP does
+    # actually use, are already satisfied by this project's own requirements.
+    "booknlp": ("booknlp.booknlp", "pip install --no-deps booknlp (installing it normally also "
+                                   "pulls in an unused ~570MB tensorflow and upgrades numpy to "
+                                   "2.x; see textgrader/optional.py's comment for why --no-deps "
+                                   "is used instead)"),
 }
 
 _lock = threading.Lock()
@@ -350,6 +381,59 @@ def shim_fastcoref_transformers() -> None:
         return
     if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
         PreTrainedModel.all_tied_weights_keys = {}
+
+
+
+
+@contextlib.contextmanager
+def shim_booknlp_transformers():
+    """Let ``torch.nn.Module.load_state_dict`` ignore a legacy BERT buffer key
+    BookNLP's shipped checkpoints still carry.
+
+    Reproduced directly in this environment: constructing
+    ``booknlp.booknlp.BookNLP`` raises ``RuntimeError: Error(s) in loading
+    state_dict for Tagger: Unexpected key(s) in state_dict:
+    "bert.embeddings.position_ids"`` before a single real weight mismatch is
+    even considered. BookNLP's small-model checkpoints were saved from an
+    older ``transformers`` BERT implementation that registered
+    ``position_ids`` as a persistent buffer; newer ``transformers`` versions
+    stopped registering it (it is derived at forward time instead), so the
+    current model object has no such key to receive it and ``strict=True``
+    loading (PyTorch's default, which BookNLP's own loading code never
+    overrides) refuses the whole checkpoint over one now-unused buffer.
+
+    The fix is narrow and additive: patch ``load_state_dict`` to drop only
+    keys that (a) end in ``"position_ids"`` and (b) are not present in the
+    receiving module's own ``state_dict()`` -- i.e. exactly the legacy keys a
+    newer transformers build no longer creates -- and pass everything else
+    through to the original implementation unchanged.  A model whose current
+    architecture DOES register a matching key is unaffected (that key stays
+    in ``own_keys`` and is kept), so this can never mask a real shape or name
+    mismatch elsewhere in a checkpoint.  It is a context manager rather than a one-way patch: ``load_state_dict``
+    is a method every torch model in the process shares, so the patch holds
+    only while BookNLP builds its models and the original is restored on
+    exit.  Loaded afterwards, fastcoref, benepar or an NLI model see the
+    unpatched method.
+    """
+
+    try:
+        import torch
+    except Exception:  # pragma: no cover - torch itself unavailable
+        yield
+        return
+    original = torch.nn.Module.load_state_dict
+
+    def _patched(self, state_dict, *args, **kwargs):
+        own_keys = set(self.state_dict().keys())
+        filtered = {key: value for key, value in state_dict.items()
+                   if key in own_keys or not key.endswith("position_ids")}
+        return original(self, filtered, *args, **kwargs)
+
+    torch.nn.Module.load_state_dict = _patched
+    try:
+        yield
+    finally:
+        torch.nn.Module.load_state_dict = original
 
 
 def have(name: str) -> bool:
