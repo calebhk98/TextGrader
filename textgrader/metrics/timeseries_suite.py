@@ -32,13 +32,17 @@ many, so a book that drifts in dependency distance rather than sentence
 length is not invisible just because nobody wrote a bespoke
 ``dependency_distance_autocorrelation`` module.
 
-**Guarding the combinatorics.**  Sequences (16 in the registry) times
-features (43 groups: the original 15, catch22's 22, catch22's two catch24
-extras, the two wavelet groups, the textdescriptives cross-check, and one
-configurable ``tsfresh`` group added this pass) is 688 possible findings
-before a single lag or box size is counted -- bigger again than the 640 the
-previous pass left this docstring warning about, precisely because this pass
-made two more feature families real. Five things bound it: (1) every feature
+**Guarding the combinatorics.**  Sequences (19 in the registry, three of them
+-- ``sentence_sentiment_compound``, ``sentence_emotion_valence``,
+``window_topic_id`` -- added this pass, see "Deferred" below) times features
+(47 groups: 19 dependency-free-or-simple base groups -- the original 15 plus
+this pass's ``river`` ADWIN detector and its three topic-transition features
+-- catch22's 22, catch22's two catch24 extras, the two wavelet groups, the
+textdescriptives cross-check, and one configurable ``tsfresh`` group) is 893
+possible findings before a single lag or box size is counted -- bigger again
+than the 688 the previous pass left this docstring warning about, precisely
+because this pass made three more sequences and four more feature groups
+real. Five things bound it: (1) every feature
 group is reported as *one* finding per sequence, with its secondary numbers
 (all lags, all box sizes, segment slopes, per-scale wavelet energies, every
 tsfresh sub-feature, ...) folded into that finding's ``distribution`` rather
@@ -57,12 +61,13 @@ by this pass on purpose**: it still selects the same three dependency-free,
 always-available sequences and the same five low-assumption feature groups
 it always has (15 findings by default, see ``DEFAULT_SEQUENCES``/
 ``DEFAULT_FEATURE_GROUPS`` below) -- catch22, catch24, the wavelet groups,
-``tsfresh`` and the embedding-backed sequences are all opt-in, both because
-catch22 alone (22 features) over even the three default sequences would
-already be 66 findings, more than four times the current default, and
-because two of those sequences are embedding-backed and must never turn on
-by themselves (see "Why the embedding sequences stay out of every default"
-below); (3) ``max_findings`` (default 200) is a hard stop -- a user who
+``tsfresh``, ``adwin``, the three topic-transition feature groups and every
+sequence added this pass are all opt-in, both because catch22 alone (22
+features) over even the three default sequences would already be 66
+findings, more than four times the current default, and because three of the
+registry's sequences must never turn on by themselves (see "Why the
+embedding and topic-model sequences stay out of every default" below); (3)
+``max_findings`` (default 200) is a hard stop -- a user who
 selects every sequence and every feature group gets the first 200
 combinations, in the order they configured, plus one finding that says so,
 rather than a silent multi-thousand-row report; (4) a ``"catch22"``
@@ -75,30 +80,40 @@ either is still exactly as bounded by ``max_findings`` as if they had; (5)
 its ``minimal`` preset (10 fixed, hand-named sub-features) rather than
 ``efficient``/``comprehensive`` -- see ``tsfresh_feature_set`` below.
 
-**Why the embedding sequences stay out of every default.**  This suite is
-``cost="moderate"`` with ``requires=()``, which is what lets the corpus
-builder profile it over every reference book (see
+**Why the embedding and topic-model sequences stay out of every default.**
+This suite is ``cost="moderate"`` with ``requires=()``, which is what lets
+the corpus builder profile it over every reference book (see
 ``textgrader/corpus.py``'s ``needs_parse``/``needs_model`` gate). That gate
 only checks ``"sentence_transformers" in requires``, so it cannot see that
-two sequences in the registry this suite draws from
-(``sentence_similarity_prev``, ``sentence_distance_centroid``) load a
-sentence-embedding model. Adding ``sentence_transformers`` to ``REQUIRES``
-would fix that for free but would also flip this suite's own
-``needs_model`` to true and silently drop its other fourteen, cheap
-sequences out of corpus profiling too -- a real regression this pass
-chooses not to make quietly. (The more honest long-term fix is a finer-
-grained gate -- one that asked "does this specific configuration need a
-model" rather than "does this metric's ``requires`` tuple ever mention one"
--- but that is a change to ``textgrader/corpus.py``'s gating rule itself,
-outside every file this pass is allowed to touch, so it is left as an
-argument for whoever owns that module rather than made quietly here.)
-Instead, ``DEFAULT_SEQUENCES`` simply never contains an embedding-backed
-sequence, and no code path in this module imports or loads an embedding
-model unless one of those two sequences is explicitly present in a caller's
-``sequences`` list (``sequences.get_sequence`` only reaches
-``semantic_adjacent``'s model loader for those two names, and only when
-asked for by name) -- so corpus profiling, which always runs with
-``MetricSpec.defaults``, never touches it.
+three sequences in the registry this suite draws from
+(``sentence_similarity_prev``, ``sentence_distance_centroid``,
+``window_topic_id``) each do one comparatively expensive, model-like thing
+per document -- the first two load a sentence-embedding model, the third
+fits an NMF/LDA topic model. Adding ``sentence_transformers`` to ``REQUIRES``
+would fix the first two for free but would also flip this suite's own
+``needs_model`` to true and silently drop its other, cheap sequences out of
+corpus profiling too -- a real regression this pass chooses not to make
+quietly -- and nothing in that gate even mentions ``scikit-learn``, so it
+could never see the topic-model case at all. (The more honest long-term fix
+is a finer-grained gate -- one that asked "does this specific configuration
+need a model" rather than "does this metric's ``requires`` tuple ever
+mention one" -- but that is a change to ``textgrader/corpus.py``'s gating
+rule itself, outside every file this pass is allowed to touch, so it is left
+as an argument for whoever owns that module rather than made quietly here.)
+Instead, ``DEFAULT_SEQUENCES`` simply never contains any of these three
+sequences, and no code path in this module imports or loads an embedding
+model, or fits a topic model, unless one of them is explicitly present in a
+caller's ``sequences`` list (``sequences.get_sequence`` only reaches
+``semantic_adjacent``'s model loader, or ``sklearn``'s ``NMF``/
+``LatentDirichletAllocation``, for those exact names, and only when asked for
+by name) -- so corpus profiling, which always runs with
+``MetricSpec.defaults``, never touches any of them.
+``sentence_sentiment_compound``/``sentence_emotion_valence`` need no model at
+all (a lexicon lookup is not a fit) and would be cheap enough to profile by
+default on their own merits, but this pass keeps them opt-in too, alongside
+every other new sequence and feature group, specifically so the default
+report stays byte-for-byte the one that existed before this pass (see
+``test_default_selection_is_unchanged_by_this_pass``).
 
 **Every measurement is individually selectable.**  ``sequences`` and
 ``feature_groups`` are both explicit lists in this metric's configuration
@@ -180,16 +195,50 @@ exactly which existing finding they are expected to track (``dispersion``'s
 computed independently rather than one copied from the other. See "catch22 /
 catch24" below for the two features' exact identity and unit.
 
-Recurrence-quantification features (``PyRQA``) are left out because the
-package is still not installed here, so its success path still cannot be
-exercised or validated, and this suite would rather ship nothing for it than
-ship code nobody has run. A streaming ``river`` ADWIN detector is skipped in
-favour of a small dependency-free Page-Hinkley implementation
-(``page_hinkley``, below), which needs no optional package and is directly
-testable against a synthetic step-shift sequence. Sentiment/emotion scoring
-and topic-probability sequences are not in this module at all; see
-``textgrader/sequences.py``'s docstring for why they were left out of the
-sequence registry itself, one level down. A ``textdescriptives`` cross-check
+Recurrence-quantification features (``PyRQA``) are out of this task's scope
+rather than deferred for any dependency reason: recurrence quantification is
+its own task (Task 21), so this pass leaves it alone rather than folding a
+second task's feature family in here.
+
+A streaming ``river`` ADWIN detector was skipped in an earlier pass "in
+favour of" this module's own hand-written Page-Hinkley implementation
+(``page_hinkley``, above) -- reasoning this pass overrules: ``river`` (0.26.1)
+installs cleanly from PyPI, and the whole point of running two
+independently-implemented drift detectors over the same series is that they
+can disagree about where a book changes, which is itself evidence, not
+redundancy to eliminate by picking a favourite. ``adwin`` (below) now runs
+``river.drift.ADWIN`` beside, not instead of, ``page_hinkley`` -- see
+``_feature_adwin``'s own docstring for what ADWIN tests that Page-Hinkley
+does not (an adaptive window and a bucketed exact test for a mean change,
+versus Page-Hinkley's cumulative-sum threshold).
+
+Sentiment/emotion scoring and topic-probability sequences were previously
+left out of this module and out of the sequence registry on reasoning that
+did not survive being checked: the sentiment blocker named (``nltk``'s VADER
+lexicon needing a silent network download) is real for ``nltk`` specifically
+but does not apply to ``vaderSentiment``, which bundles its own lexicon in
+the wheel, and the topic blocker (a categorical channel outside this
+module's numeric contract) is true of a raw topic label but not of numeric
+features computed from one. Both are now real, sourced from
+``textgrader/sequences.py``'s new ``sentence_sentiment_compound``
+(``vaderSentiment`` compound polarity), ``sentence_emotion_valence`` (the NRC
+lexicon via ``nrclex``, also bundled, also no download) and
+``window_topic_id`` (a ``scikit-learn`` NMF/LDA topic label per window, see
+that module's own docstring for why its label is nominal) sequences, with
+three feature groups purpose-built to read the last one honestly:
+``topic_transition_rate`` (share of window-to-window topic changes),
+``topic_transition_entropy`` (normalized Shannon entropy of the
+topic-to-topic transition distribution) and ``topic_dwell_time`` (mean
+consecutive-run length in the same topic). None of the three new sequences
+or four new feature groups (``adwin`` plus the three topic ones) enters any
+default selection -- see "Guarding the combinatorics" above and
+``test_default_selection_is_unchanged_by_this_pass`` -- and
+``window_topic_id`` in particular never fits a topic model during corpus
+profiling, for the same reason the two embedding sequences never load a
+model there (see "Why the embedding and topic-model sequences stay out of
+every default" above).
+
+A ``textdescriptives`` cross-check
 is wired in for exactly the one sequence where it overlaps this suite's own
 work end to end (``sentence_dependency_distance`` -- see
 ``textdescriptives_check`` below); ``textdescriptives``'
@@ -234,6 +283,16 @@ Gaussian mean-shift model on unit-variance data) rather than a flat score,
 which measured near zero false positives across lengths from 80 to 1,200 in
 a 30-seed check while still finding this module's own synthetic level-shift
 test within a few points of where it was injected.
+
+This pass's three new additions keep that same determinism discipline.
+``river``'s ``ADWIN`` (``adwin``, above) is a streaming statistical test with
+no randomness of its own, same as ``page_hinkley``. ``window_topic_id``'s
+NMF/LDA fit (see ``textgrader/sequences.py``) is the one place this pass
+introduces an algorithm with a random component (topic-model initialization),
+so it is seeded (``topic_random_state``, default 42, the same value on every
+call unless a caller overrides it) and was checked to return byte-identical
+topic labels across repeated fits of the same document
+(``test_topic_sequence_is_deterministic_for_a_fixed_seed``).
 """
 
 from __future__ import annotations
@@ -280,7 +339,8 @@ DEFAULT_FEATURE_GROUPS = ("dispersion", "acf", "trend", "turning_points", "runs"
 _BASE_FEATURE_NAMES = (
     "dispersion", "rolling_dispersion", "acf", "pacf", "trend", "piecewise_trend",
     "stationarity", "turning_points", "runs", "spectral", "hurst", "dfa",
-    "permutation_entropy", "change_points", "page_hinkley",
+    "permutation_entropy", "change_points", "page_hinkley", "adwin",
+    "topic_transition_rate", "topic_transition_entropy", "topic_dwell_time",
 )
 
 FEATURE_LABELS = {
@@ -290,7 +350,10 @@ FEATURE_LABELS = {
     "turning_points": "Turning-point rate", "runs": "Longest run",
     "spectral": "Spectral shape", "hurst": "Hurst exponent", "dfa": "DFA scaling exponent",
     "permutation_entropy": "Permutation entropy", "change_points": "Change-point rate",
-    "page_hinkley": "Page-Hinkley drift-event rate",
+    "page_hinkley": "Page-Hinkley drift-event rate", "adwin": "ADWIN drift-event rate",
+    "topic_transition_rate": "Topic transition rate",
+    "topic_transition_entropy": "Topic transition entropy",
+    "topic_dwell_time": "Mean topic dwell time",
 }
 
 FEATURE_UNITS = {
@@ -299,6 +362,8 @@ FEATURE_UNITS = {
     "stationarity": "p-value", "turning_points": "%", "runs": "%", "spectral": "ratio",
     "hurst": "exponent", "dfa": "exponent", "permutation_entropy": "ratio",
     "change_points": "change points per 100 points", "page_hinkley": "events per 100 points",
+    "adwin": "events per 100 points", "topic_transition_rate": "% of transitions",
+    "topic_transition_entropy": "ratio", "topic_dwell_time": "points",
 }
 
 # Below this many points a feature is refused rather than reported as a
@@ -308,7 +373,8 @@ DEFAULT_MIN_LENGTHS = {
     "dispersion": 5, "rolling_dispersion": 12, "acf": 15, "pacf": 20, "trend": 6,
     "piecewise_trend": 10, "stationarity": 30, "turning_points": 6, "runs": 6,
     "spectral": 16, "hurst": 40, "dfa": 40, "permutation_entropy": 20,
-    "change_points": 10, "page_hinkley": 10,
+    "change_points": 10, "page_hinkley": 10, "adwin": 10,
+    "topic_transition_rate": 6, "topic_transition_entropy": 6, "topic_dwell_time": 4,
 }
 
 # Features whose expected value has a documented, systematic dependence on
@@ -324,6 +390,7 @@ _NEVER_DETREND = frozenset({"dispersion", "rolling_dispersion", "trend", "piecew
 _WINDOW_SEQUENCES = frozenset({"window_dialogue_fraction", "window_pronoun_rate"})
 _RARITY_SEQUENCES = frozenset({"sentence_content_rarity"})
 _EMBEDDING_SEQUENCES = frozenset({"sentence_similarity_prev", "sentence_distance_centroid"})
+_TOPIC_SEQUENCES = frozenset({"window_topic_id"})
 
 
 @dataclass(frozen=True)
@@ -746,6 +813,99 @@ def _feature_page_hinkley(values: TypingSequence[float], cfg: Mapping[str, Any])
         "delta": delta, "lambda_threshold": lam})
 
 
+def _feature_adwin(values: TypingSequence[float], cfg: Mapping[str, Any]) -> _Outcome:
+    """Event rate of ``river``'s streaming ADWIN drift detector, run over the series.
+
+    Kept *beside*, not instead of, this module's own hand-written
+    Page-Hinkley detector (``page_hinkley`` above): an earlier pass skipped
+    ``river`` on the reasoning that Page-Hinkley alone was good enough, but
+    two independently-implemented detectors disagreeing about where a book
+    changes is data this suite would rather report than throw away by
+    picking a favourite. ADWIN maintains an adaptive window and a bucketed
+    variant of an exact statistical test for a change in mean between its two
+    halves; ``adwin_delta`` (the same name river itself uses) is the
+    confidence bound on a false positive, smaller meaning more conservative.
+    """
+
+    river_module, reason = require("river")
+    if river_module is None:
+        return _Outcome(None, warning=reason)
+    try:
+        from river import drift
+        delta = float(cfg.get("adwin_delta", 0.002))
+        detector = drift.ADWIN(delta=delta)
+        events: list[int] = []
+        for index, value in enumerate(values):
+            detector.update(value)
+            if detector.drift_detected:
+                events.append(index)
+    except Exception as exc:  # pragma: no cover - library/runtime guard
+        return _Outcome(None, warning=f"river.drift.ADWIN failed ({type(exc).__name__}: {exc})")
+    n = len(values)
+    rate = 100.0 * len(events) / n
+    return _Outcome(rate, distribution={
+        "event_count": len(events), "first_event_index": events[0] if events else None,
+        "last_event_index": events[-1] if events else None, "delta": delta,
+        "backend": "river.drift.ADWIN", "library": "river", "library_version": _lib_version(river_module)})
+
+
+# ---- topic-transition features -------------------------------------------
+#
+# These three are ordinary base features -- ``(values, cfg) -> _Outcome``,
+# same as every feature above -- not restricted to running only over
+# :data:`textgrader.sequences.SEQUENCES`'s ``window_topic_id``, in keeping
+# with this suite's own documented design of running the same battery over
+# every sequence in the registry (see the module docstring's "What this is
+# not" section). They are most meaningful there -- a topic index is a nominal
+# label, and these three are exactly the well-defined numeric questions one
+# can ask of a nominal label over time (see ``textgrader/sequences.py``'s
+# docstring for why ``window_topic_id`` itself is not treated as an ordered
+# quantity) -- but nothing about their arithmetic requires the input to be a
+# topic id specifically: run over a continuous sequence, "does the value
+# differ from the previous one" and "how long does a run of equal values
+# last" are still well-defined, if less informative, questions.
+
+def _feature_topic_transition_rate(values: TypingSequence[float], cfg: Mapping[str, Any]) -> _Outcome:
+    n = len(values)
+    if n < 2:
+        return _Outcome(None, warning="needs at least two points to have a transition")
+    transitions = sum(1 for i in range(1, n) if values[i] != values[i - 1])
+    rate = 100.0 * transitions / (n - 1)
+    return _Outcome(rate, distribution={"transitions": transitions, "opportunities": n - 1})
+
+
+def _feature_topic_transition_entropy(values: TypingSequence[float], cfg: Mapping[str, Any]) -> _Outcome:
+    n = len(values)
+    if n < 2:
+        return _Outcome(None, warning="needs at least two points to have a transition")
+    pairs = list(zip(values, values[1:]))
+    counts = Counter(pairs)
+    total = len(pairs)
+    raw_entropy = -sum((count / total) * math.log2(count / total) for count in counts.values())
+    distinct_pairs = len(counts)
+    max_entropy = math.log2(distinct_pairs) if distinct_pairs > 1 else 1.0
+    normalized = raw_entropy / max_entropy if max_entropy > 0 else 0.0
+    return _Outcome(normalized, distribution={
+        "raw_entropy_bits": raw_entropy, "distinct_transitions": distinct_pairs,
+        "distinct_values": len(set(values))})
+
+
+def _feature_topic_dwell_time(values: TypingSequence[float], cfg: Mapping[str, Any]) -> _Outcome:
+    n = len(values)
+    if n < 2:
+        return _Outcome(None, warning="needs at least two points to measure a dwell time")
+    labels = [repr(v) for v in values]
+    runs = run_lengths(labels)
+    all_lengths = sorted(length for lengths in runs.values() for length in lengths)
+    if not all_lengths:
+        return _Outcome(None, warning="no runs found")
+    mean_dwell = statistics.fmean(all_lengths)
+    return _Outcome(mean_dwell, distribution={
+        "run_count": len(all_lengths), "dwell_times": all_lengths,
+        "by_value_longest_run": {label: max(lengths) for label, lengths in runs.items()}},
+        sample_size_sensitive=True)
+
+
 _FEATURES: dict[str, Callable[[TypingSequence[float], Mapping[str, Any]], _Outcome]] = {
     "dispersion": _feature_dispersion,
     "rolling_dispersion": _feature_rolling_dispersion,
@@ -762,6 +922,10 @@ _FEATURES: dict[str, Callable[[TypingSequence[float], Mapping[str, Any]], _Outco
     "permutation_entropy": _feature_permutation_entropy,
     "change_points": _feature_change_points,
     "page_hinkley": _feature_page_hinkley,
+    "adwin": _feature_adwin,
+    "topic_transition_rate": _feature_topic_transition_rate,
+    "topic_transition_entropy": _feature_topic_transition_entropy,
+    "topic_dwell_time": _feature_topic_dwell_time,
 }
 
 assert set(_FEATURES) == set(_BASE_FEATURE_NAMES)
@@ -1412,6 +1576,17 @@ def _settings(config: Mapping[str, Any] | None) -> dict[str, Any]:
         # sequence regardless of which preset this picks.
         "tsfresh_feature_set": str(option(config, "tsfresh_feature_set", "minimal")),
         "tsfresh_max_features": int(option(config, "tsfresh_max_features", 25)),
+        # river's own ADWIN parameter name, kept as-is rather than renamed so
+        # a reader who knows river's docs recognizes it immediately.
+        "adwin_delta": float(option(config, "adwin_delta", 0.002)),
+        # Settings for the window_topic_id sequence's one-time NMF/LDA fit
+        # (see textgrader/sequences.py). Read here, not sequence-local,
+        # because every other per-sequence setting in this suite already
+        # lives in this one settings dict.
+        "topic_n_topics": int(option(config, "topic_n_topics", 4)),
+        "topic_model": str(option(config, "topic_model", "nmf")),
+        "topic_random_state": int(option(config, "topic_random_state", 42)),
+        "topic_max_features": int(option(config, "topic_max_features", 2000)),
         "min_lengths": dict(option(config, "min_lengths", {})),
         "max_findings": int(option(config, "max_findings", 200)),
     }
@@ -1424,6 +1599,10 @@ def _sequence_settings(name: str, cfg: Mapping[str, Any]) -> dict[str, Any]:
         return {"language": cfg["language"]}
     if name in _EMBEDDING_SEQUENCES:
         return {"model": cfg["embedding_model"]}
+    if name in _TOPIC_SEQUENCES:
+        return {"window_words": cfg["window_words"], "n_topics": cfg["topic_n_topics"],
+               "topic_model": cfg["topic_model"], "random_state": cfg["topic_random_state"],
+               "max_features": cfg["topic_max_features"]}
     return {}
 
 

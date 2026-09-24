@@ -150,6 +150,27 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # so it degrades to "unavailable" on an install that lacks it rather than
     # to an import error.
     "gibberish_detector": ("gibberish_detector", "pip install gibberish-detector"),
+    # Streaming ADWIN change-detector for timeseries_suite's optional "adwin"
+    # feature group, run beside (not instead of) the suite's own hand-written
+    # Page-Hinkley detector -- two detectors disagreeing about where a book
+    # changes is data, not redundancy. Pure Python/C wheel, no model download.
+    "river": ("river", "pip install river"),
+    # VADER lexicon-and-rule sentiment scoring for
+    # textgrader.sequences' "sentence_sentiment_compound" sequence. The
+    # lexicon ships inside the wheel (vaderSentiment/vader_lexicon.txt); unlike
+    # nltk's VADER data this needs no separate download or network call, which
+    # is exactly what let this sequence go in where an earlier pass deferred
+    # it as blocked.
+    "vaderSentiment": ("vaderSentiment.vaderSentiment", "pip install vaderSentiment"),
+    # NRC emotion-lexicon scoring for textgrader.sequences'
+    # "sentence_emotion_valence" sequence. Its lexicon also ships inside the
+    # wheel (nrclex/data/nrc_en.json) and is read via importlib.resources, so
+    # -- like vaderSentiment above -- no download or network call is needed at
+    # runtime, even though the package's own declared dependencies (nltk,
+    # textblob) are pulled in at install time for its optional
+    # load_raw_text() path, which this codebase never calls (it tokenizes its
+    # own sentences and calls load_token_list() instead).
+    "nrclex": ("nrclex", "pip install NRCLex"),
 }
 
 _lock = threading.Lock()
