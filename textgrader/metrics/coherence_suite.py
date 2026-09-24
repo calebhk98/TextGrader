@@ -52,6 +52,22 @@ suite measures four largely independent kinds of relationship:
     reasons as ``lexical_wordnet`` (needs the WordNet corpus, makes a
     first-sense call) plus its own added cost (a bounded hypernym-tree walk
     per comparison, not a hash lookup).
+``rst``
+    Real Rhetorical Structure Theory discourse-tree parsing (``isanlp_rst``,
+    the ``rstdt`` English RST Discourse Treebank checkpoint): tree depth,
+    nucleus/satellite (``NS``/``SN``/``NN``) balance, and relation-label
+    (family) distribution and entropy. **Off by default even when the suite
+    is on**, for the same reason ``coreference`` is: at roughly 2 seconds a
+    sentence on CPU, parsing a 300,000-word novel outright would take hours,
+    so this feature never parses the whole book -- it draws a bounded,
+    deterministic sample of passages spread across the document (see
+    ``rst_passages``/``rst_passage_sentences`` below) and records exactly
+    what it sampled in every finding's ``distribution``, so a number from ten
+    short passages is never mistaken for a whole-book parse. It is reported
+    as its own metric ids, entirely separate from the surface, closed-class
+    ``connectives`` channel above: a statistical RST parser and a fixed
+    connective lexicon answering "how are these clauses related" differently
+    is itself evidence, not noise to reconcile.
 ``connectives`` / ``order_permutation``
     Whether the text marks its own transitions (explicit connectives, by
     relation family, and whether they cluster at paragraph starts), and
@@ -59,21 +75,22 @@ suite measures four largely independent kinds of relationship:
     random shuffle of themselves on a cohesion score.  Both are
     dependency-free.
 
-Every one of those eight groups is switched on or off independently through
+Every one of those nine groups is switched on or off independently through
 ``features`` in this metric's config (see ``DEFAULT_FEATURES`` below); the
 top-level ``coherence_suite.enabled`` switch on its own turns nothing on,
 consistent with every other metric.  Once it is on, the original five groups
 (``lexical``, ``semantic``, ``entity``, ``connectives``, ``order_permutation``)
 default to on too, so a user opts *out* of the ones that were already
 dependency-free or degrade gracefully rather than having to discover and opt
-into every one of them.  ``coreference``, ``lexical_wordnet`` and
-``lexical_wordnet_hypernym`` are the exception: all three default to off even
-then, because each loads an optional dependency this module did not used to
-have (or, for the hypernym chain, adds a materially heavier per-comparison
-cost on top of one), and none is safe to fire unasked on a 300,000-word novel
-(:mod:`textgrader.corpus`'s profiler would never load a coreference model on
-its own either, since this module's ``cost`` stays ``"parse"`` - see
-``COST`` below).  ``config.json``'s entry for this suite carries a
+into every one of them.  ``coreference``, ``lexical_wordnet``,
+``lexical_wordnet_hypernym`` and ``rst`` are the exception: all four default
+to off even then, because each loads an optional dependency this module did
+not used to have (or, for the hypernym chain, adds a materially heavier
+per-comparison cost on top of one), and none is safe to fire unasked on a
+300,000-word novel (:mod:`textgrader.corpus`'s profiler would never load a
+coreference or RST model on its own either, since this module's ``cost``
+stays ``"parse"`` - see ``COST`` below).  ``config.json``'s entry for this
+suite carries a
 ``_requires_*`` note next to ``features`` for each of these, and for the two
 other real prerequisites in this suite (``sentence-transformers`` for
 ``semantic``'s embedding backend, and ``networkx`` for the entity
@@ -164,6 +181,39 @@ environment):
   profile meeting that bar exists, the corpus-delta finding reports why it
   cannot compare, the same as ``style.function_word_delta`` does with no
   corpus at all.
+* **Real RST tree parsing, via ``isanlp_rst``.** The previous pass's attempts
+  to construct ``isanlp_rst.parser.Parser`` never completed on this shared
+  container: three good-faith tries were cut off by wall-clock timeouts or a
+  container memory ceiling shared with other agents (see the retired
+  deferred entry this replaces, in this module's git history, for the exact
+  numbers). Retried alone, on a quiet instance of this same container, it
+  worked cleanly: constructing the ``rstdt`` checkpoint of
+  ``tchewik/isanlp_rst_v3`` (``cuda_device=-1``, CPU only) took 69 seconds and
+  held 5.6 GiB resident once loaded, and parsing a four-sentence passage took
+  7.7 seconds. Both figures now live in the ``rst`` feature's config docs and
+  gate its design: at roughly two seconds a sentence, parsing a
+  300,000-word-novel's every sentence would take hours, so ``rst`` is wired
+  in as a ninth feature group, off by default even when the suite is on
+  (see above), that never parses the whole book. It draws a bounded,
+  deterministic sample of passages spread across the document instead (see
+  ``rst_passages``/``rst_passage_sentences``/``rst_max_sentences``/
+  ``rst_max_seconds`` below), reports tree depth
+  (``discourse.coherence_rst_tree_depth``), elementary-discourse-unit segment
+  length (``discourse.coherence_rst_segment_length``), nucleus/satellite
+  balance (``discourse.coherence_rst_nuclearity_balance``, the ``NN``
+  multinuclear share of internal nodes, with the full ``NS``/``SN``/``NN``
+  breakdown in ``distribution``) and relation-label distribution and entropy
+  (``discourse.coherence_rst_relation_family_entropy`` - the ``rstdt``
+  checkpoint predicts RST-DT's coarse relation classes directly, as its own
+  worked example confirmed, so this distribution already IS a family-level
+  breakdown, not a fine-grained relation-sense inventory needing its own
+  grouping table), and records exactly what it sampled (document size,
+  passages requested vs. used, seed, elapsed time, whether the time cap cut
+  it short) in every one of those findings' ``distribution``, the same
+  discipline :func:`resolve_coreference` already applies to its own window.
+  The parser is loaded once per process and cached
+  (:func:`textgrader.coherence._load_rst_parser`), exactly like
+  :func:`_load_coref_model` above.
 
 Still deferred - each of the following was actually installed and run against
 real text in this environment this pass, not assumed unavailable; the
@@ -192,52 +242,6 @@ evidence is below rather than a guess:
   scope, on this actual evidence rather than an unchecked assumption; only
   explicit, surface-matched connectives are measured (the ``connectives``
   group above).
-* **RST tree parsing, via ``rst-parser`` and ``isanlp-rst``.**
-  ``rst-parser==0.1.3`` hard-depends on ``allennlp`` (see its own
-  ``install_requires``), which in turn pins ``spacy<2.2,>=2.1.0``. Resolving
-  that pin makes pip backtrack through every allennlp release from 2.9.1 down
-  to 0.9.0 and then try to build ``spacy==2.1.9`` from source, which fails
-  outright under this environment's Python 3.11 / modern setuptools:
-  ``ImportError: cannot import name 'msvccompiler' from 'distutils'`` (from
-  ``preshed``'s ``setup.py``, which still imports the long-removed
-  ``distutils.msvccompiler``), ending in ``error: metadata-generation-failed``.
-  Even if that build were coaxed into working, allennlp's own ``spacy<2.2``
-  pin would force-downgrade the spaCy version every other channel in this
-  suite (and ``logic_suite``, and every other spaCy-dependent suite in this
-  codebase) depends on - exactly the dependency conflict this task's own
-  instructions say never to install through. Not installed; permanently out
-  of scope on that evidence. ``isanlp-rst==3.2.2`` is a different story: it
-  installs cleanly with no such conflict (a dry-run resolve adds only
-  ``fire``/``greenlet``/``jsonnet``/``lxml``/``playwright``/``pyee``/
-  ``razdel``/``termcolor``, and ``torch``/``transformers``/``numpy`` stayed at
-  their existing versions; ``import torch, transformers, sentence_transformers,
-  fastcoref`` still printed ``ok`` afterward), plus its own required,
-  non-PyPI ``isanlp`` package (``pip install
-  git+https://github.com/iinemo/isanlp.git``, also clean). But actually
-  constructing its ``Parser`` - before parsing a single sentence - downloads
-  two separate multi-gigabyte checkpoints (the relation-classification head,
-  2,487,166,362 bytes, plus its ``xlm-roberta-large`` sentence encoder, ~2.2
-  GiB more) and could not be completed in three separate, good-faith attempts
-  in this container: a cold-cache run timed out at 300s mid-download; a
-  second run with both checkpoints already cached still had not printed
-  "loaded" after 500s; a third run was manually killed after several more
-  minutes when container memory hit ~14 of 15 GiB (risking an OOM kill of a
-  sibling agent's process on this shared machine), still without
-  ``Parser.__init__`` completing. No exception was ever raised in any
-  attempt - the failure mode is pure wall-clock and memory cost on this
-  shared, resource-constrained container, not a bug or an incompatibility -
-  but a channel that cannot be verified to produce a single real tree, and
-  whose minimum footprint risks taking down the whole grading process rather
-  than degrading to one ``unavailable(...)`` finding, is not shipped on a
-  guess that a less contended machine would fare better. No RST channel is
-  added. If a future environment can be confirmed to load
-  ``isanlp_rst.parser.Parser`` and return a tree within a reasonable budget,
-  the shape to add is: tree depth (``coh.rst_tree_depth``-style, walking
-  ``DiscourseUnit.left``/``.right``), a nucleus/satellite ratio from each
-  internal node's ``nuclearity`` field (``"NS"``/``"SN"``/``"NN"``), and a
-  relation-label distribution from each internal node's ``relation`` field
-  (leaves carry ``relation == "elementary"`` and are excluded), windowed and
-  capped exactly like ``coreference`` is today.
 * **Pronoun-to-named-mention transition rate.** ``pov.entity_pronoun_ratio``
   already measures named-entity-to-pronoun balance in narration; adding a
   second, entity-grid-flavoured version of the same comparison here would be
@@ -267,7 +271,8 @@ FAMILY = "discourse"
 # dependency-free groups still gets the fast path, because grade.py's
 # "> 1s" warning is about what actually ran, not what was declared.
 COST = PARSE
-REQUIRES: tuple[str, ...] = ("spacy", "sentence_transformers", "networkx", "fastcoref", "nltk")
+REQUIRES: tuple[str, ...] = ("spacy", "sentence_transformers", "networkx", "fastcoref", "nltk",
+                             "isanlp_rst")
 MIN_SAMPLE = 20
 UNIT_SENSITIVE = False
 
@@ -278,15 +283,23 @@ MIN_SAMPLE_PARAGRAPH_PAIRS = 4
 MIN_SAMPLE_PARAGRAPHS = 5
 MIN_SAMPLE_WORDS = 200
 MIN_SAMPLE_GRAPH_NODES = 3
+# The RST channel's unit is "sampled passages" (tree depth, segment length)
+# or "internal nodes across the sample" (nuclearity, relation entropy), never
+# "sentences in the document" - a handful of sampled trees is genuinely all
+# there is, by design, so these floors are deliberately low rather than a
+# copy of MIN_SAMPLE's whole-document expectation.
+MIN_SAMPLE_RST_PASSAGES = 3
+MIN_SAMPLE_RST_NODES = 5
 
-# features.coreference and features.lexical_wordnet are NOT in this default
-# set of "on unless disabled" groups, even though every other group is: both
-# load an optional dependency this suite did not use to have, coreference
-# runs a transformer model, and the whole point of the gating rule in
-# textgrader/corpus.py (needs_model checks REQUIRES for "sentence_transformers"
-# only, so a fastcoref-backed feature is invisible to it) is that nothing may
-# rely on that guard to keep a model-backed measurement from firing unasked.
-# They are opt-in on top of an already-opt-in suite.
+# features.coreference, features.lexical_wordnet and features.rst are NOT in
+# this default set of "on unless disabled" groups, even though every other
+# group is: each loads an optional dependency this suite did not use to have
+# (coreference and rst also run a transformer model), and the whole point of
+# the gating rule in textgrader/corpus.py (needs_model checks REQUIRES for
+# "sentence_transformers" only, so a fastcoref- or isanlp_rst-backed feature
+# is invisible to it) is that nothing may rely on that guard to keep a
+# model-backed measurement from firing unasked. They are opt-in on top of an
+# already-opt-in suite.
 DEFAULT_FEATURES: dict[str, bool] = {
     "lexical": True,
     "lexical_wordnet": False,
@@ -294,6 +307,7 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "semantic": True,
     "entity": True,
     "coreference": False,
+    "rst": False,
     "connectives": True,
     "order_permutation": True,
 }
@@ -324,6 +338,8 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
         out.extend(_entity(analysis, config, profile))
     if features.get("coreference", False):
         out.extend(_coreference_entity(analysis, config))
+    if features.get("rst", False):
+        out.extend(_rst(analysis, config))
     if features.get("order_permutation", True):
         out.extend(_order(analysis, config))
     return out
@@ -1129,6 +1145,125 @@ def _coreference_entity(analysis: DocumentAnalysis, config: Mapping[str, Any]
         graph_finding["warning"] = note
     out.append(graph_finding)
     return out
+
+
+# --------------------------------------------------------------- RST group
+
+_RST_STEMS = (
+    ("rst_tree_depth", "RST discourse-tree depth, sampled passages"),
+    ("rst_segment_length", "RST elementary-discourse-unit (EDU) length in words, sampled "
+                          "passages"),
+    ("rst_nuclearity_balance", "RST nucleus/satellite balance across sampled passages (share of "
+                              "multinuclear NN relations among internal nodes)"),
+    ("rst_relation_family_entropy", "Entropy of the RST relation-label mix across sampled "
+                                   "passages"),
+)
+
+
+def _rst_ids() -> tuple[tuple[str, str], ...]:
+    return tuple((f"discourse.coherence_{stem}", name) for stem, name in _RST_STEMS)
+
+
+def _rst(analysis: DocumentAnalysis, config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The ``rst`` feature: real RST discourse-tree parsing (``isanlp_rst``),
+    sampled and capped exactly as the module docstring describes. Every
+    finding here folds :func:`coh.resolve_rst`'s ``settings`` (backend,
+    model, and exactly what was sampled) into its own ``distribution`` and
+    ``warning``, the same discipline ``_coreference_entity`` applies to its
+    window note, so a reader can never mistake a ten-passage sample for a
+    whole-book parse.
+
+    Unlike ``entity``/``coreference``, this does not need the shared spaCy
+    parse - it samples from ``analysis.sentences`` (the document's own
+    canonical, dependency-free sentence segmentation) and hands isanlp_rst
+    plain text, so ``analysis.nlp_unavailable`` is not a gate here; only
+    ``isanlp_rst`` itself (via :func:`coh.resolve_rst`) is.
+    """
+
+    ids = _rst_ids()
+    depth_id_name, seg_id_name, nuc_id_name, rel_id_name = ids
+
+    model_name = option(config, "rst_model", coh.DEFAULT_RST_MODEL)
+    model_version = option(config, "rst_model_version", coh.DEFAULT_RST_MODEL_VERSION)
+    num_passages = int(option(config, "rst_passages", 8))
+    passage_sentences = int(option(config, "rst_passage_sentences", 6))
+    max_sentences = int(option(config, "rst_max_sentences", 60))
+    max_seconds = float(option(config, "rst_max_seconds", 90.0))
+    seed = int(option(config, "rst_seed", 0))
+
+    summaries, settings, note = analysis.memo(
+        "coherence_rst_trees",
+        lambda: coh.resolve_rst(analysis, model_name, model_version, num_passages,
+                                passage_sentences, max_sentences, max_seconds, seed))
+    if not summaries:
+        return [unavailable(metric_id, name, note or "RST parsing produced no usable tree",
+                           family=FAMILY) for metric_id, name in ids]
+
+    depth_id, depth_name = depth_id_name
+    depths = [item["depth"] for item in summaries]
+    depth_finding = shape(depth_id, depth_name, depths, "levels", family=FAMILY,
+                          min_sample=MIN_SAMPLE_RST_PASSAGES,
+                          evidence=[{"start_sentence": item["start_sentence"],
+                                    "end_sentence": item["end_sentence"], "depth": item["depth"],
+                                    "leaf_count": item["leaf_count"]}
+                                   for item in summaries])[0]
+    leaf_counts = [item["leaf_count"] for item in summaries]
+    depth_finding["distribution"] = {
+        **settings, **(depth_finding["distribution"] or {}),
+        "mean_leaf_count_per_passage": sum(leaf_counts) / len(leaf_counts),
+    }
+    depth_finding["warning"] = note
+
+    seg_id, seg_name = seg_id_name
+    leaf_word_counts = [count for item in summaries for count in item["leaf_word_counts"]]
+    if leaf_word_counts:
+        seg_finding = shape(seg_id, seg_name, leaf_word_counts, "words", family=FAMILY,
+                            min_sample=MIN_SAMPLE_RST_NODES)[0]
+        seg_finding["distribution"] = {**settings, **(seg_finding["distribution"] or {})}
+        seg_finding["warning"] = note
+    else:
+        seg_finding = finding(seg_id, seg_name, None, "words", family=FAMILY, sample_size=0,
+                              min_sample=MIN_SAMPLE_RST_NODES, distribution=dict(settings),
+                              warning=f"{note}; no elementary discourse unit had recoverable text")
+
+    nuc_id, nuc_name = nuc_id_name
+    nuclearity_counts: Counter = Counter()
+    for item in summaries:
+        nuclearity_counts.update(item["nuclearity_counts"])
+    total_nuc = sum(nuclearity_counts.values())
+    shares = {key: 100.0 * count / total_nuc for key, count in nuclearity_counts.items()} \
+        if total_nuc else {}
+    nuc_finding = finding(
+        nuc_id, nuc_name, shares.get("NN", 0.0) if total_nuc else None, "%", family=FAMILY,
+        sample_size=total_nuc, min_sample=MIN_SAMPLE_RST_NODES,
+        distribution={**settings, "nuclearity_counts": dict(nuclearity_counts),
+                     "nuclearity_share_percent": shares, "internal_nodes_sampled": total_nuc},
+        warning=note if total_nuc else f"{note}; no internal (non-leaf) RST node to classify")
+
+    rel_id, rel_name = rel_id_name
+    relation_counts: Counter = Counter()
+    for item in summaries:
+        relation_counts.update(item["relation_counts"])
+    total_rel = sum(relation_counts.values())
+    entropy = coh.entropy_of_counts(relation_counts) if total_rel else None
+    rel_finding = finding(
+        rel_id, rel_name, entropy, "bits", family=FAMILY, sample_size=total_rel,
+        min_sample=MIN_SAMPLE_RST_NODES, sample_size_sensitive=True,
+        distribution={
+            **settings, "relation_counts": dict(relation_counts),
+            "relation_rate_percent": ({key: 100.0 * count / total_rel
+                                       for key, count in relation_counts.items()}
+                                      if total_rel else {}),
+            "relation_families_note": "the rstdt checkpoint predicts RST-DT's coarse relation "
+                                      "classes directly (confirmed against this module's worked "
+                                      "example), so this distribution already is a family-level "
+                                      "breakdown, not a fine-grained relation-sense inventory",
+        },
+        evidence=[{"relation": relation, "count": count}
+                 for relation, count in relation_counts.most_common(20)],
+        warning=note if total_rel else f"{note}; no internal RST node to label")
+
+    return [depth_finding, seg_finding, nuc_finding, rel_finding]
 
 
 # ----------------------------------------------------------- permutation group

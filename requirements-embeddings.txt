@@ -28,3 +28,17 @@ sentence-transformers>=2.2
 transformers>=4.40
 torch>=2.0
 fastcoref>=2.1
+
+# Real RST (Rhetorical Structure Theory) discourse-tree parsing
+# (coherence_suite's `rst` feature, off by default). Shares the torch/
+# transformers install above; also needs its own non-PyPI `isanlp`
+# dependency, not installable from this file since it is not on PyPI:
+#     pip install git+https://github.com/iinemo/isanlp.git
+# Constructing the parser downloads ~5 GB of model checkpoints on first use
+# and holds ~6 GB of RAM resident while loaded -- see coherence_suite's
+# module docstring and config.json's `_requires_rst` note for the full cost
+# story and the sampling this feature uses to bound it. Without isanlp_rst
+# (or isanlp), every `discourse.coherence_rst_*` metric id reports
+# "unavailable" with an install hint and the rest of the suite is
+# unaffected.
+isanlp-rst>=3.2

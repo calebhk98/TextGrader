@@ -171,6 +171,20 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # load_raw_text() path, which this codebase never calls (it tokenizes its
     # own sentences and calls load_token_list() instead).
     "nrclex": ("nrclex", "pip install NRCLex"),
+    # Real RST (Rhetorical Structure Theory) discourse-tree parsing for
+    # coherence_suite's optional "rst" feature (off by default). Imports the
+    # 'isanlp_rst.parser' submodule directly so a caller gets the module that
+    # actually exposes Parser. Needs the non-PyPI 'isanlp' package too (pip
+    # install git+https://github.com/iinemo/isanlp.git); constructing the
+    # parser itself (not just importing the package) downloads ~5 GB of
+    # model checkpoints on first use and holds ~5-6 GB resident once loaded,
+    # which is why textgrader.coherence caches one parser per process (see
+    # _load_rst_parser) and why the feature samples a bounded, spread-out set
+    # of passages instead of parsing a whole book -- see coherence_suite's
+    # module docstring for the full cost story.
+    "isanlp_rst": ("isanlp_rst.parser", "pip install isanlp-rst (also: pip install "
+                  "git+https://github.com/iinemo/isanlp.git); pulls in torch/transformers and "
+                  "downloads ~5 GB of model checkpoints on first use"),
 }
 
 _lock = threading.Lock()

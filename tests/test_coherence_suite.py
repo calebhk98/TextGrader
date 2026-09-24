@@ -381,6 +381,170 @@ def test_coreference_window_is_bounded_and_recorded(sample_text):
     assert "sentences_considered" in given_new["distribution"]
 
 
+# --------------------------------------------------------------- real RST
+
+def _argumentative_text():
+    return (' '.join([
+        "The council raised the tax because the old bridge had finally collapsed.",
+        "Although several residents objected loudly, the plan still passed within a week.",
+        "The mayor argued that the repair could not wait any longer; therefore the "
+        "emergency budget increased by a fifth.",
+        "Some still doubted the number, but the vote went ahead regardless.",
+    ]))
+
+
+def _flat_unrelated_text():
+    return (' '.join([
+        "The cat sat on the mat.",
+        "The sky was a pale blue that morning.",
+        "A dog barked twice somewhere down the street.",
+        "Rain fell steadily for exactly one hour.",
+    ]))
+
+
+def _rst_only_config(**overrides):
+    config = {"features": {"rst": True, "lexical": False, "semantic": False, "entity": False,
+                          "coreference": False, "connectives": False,
+                          "order_permutation": False},
+             "rst_passages": 1, "rst_passage_sentences": 10, "rst_max_sentences": 20,
+             "rst_max_seconds": 60.0}
+    config.update(overrides)
+    return config
+
+
+def test_rst_sampling_is_deterministic_and_spreads_across_the_document():
+    """Pure-Python sampling logic, no parser needed: the entire cost-control
+    story for this channel (see coh.sample_rst_passages's docstring) has to
+    hold regardless of whether isanlp_rst is ever installed."""
+
+    sentences = [f"Sentence number {i}." for i in range(100)]
+    passages, info = coh.sample_rst_passages(sentences, 5, 4, 100, seed=0)
+    assert info == {"total_sentences_in_document": 100, "passages_requested": 5,
+                    "passage_sentences_target": 4, "max_sentences_cap": 100, "seed": 0,
+                    "passages_sampled": 5, "total_sentences_sampled": 20}
+    # Deterministic under a fixed seed.
+    again, info_again = coh.sample_rst_passages(sentences, 5, 4, 100, seed=0)
+    assert passages == again and info == info_again
+    # Spread across the book: each passage's start comes from a later stripe
+    # than the one before it, not all five crammed into the opening pages.
+    starts = [start for start, _end, _text in passages]
+    assert starts == sorted(starts) and starts[0] < starts[-1]
+    # A hard sentence cap silently reduces the passage count rather than
+    # letting a config ask for more parsing than the cap allows.
+    _capped, capped_info = coh.sample_rst_passages(sentences, 5, 4, max_sentences=10, seed=0)
+    assert capped_info["passages_sampled"] == 2
+    assert capped_info["total_sentences_sampled"] <= 10
+    # No sentences at all degrades to an empty sample, not an error.
+    empty, empty_info = coh.sample_rst_passages([], 5, 4, 10, seed=0)
+    assert empty == [] and empty_info["passages_sampled"] == 0
+
+
+def test_rst_is_off_by_default_even_with_the_suite_enabled(sample_text):
+    ids = _ids(coherence_suite.measure(_analysis(sample_text)))
+    assert not any("rst" in mid for mid in ids)
+
+
+def test_no_rst_parser_is_loaded_under_the_default_config(monkeypatch, manuscript, base_config):
+    """The same critical gating rule as coreference's: this suite's cost
+    stays "parse", so nothing but the ``rst`` feature flag's own off-by-
+    default value protects a 300,000-word novel from an unwanted, roughly
+    two-seconds-a-sentence RST parsing pass."""
+
+    def _boom(model_name, model_version):
+        raise AssertionError(f"isanlp_rst parser {model_name!r} must not load by default")
+
+    monkeypatch.setattr(coh, "_load_rst_parser", _boom)
+    config = {**base_config, "metrics": {**base_config["metrics"],
+                                         "coherence_suite": {"enabled": True}}}
+    report = grade.analyze(manuscript, config)  # default features: rst is off
+    errors = [item for item in report.results if item.status_type is StatusType.INTERNAL_ERROR]
+    assert not errors, [(item.metric_id, item.error) for item in errors]
+    assert not any("rst" in item.metric_id for item in report.results)
+
+
+def test_rst_degrades_cleanly_without_isanlp_rst(monkeypatch, sample_text):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "isanlp_rst")
+    optional.reset_cache()
+    try:
+        findings = {item["metric_id"]: item for item in coherence_suite.measure(
+            _analysis(sample_text), config=_rst_only_config())}
+    finally:
+        optional.reset_cache()
+    rst_ids = [mid for mid in findings if "rst" in mid]
+    assert len(rst_ids) == 4
+    for metric_id in rst_ids:
+        item = findings[metric_id]
+        assert item["value"] is None
+        assert item["warning"] and "isanlp_rst" in item["warning"]
+
+
+def test_rst_separates_argumentative_text_from_a_flat_unrelated_list():
+    """The check the module docstring's cost story would be worthless
+    without: a real parse of text dense with causal/concessive/conclusion
+    connectives ("because"/"although"/"therefore") against a flat list of
+    unrelated declaratives must actually produce different numbers, not just
+    run without crashing.  Also verifies the "record exactly what was
+    sampled" requirement: every RST finding must carry backend/model/seed
+    and passage counts a reader can use to tell a ten-passage sample from a
+    whole-book parse.
+
+    This is the only test in this module (and, project-wide, one of very
+    few) that loads a real isanlp_rst parser -- construction alone measured
+    69s/5.6GiB in this environment -- so it is kept to this one function,
+    skips cleanly when the package or its model cannot load, and reuses one
+    cached parser (see coh._load_rst_parser) for both short passages below
+    rather than loading twice.
+    """
+
+    module, reason = optional.require("isanlp_rst")
+    if module is None:
+        pytest.skip(f"isanlp_rst is not available in this environment: {reason}")
+
+    arg_findings = {item["metric_id"]: item for item in coherence_suite.measure(
+        _analysis(_argumentative_text()), config=_rst_only_config())}
+    depth_id = "discourse.coherence_rst_tree_depth"
+    rel_id = "discourse.coherence_rst_relation_family_entropy"
+    nuc_id = "discourse.coherence_rst_nuclearity_balance"
+    if arg_findings[depth_id]["warning"] and arg_findings[depth_id]["value"] is None:
+        pytest.skip(f"isanlp_rst could not produce a tree in this environment: "
+                   f"{arg_findings[depth_id]['warning']}")
+
+    flat_findings = {item["metric_id"]: item for item in coherence_suite.measure(
+        _analysis(_flat_unrelated_text()), config=_rst_only_config())}
+
+    # Every RST finding says it is a sample, names its model, and gives a
+    # seed and sampled/parsed passage counts -- never silently a whole-book
+    # parse, and never missing the settings a reader needs to judge it.
+    settings = arg_findings[depth_id]["distribution"]
+    assert settings["backend"] == "rst"
+    assert settings["model"] == coh.DEFAULT_RST_MODEL
+    assert settings["model_version"] == coh.DEFAULT_RST_MODEL_VERSION
+    assert settings["passages_sampled"] == 1
+    assert settings["passages_parsed"] == 1
+    assert settings["total_sentences_in_document"] == 4
+    assert settings["seed"] == 0
+    assert isinstance(settings["elapsed_seconds"], float)
+    assert "sample" in arg_findings[depth_id]["warning"].lower()
+
+    arg_depth = arg_findings[depth_id]["value"]
+    flat_depth = flat_findings[depth_id]["value"]
+    arg_relations = set(arg_findings[rel_id]["distribution"]["relation_counts"])
+    flat_relations = set(flat_findings[rel_id]["distribution"]["relation_counts"])
+    arg_nn_share = arg_findings[nuc_id]["distribution"]["nuclearity_share_percent"]
+    flat_nn_share = flat_findings[nuc_id]["distribution"]["nuclearity_share_percent"]
+
+    # At least one structural signal -- tree depth, the relation labels
+    # actually used, or the nucleus/satellite mix -- must differ; a channel
+    # that assigned identical numbers to dense, connective-marked
+    # argumentation and a flat list of unrelated declaratives would not be
+    # measuring discourse structure at all.
+    assert (arg_depth != flat_depth or arg_relations != flat_relations
+           or arg_nn_share != flat_nn_share), (
+        f"RST channel did not separate argumentative from flat text: "
+        f"depth {arg_depth!r} vs {flat_depth!r}, relations {arg_relations!r} vs "
+        f"{flat_relations!r}, nuclearity {arg_nn_share!r} vs {flat_nn_share!r}")
+
+
 # --------------------------------------------------------- WordNet cohesion
 
 def test_wordnet_lexical_chain_is_reported_alongside_the_identity_chain():

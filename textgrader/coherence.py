@@ -39,6 +39,8 @@ from __future__ import annotations
 
 import math
 import random
+import time
+from collections import Counter
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .metrics.semantic_adjacent import STOPWORDS
@@ -694,6 +696,231 @@ def resolve_coreference(analysis: Any, model_name: str, max_words: int
     return per_sentence, channels, settings, note
 
 
+# -------------------------------------------------------------------- RST
+
+#: The rstdt checkpoint of isanlp_rst's v3 model: English RST Discourse
+#: Treebank relations, the right inventory for English prose (as opposed to
+#: e.g. a de/ru-trained checkpoint the same package also ships).
+DEFAULT_RST_MODEL = "tchewik/isanlp_rst_v3"
+DEFAULT_RST_MODEL_VERSION = "rstdt"
+
+_RST_PARSER_CACHE: dict[tuple[str, str], tuple[Any, str | None]] = {}
+
+
+def _reset_rst_parser_cache() -> None:
+    _RST_PARSER_CACHE.clear()
+
+
+on_reset(_reset_rst_parser_cache)
+
+
+def _load_rst_parser(model_name: str, model_version: str) -> tuple[Any, str | None]:
+    """Cached across every call in this process, exactly like
+    :func:`_load_coref_model`: constructing ``isanlp_rst.parser.Parser``
+    downloads ~5 GB of checkpoints on first use and holds ~5-6 GB resident
+    once loaded, so it must never happen more than once per process no
+    matter how many documents or findings ask for it."""
+
+    key = (model_name, model_version)
+    if key in _RST_PARSER_CACHE:
+        return _RST_PARSER_CACHE[key]
+    module, reason = require("isanlp_rst")
+    if module is None:
+        _RST_PARSER_CACHE[key] = (None, reason)
+        return _RST_PARSER_CACHE[key]
+    try:
+        parser = module.Parser(hf_model_name=model_name, hf_model_version=model_version,
+                               cuda_device=-1)
+        outcome: tuple[Any, str | None] = (parser, None)
+    except Exception as exc:  # pragma: no cover - model download/runtime failure
+        outcome = (None, f"isanlp_rst parser {model_name!r} (version {model_version!r}) "
+                         f"unavailable ({type(exc).__name__}: {exc}); pip install isanlp-rst "
+                         f"and its isanlp dependency "
+                         f"(pip install git+https://github.com/iinemo/isanlp.git)")
+    _RST_PARSER_CACHE[key] = outcome
+    return outcome
+
+
+def rst_tree_summary(node: Any) -> dict[str, Any]:
+    """Depth, EDU count, per-EDU word length, and internal-node
+    relation/nuclearity counts for one ``isanlp_rst`` ``DiscourseUnit`` tree.
+
+    Walked iteratively (an explicit stack, not recursion) so a pathological
+    tree cannot hit Python's recursion limit.  Depth is edge count from the
+    root to the deepest leaf (a single-EDU "tree" has depth 0), which is the
+    convention that makes trees of different sizes comparable the way this
+    suite's other shape-based metrics already are.  Every attribute access is
+    defensive (``getattr`` with a default, broad ``except``) because this
+    reads exactly the fields the task's own worked example showed
+    (``.relation``, ``.nuclearity``, ``.left``, ``.right``, leaves carrying
+    ``relation == "elementary"``), not a documented, versioned API contract;
+    a future isanlp_rst release that renames or drops one of them can only
+    make this summary emptier, never raise.
+    """
+
+    relation_counts: Counter = Counter()
+    nuclearity_counts: Counter = Counter()
+    leaf_word_counts: list[int] = []
+    max_depth = 0
+    stack: list[tuple[Any, int]] = [(node, 0)]
+    while stack:
+        current, depth = stack.pop()
+        if current is None:
+            continue
+        try:
+            relation = getattr(current, "relation", None)
+            left = getattr(current, "left", None)
+            right = getattr(current, "right", None)
+        except Exception:  # pragma: no cover - defensive against a malformed node
+            continue
+        is_leaf = relation == "elementary" or (left is None and right is None)
+        if is_leaf:
+            max_depth = max(max_depth, depth)
+            try:
+                text = getattr(current, "text", "") or ""
+            except Exception:  # pragma: no cover - defensive
+                text = ""
+            leaf_word_counts.append(len(text.split()))
+            continue
+        if relation:
+            relation_counts[relation] += 1
+        try:
+            nuclearity = getattr(current, "nuclearity", None)
+        except Exception:  # pragma: no cover - defensive
+            nuclearity = None
+        if nuclearity:
+            nuclearity_counts[nuclearity] += 1
+        stack.append((left, depth + 1))
+        stack.append((right, depth + 1))
+    return {"depth": max_depth, "leaf_count": len(leaf_word_counts),
+           "leaf_word_counts": leaf_word_counts, "relation_counts": relation_counts,
+           "nuclearity_counts": nuclearity_counts}
+
+
+def sample_rst_passages(sentences: Sequence[str], num_passages: int, passage_sentences: int,
+                        max_sentences: int, seed: int
+                       ) -> tuple[list[tuple[int, int, list[str]]], dict[str, Any]]:
+    """A deterministic, spread-across-the-book sample of passages, never a
+    whole-document parse: at ~2 seconds a sentence, parsing a 300,000-word
+    novel sentence by sentence would take hours (see the module's callers'
+    docstring), so this is the entire cost-control mechanism for the RST
+    channel, exactly the way :func:`resolve_coreference` bounds fastcoref to
+    one windowed prefix instead of the whole book -- except a fixed prefix
+    would never see the book's ending, so this samples spread evenly across
+    it instead.
+
+    The document is split into ``num_passages`` equal-width contiguous
+    stripes by sentence index, and one ``passage_sentences``-sentence window
+    is drawn from a random position within each stripe using
+    ``random.Random(seed)``, so the same document and seed always yield the
+    same passages (deterministic) while every stripe of the book gets a
+    chance to be sampled (spread) rather than always the opening pages.
+    ``num_passages`` is silently reduced (never raised) so that
+    ``num_passages * passage_sentences`` never exceeds ``max_sentences`` -- a
+    hard cap on total parser cost that config options alone cannot be set to
+    exceed.
+
+    Returns ``(passages, sample_info)``: ``passages`` is a list of
+    ``(start_index, end_index, sentence_list)`` triples (0 or more, fewer
+    than requested only when the hard cap or a short document forced it);
+    ``sample_info`` records exactly what was asked for and what was actually
+    sampled (document size, passage size and count requested vs. used, the
+    seed), so a caller can put it in every finding's ``distribution`` and a
+    reader can never mistake a 10-passage sample for a whole-book parse.
+    """
+
+    total = len(sentences)
+    base_info = {"total_sentences_in_document": total, "passages_requested": max(0, num_passages),
+                "passage_sentences_target": max(1, passage_sentences),
+                "max_sentences_cap": max(1, max_sentences), "seed": seed}
+    if total == 0 or num_passages <= 0 or passage_sentences <= 0:
+        return [], {**base_info, "passages_sampled": 0, "total_sentences_sampled": 0}
+
+    passage_len = max(1, min(passage_sentences, total))
+    cap_passages = max(1, max_sentences // passage_len)
+    n_passages = max(1, min(num_passages, cap_passages))
+
+    rng = random.Random(seed)
+    edges = [round(i * total / n_passages) for i in range(n_passages + 1)]
+    passages: list[tuple[int, int, list[str]]] = []
+    for i in range(n_passages):
+        bin_start, bin_end = edges[i], edges[i + 1]
+        bin_size = max(1, bin_end - bin_start)
+        slack = max(0, bin_size - passage_len)
+        start = bin_start + (rng.randint(0, slack) if slack > 0 else 0)
+        start = max(0, min(start, total - passage_len))
+        end = start + passage_len
+        passages.append((start, end, list(sentences[start:end])))
+
+    sampled_sentences = sum(end - start for start, end, _ in passages)
+    return passages, {**base_info, "passages_sampled": len(passages),
+                      "total_sentences_sampled": sampled_sentences}
+
+
+def resolve_rst(analysis: Any, model_name: str, model_version: str, num_passages: int,
+                passage_sentences: int, max_sentences: int, max_seconds: float, seed: int
+               ) -> tuple[list[dict[str, Any]], dict[str, Any], str | None]:
+    """Real, isanlp_rst-backed discourse-tree summaries over a bounded sample.
+
+    Returns ``(summaries, settings, note)``: ``summaries`` is one dict per
+    successfully parsed passage (from :func:`rst_tree_summary`, plus its
+    sentence range), ``settings`` carries the backend/model/sampling
+    metadata every RST finding folds into its own ``distribution`` (see
+    :func:`sample_rst_passages`), and ``note`` is always set -- either why no
+    tree could be produced at all, or a plain-language description of what
+    was actually sampled and how long it took, because a finding produced
+    this way must always say it is a sample, never a whole-book parse.
+
+    ``max_seconds`` is a hard wall-clock budget checked between passages (not
+    only a target): once it is exceeded, sampling stops and every finding
+    still reports on whatever passages parsed before the cutoff, rather than
+    running an unbounded number of two-second-a-sentence parses on a slow
+    machine.
+    """
+
+    parser, reason = _load_rst_parser(model_name, model_version)
+    settings: dict[str, Any] = {"backend": "rst", "model": model_name,
+                                "model_version": model_version}
+    if parser is None:
+        return [], settings, reason
+
+    passages, sample_info = sample_rst_passages(analysis.sentences, num_passages,
+                                                passage_sentences, max_sentences, seed)
+    settings.update(sample_info)
+    if not passages:
+        return [], settings, "no sentences available to sample for RST parsing"
+
+    summaries: list[dict[str, Any]] = []
+    started = time.monotonic()
+    stopped_early = False
+    for start, end, passage in passages:
+        if time.monotonic() - started > max_seconds:
+            stopped_early = True
+            break
+        text = " ".join(passage)
+        try:
+            result = parser(text)
+            tree = ((result or {}).get("rst") or [None])[0]
+        except Exception:  # pragma: no cover - a single bad passage should not sink the sample
+            continue
+        if tree is None:
+            continue
+        summaries.append({"start_sentence": start, "end_sentence": end,
+                          "sentence_count": end - start, **rst_tree_summary(tree)})
+    elapsed = time.monotonic() - started
+    settings.update({"passages_parsed": len(summaries), "elapsed_seconds": round(elapsed, 1),
+                     "max_seconds_cap": max_seconds, "stopped_early_on_time_cap": stopped_early})
+    note = (f"backend=rst: isanlp_rst ({model_name!r}, version {model_version!r}) parsed "
+           f"{len(summaries)} of {sample_info['passages_sampled']} sampled passage(s) "
+           f"({sample_info['total_sentences_sampled']} of "
+           f"{sample_info['total_sentences_in_document']:,} sentences in the document, "
+           f"seed={seed}) spread across the document in {elapsed:.1f}s; this is a SAMPLE, not a "
+           f"whole-book parse" + (" (stopped early: time cap reached)" if stopped_early else ""))
+    if not summaries:
+        return [], settings, note + "; no sampled passage produced a usable tree"
+    return summaries, settings, note
+
+
 # -------------------------------------------------------------- permutation
 
 def permutation_percentile(real_items: Sequence[Any], score_fn: Callable[[Sequence[Any]], float],
@@ -738,5 +965,7 @@ __all__ = [
     "grid_rows", "transition_counts", "entropy_of_counts", "ROLES", "TRANSITION_KEYS",
     "transition_frequency_vector", "build_entity_graph",
     "graph_stats", "DEFAULT_COREF_MODEL", "mention_role", "coref_mentions_by_sentence",
-    "resolve_coreference", "permutation_percentile", "order_score_from_overlap",
+    "resolve_coreference", "DEFAULT_RST_MODEL", "DEFAULT_RST_MODEL_VERSION",
+    "rst_tree_summary", "sample_rst_passages", "resolve_rst",
+    "permutation_percentile", "order_score_from_overlap",
 ]

@@ -227,12 +227,13 @@ REGISTRY: dict[str, MetricSpec] = dict([
 
     # ---------------------------------------------------------- experimental
     _spec("coherence_suite", "coherence_suite", "discourse", "parse",
-          requires=("spacy", "sentence_transformers", "networkx", "fastcoref", "nltk"),
+          requires=("spacy", "sentence_transformers", "networkx", "fastcoref", "nltk",
+                   "isanlp_rst"),
           defaults={
               "features": {"lexical": True, "lexical_wordnet": False,
                           "lexical_wordnet_hypernym": False, "semantic": True,
-                          "entity": True, "coreference": False, "connectives": True,
-                          "order_permutation": True},
+                          "entity": True, "coreference": False, "rst": False,
+                          "connectives": True, "order_permutation": True},
               "min_word_len": 3,
               "chain_gap": 3,
               "chain_min_length": 2,
@@ -245,6 +246,13 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "entity_min_mentions_for_graph": 2,
               "coreference_model": "biu-nlp/f-coref",
               "coreference_max_words": 4000,
+              "rst_model": "tchewik/isanlp_rst_v3",
+              "rst_model_version": "rstdt",
+              "rst_passages": 8,
+              "rst_passage_sentences": 6,
+              "rst_max_sentences": 60,
+              "rst_max_seconds": 90.0,
+              "rst_seed": 0,
               "connective_max_reported": 25,
               "permutations": 50,
               "seed": 0,
@@ -258,10 +266,12 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "adjacency, a surface-based entity grid and graph (with narration/dialogue "
                   "channel splits) and a corpus-referenced transition-frequency delta, plus an "
                   "optional real-coreference (fastcoref) backend reported side by side with the "
-                  "surface grid, connective-family rates, and sentence/paragraph "
-                  "order-permutation baselines. Off by default; each group toggles "
-                  "independently under 'features', and the coreference/WordNet groups stay off "
-                  "even when the rest of the suite is enabled."),
+                  "surface grid, a sampled real-RST-parse (isanlp_rst) channel (tree depth, "
+                  "segment length, nuclearity balance, relation-family entropy), "
+                  "connective-family rates, and sentence/paragraph order-permutation baselines. "
+                  "Off by default; each group toggles independently under 'features', and the "
+                  "coreference/WordNet/RST groups stay off even when the rest of the suite is "
+                  "enabled."),
     _spec("logic_suite", "logic_suite", "discourse", "parse",
           ("spacy", "transformers", "fastcoref", "nltk", "dateutil"),
           defaults={
