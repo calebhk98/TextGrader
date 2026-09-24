@@ -690,6 +690,59 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "where it loads). Every comparison is over a deterministic, seeded, "
                   "spread-across-the-book sample, never the whole book. Off by default; "
                   "experimental."),
+    _spec("conversation_suite", "conversation_suite", "dialogue", "moderate",
+          requires=("networkx", "vaderSentiment", "nrclex"),
+          defaults={
+              "features": {
+                  "attribution": True, "dominance": True, "alternation": True,
+                  "length_accommodation": True, "function_word_coordination": True,
+                  "contraction_convergence": True, "punctuation_convergence": True,
+                  "lexical_entrainment": True, "turn_taking": True,
+                  "response_relevance": True, "politeness": True,
+                  "sentiment_coupling": True, "speaker_separability": True, "graph": True,
+                  # Off even when the suite is on: each needs a heavier optional
+                  # dependency (spaCy, a transformers model download, a
+                  # sentence-transformers model) or extra per-window cost --
+                  # see config.json's "_requires_*" notes.
+                  "pos_convergence": False, "dialogue_act": False,
+                  "response_relevance_embedding": False, "scene_drift": False,
+              },
+              "min_turns_per_speaker": 8,
+              "min_attribution_coverage": 25.0,
+              "min_coordination_pairs": 5,
+              "min_entrainment_pairs": 10,
+              "min_graph_edges": 3,
+              "rare_word_zipf_threshold": 3.0,
+              "shuffle_seed": 0,
+              "separability_max_turns": 400,
+              "response_relevance_model": "all-MiniLM-L6-v2",
+              "dialogue_act_model": "WSHAPER/distilbert-multilingual-dialogue-act-classifier",
+              "dialogue_act_max_turns": 200,
+              "pos_convergence_max_pairs": 300,
+              "scene_window_words": 6000,
+          },
+          summary="Experimental conversational-dynamics suite built on the existing dialogue "
+                  "extraction/attribution: Danescu-Niculescu-Mizil-style directional "
+                  "coordination (turn-length, sentence-count, function-word category, "
+                  "contraction, question-mark, exclamation-mark -- does a responder's own rate "
+                  "rise right after the other speaker's did, above the responder's own "
+                  "reply-position baseline?); shuffled-partner-controlled lexical and rare-word "
+                  "entrainment and response relevance (lexical by default, a real "
+                  "sentence-transformers embedding backend as an off-by-default upgrade); "
+                  "speaker turn-count dominance (Gini) and alternation/run-length; "
+                  "question-response/unanswered-question/backchannel rates; a leave-one-out "
+                  "nearest-centroid speaker-separability accuracy beyond the existing "
+                  "function-word-distance metrics; a regex approximation of "
+                  "Danescu-Niculescu-Mizil & Lee's politeness strategies; VADER/NRC "
+                  "sentiment/emotion response coupling and per-speaker sentiment "
+                  "differentiation (reusing sequences.py's two scorers, never a new sentiment "
+                  "engine); a conversation graph (density, reciprocity, cross-checked against "
+                  "networkx where installed); and, off by default, POS-pattern convergence "
+                  "(needs spaCy), a versioned dialogue-act classifier's label distribution and "
+                  "transition entropy (needs transformers/torch), and scene-window style "
+                  "drift. Every genuinely per-speaker claim is suppressed below "
+                  "min_attribution_coverage/min_turns_per_speaker, mirroring "
+                  "dialogue_speaker_style's own gate. Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
