@@ -548,6 +548,38 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "corpus, fit fresh at grading time with leave-one-out corpus validation, plus "
                   "a consensus count and a cross-detector disagreement score. Off by default; "
                   "experimental."),
+    _spec("distribution_distance_suite", "distribution_distance_suite", "distribution_shape",
+          "moderate", requires=("scipy",),
+          defaults={
+              # Mirrors textgrader.corpus.ITEM_SOURCES; not imported from there, to keep
+              # this module's own import free of anything beyond the standard library.
+              "sources": ["sentence_words", "paragraph_words", "paragraph_sentences",
+                          "word_characters", "sentence_commas", "turn_words"],
+              "features": {
+                  "wasserstein": True, "energy": True, "ks": True, "cramer_vonmises": True,
+                  "anderson_darling": True, "jensen_shannon": True, "kl_divergence": True,
+                  "hellinger": True, "bhattacharyya": True, "total_variation": True,
+                  "mmd": True, "quantile_vector": True, "tail": True,
+                  "optimal_transport": True, "distance_correlation": True,
+              },
+              "histogram_bins": 16, "histogram_smoothing": 0.5,
+              "quantile_vector_points": [0.10, 0.25, 0.50, 0.75, 0.90],
+              "tail_quantile": 0.10, "mmd_max_sample": 500,
+              "distance_correlation_max_sample": 300,
+              "distance_correlation_pairs": {
+                  "sentence": ["sentence_words", "sentence_commas"],
+                  "paragraph": ["paragraph_words", "paragraph_sentences"],
+              },
+              "min_distinct_values": 5,
+          },
+          summary="A full two-sample battery (Wasserstein, energy distance, Kolmogorov-Smirnov, "
+                  "Cramer-von Mises, Anderson-Darling, Jensen-Shannon, KL both ways and "
+                  "symmetrized, Hellinger, Bhattacharyya, total variation, MMD, a quantile-vector "
+                  "distance, lower/upper tail mismatch and a closed-form 1D optimal-transport "
+                  "cost) against the corpus's pooled sentence/paragraph/word/turn distributions, "
+                  "plus a within-document distance-correlation channel between naturally paired "
+                  "sequences. Every distance is its own finding, kept separate from any p-value; "
+                  "every family is independently switchable. Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
