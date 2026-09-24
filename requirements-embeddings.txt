@@ -42,3 +42,15 @@ fastcoref>=2.1
 # "unavailable" with an install hint and the rest of the suite is
 # unaffected.
 isanlp-rst>=3.2
+
+# Real constituency-tree parsing (syntax_complexity_suite's `constituency`
+# feature, off by default even when the suite is on). Shares the torch
+# install above; the pretrained checkpoint itself (~260 MB, `benepar_en3`)
+# is a separate one-time download, not part of the pip package:
+#     python -c "import benepar; benepar.download('benepar_en3')"
+# Without it, every `syntax.complexity_constituency_*` metric id reports
+# "unavailable" with an install hint; every other feature in the suite is
+# spaCy-only and unaffected. A real transformers/benepar version-skew bug
+# (T5Tokenizer missing build_inputs_with_special_tokens under
+# transformers>=5) is worked around in-module; see that module's docstring.
+benepar>=0.2
