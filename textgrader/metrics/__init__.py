@@ -611,6 +611,49 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "OCR-substitution heuristics, and a small dialect-safe grammar rule set -- "
                   "every mechanical rate that risks reading dialect as an error is reported "
                   "separately for narration and dialogue. Off by default; experimental."),
+    _spec("parser_consensus", "parser_consensus", "syntax", "parse",
+          requires=("spacy", "pysbd", "nltk", "syntok", "stanza", "benepar"),
+          defaults={
+              "features": {
+                  "segmentation": True, "tokenization": True, "pos": True, "dependency": True,
+                  "chunks": True,
+                  # Off even when the suite is on: each loads an extra model
+                  # beyond the en_core_web_sm pipeline every cost="parse"
+                  # metric already shares -- see the module docstring.
+                  "spacy_md": False, "spacy_lg": False, "stanza": False,
+                  "constituency_benepar": False,
+              },
+              "segmenters": ["builtin", "pysbd", "pysbd_quote_aware", "nltk_punkt",
+                            "spacy_sentencizer", "spacy_parser", "syntok"],
+              "long_sentence_words": 40,
+              "max_paragraphs": 200,
+              "max_words": 20000,
+              "max_sentences_for_parse": 300,
+              "max_seconds_parse": 180.0,
+              "max_reported": 10,
+              "seed": 0,
+              "spacy_md_model": "en_core_web_md",
+              "spacy_lg_model": "en_core_web_lg",
+              "stanza_processors": "tokenize,mwt,pos,lemma,depparse",
+              "benepar_model": "benepar_en3",
+          },
+          summary="Experimental parser/segmenter disagreement suite: up to seven independent "
+                  "sentence segmenters (built-in, plain pySBD, the pipeline's quote-aware pySBD, "
+                  "NLTK Punkt, spaCy's rule-based sentencizer, spaCy's parser-derived sentences, "
+                  "syntok) compared by long-sentence-share and max-sentence-length -- the tail, "
+                  "not the mean, so a plain-pySBD-style quote collapse is flagged even when it "
+                  "barely moves a book's average -- plus pairwise boundary precision/recall/F1 "
+                  "and all/majority/one-only boundary consensus; independent tokenizer "
+                  "comparison (token-count/boundary-F1/special-token disagreement); and, once a "
+                  "second parser is enabled (spaCy md/lg or stanza; a single parser alone "
+                  "correctly reports 'insufficient consensus' rather than comparing one thing to "
+                  "itself), POS/morphology agreement, UAS/LAS/root/label/depth/dependency-"
+                  "distance agreement between the first two available parsers with an explicit "
+                  "alignment-coverage figure, and a noun-phrase span F1 between spaCy's "
+                  "dependency-derived chunks and a real constituency parse (stanza, or benepar "
+                  "where it loads). Every comparison is over a deterministic, seeded, "
+                  "spread-across-the-book sample, never the whole book. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

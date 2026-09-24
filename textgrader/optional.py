@@ -224,6 +224,38 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # the analyzed text (see that module's docstring). Verified for real:
     # fix_text('MÃ¼nchen') returns 'München'.
     "ftfy": ("ftfy", "pip install ftfy"),
+    # An independent, pure-Python rule-based sentence/token segmenter for
+    # parser_consensus's default "segmentation"/"tokenization" features (the
+    # 'syntok' segmenter/tokenizer sources). Verified for real: correctly
+    # keeps "Mr." and "Dr." sentence-final and gives exact character-span
+    # boundaries via token.offset (see parser_consensus.py's docstring).
+    # Lightweight (only 'regex' as its own dependency, already installed).
+    "syntok": ("syntok", "pip install syntok"),
+    # Independent tokenization/POS/dependency parsing (and, with the right
+    # processors, constituency parsing) for parser_consensus's off-by-default
+    # "stanza" feature (POS/dependency/chunk consensus's second parser) and
+    # the "chunks" feature's constituency source. The package alone is not
+    # enough: its English models are a separate, non-PyPI download this
+    # module never triggers itself (every stanza.Pipeline call passes
+    # download_method=None) -- run e.g.
+    # `python -c "import stanza; stanza.download('en', processors='tokenize,mwt,pos,lemma,depparse')"`
+    # first (~320MB on disk, verified in this environment). Depends on torch,
+    # so it lives in requirements-embeddings.txt rather than requirements.txt.
+    "stanza": ("stanza", "pip install stanza (in requirements-embeddings.txt; also needs "
+                        "stanza.download('en', processors=...) models, ~320MB, never "
+                        "triggered by this codebase itself)"),
+    # Constituency parsing for parser_consensus's off-by-default
+    # "constituency_benepar" feature. Verified installable
+    # (`pip install benepar`), but constructing benepar.Parser('benepar_en3')
+    # in this environment raises "AttributeError: 'T5Tokenizer' object has no
+    # attribute 'build_inputs_with_special_tokens'" against the transformers
+    # version this codebase's other suites (coherence_suite, logic_suite)
+    # need -- parser_consensus.py reports that exact error as this feature's
+    # "unavailable" reason rather than hiding it. Depends on transformers/
+    # torch, so it lives in requirements-embeddings.txt.
+    "benepar": ("benepar", "pip install benepar (in requirements-embeddings.txt; also needs "
+                          "benepar.download('benepar_en3'); observed to fail against this "
+                          "project's transformers version -- see parser_consensus.py)"),
 }
 
 _lock = threading.Lock()

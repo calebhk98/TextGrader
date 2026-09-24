@@ -42,3 +42,20 @@ fastcoref>=2.1
 # "unavailable" with an install hint and the rest of the suite is
 # unaffected.
 isanlp-rst>=3.2
+
+# A second, fully independent parser for the experimental parser_consensus
+# suite's off-by-default "stanza" feature (POS/dependency/constituency
+# consensus against spaCy). Shares the torch install above. Off by default;
+# even when the suite and this feature are both on, this suite never
+# downloads stanza's models itself (every stanza.Pipeline call passes
+# download_method=None) -- see textgrader/optional.py's note and
+# parser_consensus.py's module docstring for the exact download command and
+# measured size/cost.
+stanza>=1.8
+
+# Constituency parsing for parser_consensus's off-by-default
+# "constituency_benepar" feature. Verified installable, but see
+# textgrader/optional.py's note and parser_consensus.py's module docstring
+# for a real, quoted incompatibility with the transformers version above
+# that the other suites in this file need; off by default regardless.
+benepar>=0.2
