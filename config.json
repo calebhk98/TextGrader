@@ -730,8 +730,14 @@
       "mmd_max_sample": 500,
       "distance_correlation_max_sample": 300,
       "distance_correlation_pairs": {
-        "sentence": ["sentence_words", "sentence_commas"],
-        "paragraph": ["paragraph_words", "paragraph_sentences"]
+        "sentence": [
+          "sentence_words",
+          "sentence_commas"
+        ],
+        "paragraph": [
+          "paragraph_words",
+          "paragraph_sentences"
+        ]
       },
       "min_distinct_values": 5,
       "_requires": "scipy (already in requirements.txt) for wasserstein_distance, energy_distance, ks_2samp, cramervonmises_2samp and anderson_ksamp. Without it, every wasserstein/energy/ks/cramer_vonmises/anderson_darling finding reports 'unavailable' naming scipy; the histogram-based (jensen_shannon/kl_divergence/hellinger/bhattacharyya/total_variation), quantile_vector, tail, mmd, optimal_transport and distance_correlation channels are dependency-free (plain math/statistics) and are unaffected.",
@@ -811,8 +817,15 @@
       "_requires_stanza": "needs the 'stanza' package (pip install stanza, in requirements-embeddings.txt since it depends on torch) PLUS its English models downloaded separately -- this suite never downloads them itself (every stanza.Pipeline call here passes download_method=None): run python -c \"import stanza; stanza.download('en', processors='tokenize,mwt,pos,lemma,depparse')\" first (about 320MB on disk, verified in this environment; loading the pipeline measured about 4.6s and parsing one sentence about 0.4-1s on a quiet CPU-only machine). Without either the package or the downloaded models, features.stanza degrades to naming exactly which is missing in syntax.parser_pos_agreement_rate's warning (or whichever finding needed a second parser) rather than crashing.",
       "_requires_chunks": "spaCy's noun_chunks (dependency-derived) is always available once spaCy itself is; the SECOND, independent noun-phrase source syntax.parser_np_chunk_agreement needs is either features.stanza with a 'constituency' processor in stanza_processors (see _requires_stanza above; constituency models are a separate stanza download, python -c \"import stanza; stanza.download('en', processors='tokenize,mwt,pos,constituency')\") or features.constituency_benepar (see below). Without either, this one finding reports 'unavailable' naming that a second source is needed; every other channel in this suite is unaffected.",
       "_requires_constituency_benepar": "needs the 'benepar' package (pip install benepar) plus its own downloaded parser model (python -c \"import benepar; benepar.download('benepar_en3')\"), about 260 MB, and torch from requirements-embeddings.txt. benepar calls a T5 tokenizer method that transformers 5.x removed; TextGrader restores it (textgrader.optional.shim_benepar_transformers), the same fix syntax_complexity_suite uses. Without the package or the model, syntax.parser_np_chunk_agreement reports 'unavailable' naming which is missing. Off by default independent of every other feature in this suite.",
-      "segmenters": ["builtin", "pysbd", "pysbd_quote_aware", "nltk_punkt", "spacy_sentencizer",
-                    "spacy_parser", "syntok"],
+      "segmenters": [
+        "builtin",
+        "pysbd",
+        "pysbd_quote_aware",
+        "nltk_punkt",
+        "spacy_sentencizer",
+        "spacy_parser",
+        "syntok"
+      ],
       "long_sentence_words": 40,
       "max_paragraphs": 200,
       "max_words": 20000,
@@ -824,6 +837,46 @@
       "spacy_lg_model": "en_core_web_lg",
       "stanza_processors": "tokenize,mwt,pos,lemma,depparse",
       "benepar_model": "benepar_en3"
+    },
+    "semantic_structure_suite": {
+      "enabled": false,
+      "features": {
+        "lexical_tfidf": true,
+        "bm25": true,
+        "lsa": true,
+        "static_embedding_glove": false,
+        "static_embedding_spacy": false,
+        "sentence_transformer": false,
+        "topic_models": true,
+        "disagreement": true
+      },
+      "_requires_bm25": "features.bm25 (on by default) needs the 'rank_bm25' package (pip install rank_bm25, in requirements.txt) -- pure Python, no model download, no system dependency. Without it, every semantic.structure_bm25_* metric id reports 'unavailable' naming that package; every other representation is unaffected. BM25 scores are UNBOUNDED (never a cosine similarity in [-1, 1]) -- every finding under this representation says so and its unit is 'bm25_score', never 'cosine'.",
+      "_requires_lsa": "features.lsa (on by default) needs 'scikit-learn' (already a project dependency for other suites). It fits a within-document TruncatedSVD over this document's own TF-IDF matrix -- never a corpus-trained model -- so it needs nothing beyond the package itself. Bounded for book-length documents by lsa_max_features (TF-IDF vocabulary cap) and lsa_fit_sample_cap (rows used to fit the SVD basis; every unit is still projected onto that basis via .transform(), so no unit is left without a vector). Without scikit-learn, every semantic.structure_lsa_* metric id reports 'unavailable'.",
+      "_requires_static_embedding_glove": "features.static_embedding_glove (off by default) needs the 'gensim' package (pip install gensim, in requirements.txt) PLUS a one-time download of the pretrained vector set named by glove_model (default 'glove-wiki-gigaword-50', about 66 MB) via gensim's own downloader API -- verified in this environment: downloading and loading it measured about 22 seconds on a cold cache and scored real analogies correctly (see the module docstring); it is cached under ~/gensim-data afterward and every later load in the same environment is fast. Mean-pooled over content words only (aggregation=mean; TF-IDF-weighted mean and SIF are documented, not implemented). Without the package or a successful download, every semantic.structure_static_embedding_glove_* metric id reports 'unavailable' naming which is missing; every other representation is unaffected. Off by default specifically because the download is real network activity the first time it runs.",
+      "_requires_static_embedding_spacy": "features.static_embedding_spacy (off by default) needs a spaCy model that actually ships static word vectors, named by spacy_vector_model (default 'en_core_web_md', confirmed installed with real vectors -- nlp.vocab.vectors.shape was (20000, 300) -- in this environment); 'en_core_web_sm' (the model every cost=\"parse\" metric shares) has NO static vectors and will report unavailable naming that. Loaded through its own independent, lightweight pipeline (parser/ner/tagger/lemmatizer/attribute_ruler/tok2vec all excluded, since only the vocab's vectors table is needed), never the shared parse -- this feature never sets needs_parse for the whole suite. python -m spacy download en_core_web_md if it is not already installed. Mean-pooled via spaCy's own doc.vector (aggregation=mean). Without a vector-bearing model, every semantic.structure_static_embedding_spacy_* metric id reports 'unavailable'.",
+      "_requires_sentence_transformer": "features.sentence_transformer (off by default) needs 'sentence-transformers' (pip install -r requirements-embeddings.txt; pulls in torch). Reuses semantic_adjacent.get_sentence_vectors/get_paragraph_vectors -- the SAME cached embedding this document may already have from semantic_adjacent/semantic_window/semantic_paragraph/semantic_clusters/coherence_suite at the same sentence_transformer_model -- so turning this on alongside one of those costs nothing extra. Deliberately kept OUT of this suite's REQUIRES/needs_model (see the module docstring's gating-rule note): putting sentence_transformers there would flip needs_model for the WHOLE suite and silently drop even the cheap, default-on lexical_tfidf/bm25/lsa/topic_models channels out of every corpus profiling pass unless --model-metrics were also passed. Without sentence-transformers installed, or when it falls back to a lexical proxy, every semantic.structure_sentence_transformer_* metric id reports itself unavailable rather than silently duplicating the lexical_tfidf representation under a different name.",
+      "_requires_topic_models": "features.topic_models (on by default) needs 'scikit-learn' for the LDA/NMF channels and 'tomotopy' for the HDP channel (pip install tomotopy, in requirements.txt; MALLET, the tool this project's task table names for this role, is Java and out of scope -- see the module docstring). These are CORPUS-TRAINED, leave-one-out models: they are fit from a bounded, deterministic per-book profile cache this suite's profile_vector hook builds (a fixed, versioned vocabulary via 'wordfreq', capped and seeded per book), never on the document being graded. A profile must be REBUILT WITH semantic_structure_suite ENABLED (features.topic_models on, the default) for this cache to exist at all -- an older profile built before this suite existed, or built with it disabled, has no feature_profiles['semantic_structure_suite'] rows, and every semantic.structure_topic_* metric id reports why it cannot compare rather than a number. This suite's own cost is 'moderate', not 'parse' or 'model' (none of its default-on channels touch the shared spaCy parse or a sentence-embedding model), so building that profile needs NEITHER --parse-metrics NOR --model-metrics -- just semantic_structure_suite enabled in the config passed to the corpus build. Measured on a real 9-book profile built during this suite's own development: about 3.5 KB per book (bounded by topic_profile_max_terms regardless of book length or vocabulary size), so even a 50-book corpus adds well under 200 KB to the shipped profile. Without scikit-learn/tomotopy, or with fewer than the minimum usable corpus rows (after leave-one-out exclusion of the graded book itself, when it matches a corpus source), every semantic.structure_topic_<lda|nmf|hdp>_* metric id says exactly why in its warning.",
+      "seed": 0,
+      "structure_window": 5,
+      "centroid_reference_cap": 200,
+      "centroid_query_cap": 400,
+      "dispersion_pair_cap": 300,
+      "intro_conclusion_sentences": 3,
+      "lsa_components": 10,
+      "lsa_max_features": 1500,
+      "lsa_fit_sample_cap": 800,
+      "glove_model": "glove-wiki-gigaword-50",
+      "spacy_vector_model": "en_core_web_md",
+      "sentence_transformer_model": "all-MiniLM-L6-v2",
+      "disagreement_low_tail_quantile": 0.1,
+      "topic_vocab_size": 3000,
+      "topic_n_topics": 8,
+      "topic_active_threshold": 0.1,
+      "topic_profile_seed": 0,
+      "topic_profile_paragraph_sample": 30,
+      "topic_profile_paragraph_word_cap": 300,
+      "topic_profile_max_terms": 250,
+      "hdp_iterations": 200
     }
   },
   "allow_external_metric_commands": false,

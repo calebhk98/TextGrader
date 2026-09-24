@@ -690,6 +690,47 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "where it loads). Every comparison is over a deterministic, seeded, "
                   "spread-across-the-book sample, never the whole book. Off by default; "
                   "experimental."),
+    _spec("semantic_structure_suite", "semantic_structure_suite", "semantic", "moderate",
+          requires=("sklearn", "gensim", "rank_bm25", "tomotopy", "wordfreq"),
+          defaults={
+              "features": {
+                  "lexical_tfidf": True, "bm25": True, "lsa": True,
+                  "static_embedding_glove": False, "static_embedding_spacy": False,
+                  "sentence_transformer": False, "topic_models": True, "disagreement": True,
+              },
+              "seed": 0,
+              "structure_window": 5,
+              "centroid_reference_cap": 200,
+              "centroid_query_cap": 400,
+              "dispersion_pair_cap": 300,
+              "intro_conclusion_sentences": 3,
+              "lsa_components": 10,
+              "lsa_max_features": 1500,
+              "lsa_fit_sample_cap": 800,
+              "glove_model": "glove-wiki-gigaword-50",
+              "spacy_vector_model": "en_core_web_md",
+              "sentence_transformer_model": "all-MiniLM-L6-v2",
+              "disagreement_low_tail_quantile": 0.10,
+              "topic_vocab_size": 3000,
+              "topic_n_topics": 8,
+              "topic_active_threshold": 0.1,
+              "topic_profile_seed": 0,
+              "topic_profile_paragraph_sample": 30,
+              "topic_profile_paragraph_word_cap": 300,
+              "topic_profile_max_terms": 250,
+              "hdp_iterations": 200,
+          },
+          summary="Experimental multi-representation semantic-structure suite: TF-IDF-lexical, "
+                  "BM25, within-document LSA/SVD, and (off by default) GloVe/fastText-style "
+                  "static-embedding and sentence-transformer channels, each reporting adjacent-"
+                  "sentence/paragraph similarity, centroid relatedness, local-window drift, "
+                  "global dispersion and opening-to-closing similarity; a corpus-trained, "
+                  "leave-one-out LDA/NMF (scikit-learn) and HDP (tomotopy) topic-model channel "
+                  "(entropy, dominant-topic confidence, switch rate, recurrence interval, "
+                  "persistence, active-topic count, concentration) fit from a bounded per-book "
+                  "profile cache, never on the graded text; and explicit cross-representation "
+                  "disagreement (rank correlation, single-representation and consensus "
+                  "low-coherence flags). Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

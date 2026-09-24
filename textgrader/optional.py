@@ -251,6 +251,30 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "stanza": ("stanza", "pip install stanza (in requirements-embeddings.txt; also needs "
                         "stanza.download('en', processors=...) models, ~320MB, never "
                         "triggered by this codebase itself)"),
+    # Lexical retrieval-style BM25 scoring for semantic_structure_suite's
+    # "bm25" representation (on by default). Pure Python, no model download;
+    # confirmed for real: rank_bm25.__doc__ describes Okapi BM25 and
+    # BM25Okapi(...).get_scores(...) was exercised against real text before
+    # use (see semantic_structure_suite's module docstring).
+    "rank_bm25": ("rank_bm25", "pip install rank_bm25"),
+    # Gensim: used by semantic_structure_suite ONLY as the loader for
+    # pretrained static word-vector sets (GloVe via gensim's downloader API,
+    # "static_embedding_glove" feature, off by default) -- not for its own
+    # LDA/LSI/HDP implementations, which this suite gets from scikit-learn
+    # (LDA/NMF/LSA) and tomotopy (HDP) instead. Confirmed installing cleanly
+    # against this project's pinned numpy/scipy (pip install --dry-run showed
+    # no downgrade) before use.
+    "gensim": ("gensim", "pip install gensim"),
+    # tomotopy: an efficient, Python-native (C++-backed, no JVM) topic-model
+    # library used by semantic_structure_suite for its corpus-trained HDP
+    # channel, since neither scikit-learn nor gensim ships an HDP
+    # implementation this project would otherwise have to write itself.
+    # MALLET (the tool the task's own table names first for this role) is
+    # explicitly out of scope: it is a Java program, and this project is
+    # Python-only -- see that suite's module docstring. Confirmed installing
+    # cleanly (pip install --dry-run showed no downgrade of numpy/scipy) and
+    # exercised for real (HDPModel.add_doc/.train/.infer) before use.
+    "tomotopy": ("tomotopy", "pip install tomotopy"),
 }
 
 _lock = threading.Lock()
