@@ -72,6 +72,13 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "kenlm": ("kenlm", "pip install kenlm (query-time bindings only; the lmplz trainer "
                        "must be built from source, see "
                        "https://github.com/kpu/kenlm#compiling)"),
+    # Real constituency-tree parsing for syntax_complexity_suite's optional
+    # "constituency" feature (off by default even when the suite is on: see
+    # that module's docstring). Pulls in torch (already required by
+    # fastcoref/isanlp_rst above) plus its own pretrained parser checkpoint,
+    # downloaded once via `python -c "import benepar; benepar.download('benepar_en3')"`.
+    "benepar": ("benepar", "pip install benepar && python -c \"import benepar; "
+                          "benepar.download('benepar_en3')\""),
     # A pretrained causal language model for randomness_suite's neural-LM
     # perplexity channel (features.neural_language_model, off by default).
     # Heavy (torch is a multi-gigabyte install) and only imported when that

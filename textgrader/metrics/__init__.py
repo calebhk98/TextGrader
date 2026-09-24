@@ -611,6 +611,42 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "OCR-substitution heuristics, and a small dialect-safe grammar rule set -- "
                   "every mechanical rate that risks reading dialect as an error is reported "
                   "separately for narration and dialogue. Off by default; experimental."),
+    _spec("syntax_complexity_suite", "syntax_complexity_suite", "syntax", "parse",
+          requires=("spacy", "benepar"),
+          defaults={
+              "features": {
+                  "tunit_clause": True, "phrasal_elaboration": True,
+                  "dependency_topology": True, "syntactic_surprisal": True,
+                  "constituency": False,
+              },
+              "long_dependency_threshold": 10,
+              "constituency_model": "benepar_en3",
+              "constituency_sample_sentences": 30,
+              "constituency_max_sentences": 60,
+              "constituency_max_seconds": 180.0,
+              "constituency_seed": 0,
+          },
+          summary="Experimental richer syntactic-complexity analysis beyond mean parse depth: "
+                  "an L2SCA-style T-unit/clause ratio family approximated from spaCy dependency "
+                  "labels (mean length of sentence/T-unit/clause, clauses and dependent clauses "
+                  "per T-unit/clause, coordinate phrases and complex nominals per T-unit/clause, "
+                  "verb phrases per T-unit, finite/nonfinite ratio -- every finding says it is an "
+                  "approximation, not real L2SCA/TAASSC, which used Tregex over constituency "
+                  "trees), phrasal elaboration (noun-phrase length/depth, pre/postmodifier "
+                  "counts and diversity, PP-attachment density, appositive and participial-"
+                  "modifier rates), dependency topology (branching factor, tree imbalance, head "
+                  "direction, long-dependency rate, non-projective sentence rate, root-POS and "
+                  "dependency-label/transition entropy, subtree-size distribution), and "
+                  "corpus-trained syntactic surprisal (POS-bigram and dependency-label-bigram "
+                  "cross-entropy plus a per-sentence surprisal distribution with top/bottom "
+                  "evidence sentences -- never fit on the document being scored; needs a corpus "
+                  "profile built with BOTH this suite enabled AND --parse-metrics, since this "
+                  "suite's cost is 'parse'). A fifth, off-by-default feature adds "
+                  "real constituency-tree measures (tree depth, phrase-type and production-rule "
+                  "entropy, distinct-subtree rate, sentence-template diversity) from a real "
+                  "neural constituency parser (benepar), over a bounded, seeded, deterministic "
+                  "sample of sentences -- never a whole-book parse. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
