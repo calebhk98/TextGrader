@@ -520,6 +520,34 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "off-by-default true NCD against real reference documents read from disk at "
                   "grading time. Every measurement group is independently switchable; see the "
                   "module docstring for what remains deferred."),
+    _spec("anomaly_suite", "anomaly_suite", "distribution_shape", "moderate",
+          requires=("sklearn",),
+          defaults={
+              "features": {
+                  "isolation_forest": True, "lof": True, "one_class_svm": True,
+                  "elliptic_envelope": True, "mahalanobis": True, "knn": True, "pca": True,
+                  "gmm": True,
+                  # Off only when PyOD/hdbscan are absent -- these three flags default to
+                  # True the same as every other detector; see config.json's
+                  # "_features_requires" note for exactly what each needs installed.
+                  "hbos": True, "ecod": True, "copod": True, "abod": True, "kde": True,
+                  "sos": True, "hdbscan": True,
+                  "consensus_count": True, "disagreement": True,
+              },
+              "columns": None, "min_coverage": 0.7, "max_features": 20,
+              "min_corpus_documents": 20, "seed": 42, "loo_reference_size": 15,
+              "consensus_percentile": 90.0, "evidence_features": 5,
+              "isolation_forest_n_estimators": 50, "one_class_svm_nu": 0.1,
+              "pca_components": None, "gmm_components": 2, "hdbscan_min_cluster_size": 5,
+          },
+          summary="Fifteen independent multivariate anomaly detectors (Isolation Forest, LOF, "
+                  "One-Class SVM, Elliptic Envelope, Mahalanobis, kNN distance, PCA "
+                  "reconstruction error and Gaussian-mixture likelihood via scikit-learn; HBOS, "
+                  "ECOD, COPOD, ABOD, KDE and SOS via PyOD; a GLOSH density score via hdbscan) "
+                  "over each document's core-prose-metric feature vector against the reference "
+                  "corpus, fit fresh at grading time with leave-one-out corpus validation, plus "
+                  "a consensus count and a cross-detector disagreement score. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

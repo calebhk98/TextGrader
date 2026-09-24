@@ -190,6 +190,17 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "isanlp_rst": ("isanlp_rst.parser", "pip install isanlp-rst (also: pip install "
                   "git+https://github.com/iinemo/isanlp.git); pulls in torch/transformers and "
                   "downloads ~5 GB of model checkpoints on first use"),
+    # A real, independent anomaly/outlier-detection library (61 detectors
+    # spanning tabular/time-series/graph/text/image/audio data as of writing)
+    # for textgrader.metrics.anomaly_suite's HBOS/ECOD/COPOD/ABOD/KDE/SOS
+    # channels, which scikit-learn does not implement. Confirmed via
+    # `pip show pyod` before use, per this project's rule that a package's
+    # name is not evidence of what it does.
+    "pyod": ("pyod", "pip install pyod"),
+    # Density-based clustering (McInnes & Healy) for anomaly_suite's GLOSH
+    # outlier-score channel. Confirmed via `pip show hdbscan` before use, same
+    # reason as pyod above.
+    "hdbscan": ("hdbscan", "pip install hdbscan"),
 }
 
 _lock = threading.Lock()
