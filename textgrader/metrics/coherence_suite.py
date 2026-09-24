@@ -165,13 +165,79 @@ environment):
   cannot compare, the same as ``style.function_word_delta`` does with no
   corpus at all.
 
-Still deferred:
+Still deferred - each of the following was actually installed and run against
+real text in this environment this pass, not assumed unavailable; the
+evidence is below rather than a guess:
 
-* **RST parsing** (IsaNLP, Feng-Hirst, discopy, DisCoDisCo) and **PDTB
-  implicit-relation labels**. No maintained, installable parser exists in
-  this environment; faking a relation label or a tree depth from string
-  matching would be worse than not reporting it. Only explicit,
-  surface-matched connectives are measured. Permanently out of scope.
+* **PDTB explicit/implicit discourse-relation labelling, via ``discopy``.**
+  ``discopy==1.2.2`` was installed (``pip install discopy``) and inspected
+  directly: ``discopy.__doc__`` is `" DisCoPy: the Python toolkit for
+  computing with string diagrams. "`` and its own PyPI summary is "The Python
+  toolkit for computing with string diagrams"; ``dir(discopy)`` is
+  ``['balanced', 'braided', 'cat', 'closed', 'compact', 'config', 'drawing',
+  'feedback', 'frobenius', 'grammar', 'hypergraph', 'interaction', 'markov',
+  'matrix', 'messages', 'monoidal', 'pivotal', 'python', 'quantum', 'ribbon',
+  'rigid', 'stream', 'symmetric', 'tensor', 'traced', 'utils', 'version']``.
+  This is a categorical-compositional string-diagram toolkit (monoidal
+  categories, DisCoCat-style grammar-to-diagram composition, quantum circuit
+  modelling) - nothing in its package tree mentions PDTB, discourse
+  relations, connective sense, or explicit/implicit relation labelling in any
+  form. It is simply not a discourse parser, despite the name suggesting one.
+  A search for an actual PDTB-style shallow discourse parser package under
+  the obvious names (``pdtb``, ``discourse-parser``, ``discourse_parser``,
+  ``pdtb-parser``, ``shallow-discourse-parser``) returned "ERROR: No matching
+  distribution found" from ``pip index versions`` for every one of them - no
+  maintained, installable PDTB parser was found under any name tried. Real
+  explicit/implicit PDTB relation-sense labelling therefore stays out of
+  scope, on this actual evidence rather than an unchecked assumption; only
+  explicit, surface-matched connectives are measured (the ``connectives``
+  group above).
+* **RST tree parsing, via ``rst-parser`` and ``isanlp-rst``.**
+  ``rst-parser==0.1.3`` hard-depends on ``allennlp`` (see its own
+  ``install_requires``), which in turn pins ``spacy<2.2,>=2.1.0``. Resolving
+  that pin makes pip backtrack through every allennlp release from 2.9.1 down
+  to 0.9.0 and then try to build ``spacy==2.1.9`` from source, which fails
+  outright under this environment's Python 3.11 / modern setuptools:
+  ``ImportError: cannot import name 'msvccompiler' from 'distutils'`` (from
+  ``preshed``'s ``setup.py``, which still imports the long-removed
+  ``distutils.msvccompiler``), ending in ``error: metadata-generation-failed``.
+  Even if that build were coaxed into working, allennlp's own ``spacy<2.2``
+  pin would force-downgrade the spaCy version every other channel in this
+  suite (and ``logic_suite``, and every other spaCy-dependent suite in this
+  codebase) depends on - exactly the dependency conflict this task's own
+  instructions say never to install through. Not installed; permanently out
+  of scope on that evidence. ``isanlp-rst==3.2.2`` is a different story: it
+  installs cleanly with no such conflict (a dry-run resolve adds only
+  ``fire``/``greenlet``/``jsonnet``/``lxml``/``playwright``/``pyee``/
+  ``razdel``/``termcolor``, and ``torch``/``transformers``/``numpy`` stayed at
+  their existing versions; ``import torch, transformers, sentence_transformers,
+  fastcoref`` still printed ``ok`` afterward), plus its own required,
+  non-PyPI ``isanlp`` package (``pip install
+  git+https://github.com/iinemo/isanlp.git``, also clean). But actually
+  constructing its ``Parser`` - before parsing a single sentence - downloads
+  two separate multi-gigabyte checkpoints (the relation-classification head,
+  2,487,166,362 bytes, plus its ``xlm-roberta-large`` sentence encoder, ~2.2
+  GiB more) and could not be completed in three separate, good-faith attempts
+  in this container: a cold-cache run timed out at 300s mid-download; a
+  second run with both checkpoints already cached still had not printed
+  "loaded" after 500s; a third run was manually killed after several more
+  minutes when container memory hit ~14 of 15 GiB (risking an OOM kill of a
+  sibling agent's process on this shared machine), still without
+  ``Parser.__init__`` completing. No exception was ever raised in any
+  attempt - the failure mode is pure wall-clock and memory cost on this
+  shared, resource-constrained container, not a bug or an incompatibility -
+  but a channel that cannot be verified to produce a single real tree, and
+  whose minimum footprint risks taking down the whole grading process rather
+  than degrading to one ``unavailable(...)`` finding, is not shipped on a
+  guess that a less contended machine would fare better. No RST channel is
+  added. If a future environment can be confirmed to load
+  ``isanlp_rst.parser.Parser`` and return a tree within a reasonable budget,
+  the shape to add is: tree depth (``coh.rst_tree_depth``-style, walking
+  ``DiscourseUnit.left``/``.right``), a nucleus/satellite ratio from each
+  internal node's ``nuclearity`` field (``"NS"``/``"SN"``/``"NN"``), and a
+  relation-label distribution from each internal node's ``relation`` field
+  (leaves carry ``relation == "elementary"`` and are excluded), windowed and
+  capped exactly like ``coreference`` is today.
 * **Pronoun-to-named-mention transition rate.** ``pov.entity_pronoun_ratio``
   already measures named-entity-to-pronoun balance in narration; adding a
   second, entity-grid-flavoured version of the same comparison here would be
