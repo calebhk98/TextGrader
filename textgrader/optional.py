@@ -126,6 +126,16 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # feature_groups -- see that group's own note in timeseries_suite.py for
     # why it is still exactly one finding per sequence regardless of preset.
     "tsfresh": ("tsfresh", "pip install tsfresh"),
+    # Real, independent Burrows/Cosine/Argamon-quadratic/weighted Delta,
+    # Zeta and Kilgarriff's chi-squared for stylometry_suite's optional
+    # "pystylometry_reference" feature (off by default; reads real reference
+    # text from disk at grading time). Lightweight (only "rich" as its own
+    # dependency). This is the package genuinely on PyPI for this family --
+    # see stylometry_suite's module docstring for why the literally-named
+    # "pydelta" package is NOT it (a biological-taxonomy package) and why the
+    # real PyDelta project (github.com/cophi-wue/pydelta) could not be
+    # installed here either.
+    "pystylometry": ("pystylometry", "pip install pystylometry"),
 }
 
 _lock = threading.Lock()

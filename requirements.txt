@@ -136,6 +136,15 @@ tsfresh>=0.20
 # torch-free, unlike the neural backends, which is why it lives here.
 python-dateutil>=2.8
 
+# Real, independent Burrows'/Cosine/Argamon-quadratic/weighted Delta, Zeta and
+# Kilgarriff's chi-squared implementations for stylometry_suite's optional,
+# off-by-default "pystylometry_reference" feature.  Lightweight (only "rich"
+# as its own dependency).  Note for anyone tempted to add a package literally
+# named "pydelta": don't -- that PyPI name is an unrelated biological-taxonomy
+# package, and the real PyDelta project isn't on PyPI and fails to build here
+# (see stylometry_suite's module docstring, section P, for the quoted errors).
+pystylometry>=1.4
+
 # The neural backends several experimental suites can use -- an NLI
 # cross-encoder, a coreference resolver and a causal language model -- are NOT
 # here: they pull in torch, so they live in requirements-embeddings.txt beside

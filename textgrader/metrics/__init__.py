@@ -398,6 +398,20 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   # Off by default: a heavier, more specialized analysis, only
                   # meaningful with author-labelled corpus data.
                   "impostors": False,
+                  # Off by default: fits a REAL classifier (scikit-learn) per
+                  # iteration, unlike "impostors" above (a distance
+                  # comparison). Never during corpus profiling -- see the
+                  # module docstring's section K2.
+                  "impostors_classifier": False,
+                  # On by default: cheap, hand-implemented arithmetic over the
+                  # already-cached function-word profile -- see the module
+                  # docstring's section P (the "PyDelta" gap).
+                  "delta_family": True,
+                  # Off by default: like ncd_against_corpus, reads real
+                  # reference documents from disk at grading time and needs
+                  # the pystylometry package -- see the module docstring's
+                  # section Q.
+                  "pystylometry_reference": False,
                   # Off by default: needs a corpus profile built with
                   # embedding_style ALSO enabled at profiling time (so
                   # feature_profiles['stylometry_suite'] holds per-book
@@ -417,7 +431,12 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "max_chars_for_ngrams": 500000, "section_window_words": 3000,
               "section_shift_threshold": 2.5, "k_neighbors": 5,
               "distance_metrics": ["cosine", "euclidean", "manhattan", "jensen_shannon"],
-              "primary_distance": "cosine", "compression_algorithm": "zlib",
+              # lzma, not zlib: zlib's fixed 32 KiB window cannot reliably
+              # compute NCD once either side is much bigger than half that
+              # (ordinary for this suite's book-length inputs) -- see
+              # stylometry_suite's COMPRESSOR_DICTIONARY_BYTES/
+              # _ncd_window_guard for the measured evidence.
+              "primary_distance": "cosine", "compression_algorithm": "lzma",
               "min_corpus_documents": 4, "min_documents_per_author": 2,
               "outlier_threshold": 3.5, "seed": 42,
               "word_frequency_vocab_cap": 3000,
@@ -428,12 +447,21 @@ REGISTRY: dict[str, MetricSpec] = dict([
               # "function_words" (default) or "embedding" -- see the module
               # docstring's "Impostors-style verification".
               "impostors_representation": "function_words",
+              # impostors_classifier: iteration count kept lower than
+              # impostors_iterations because each one fits a real classifier.
+              "impostors_classifier_iterations": 15,
+              "impostors_classifier_type": "logistic_regression",
               # ncd_against_corpus: directories of reference .txt/.md files,
               # read fresh from disk at grading time (see the module
               # docstring's "True NCD against reference documents"), plus how
               # many of them and how many bytes of each to bound the cost.
               "ncd_corpus_dirs": [], "ncd_max_reference_documents": 10,
               "ncd_max_bytes": 100000,
+              # pystylometry_reference: reuses ncd_corpus_dirs (same real
+              # reference text, read the same way) with its own document/byte
+              # caps and most-frequent-word count.
+              "pystylometry_max_reference_documents": 5,
+              "pystylometry_max_bytes": 200000, "pystylometry_mfw": 200,
           },
           summary="Stylometry/authorship suite: character/word/POS/punctuation n-gram entropy, "
                   "lexical-richness statistics (plus a lexicalrichness cross-check), Heaps/Zipf "
@@ -441,11 +469,16 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "nearest/centroid/OOD distances against a reference corpus (both function-word "
                   "and, once a profile caches per-book embedding vectors, sentence-embedding), a "
                   "word-frequency distance family, per-author unigram cross-entropy, a bounded "
-                  "distance-based impostors approximation (function-word or embedding "
-                  "representation), an off-by-default sentence-embedding section-drift "
-                  "representation, and an off-by-default true NCD against real reference "
-                  "documents read from disk at grading time. Every measurement group is "
-                  "independently switchable; see the module docstring for what remains deferred."),
+                  "distance-based impostors approximation AND (off by default) a real "
+                  "classifier-refit-per-iteration general-impostors score (function-word or "
+                  "embedding representation), a hand-implemented Delta family (Burrows/Argamon "
+                  "quadratic/Eder's/cosine, on by default) plus an off-by-default pystylometry "
+                  "cross-check of the same family against real reference text (also giving Zeta "
+                  "and Kilgarriff's chi-squared, which nothing else in this suite computes), an "
+                  "off-by-default sentence-embedding section-drift representation, and an "
+                  "off-by-default true NCD against real reference documents read from disk at "
+                  "grading time. Every measurement group is independently switchable; see the "
+                  "module docstring for what remains deferred."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
