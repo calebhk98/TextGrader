@@ -435,6 +435,29 @@ def load_profile(config, report):
     return profile
 
 
+def check_definition_version(profile, report):
+    """Warn when the profile's metric definitions predate this code's.
+
+    Some ids keep their name while their headline changes (a median becoming
+    a mean, say).  Most comparisons are unaffected, so nothing is withheld,
+    but a reader should know the corpus should be rebuilt.
+    """
+
+    if not profile:
+        return
+    from textgrader.corpus import METRIC_DEFINITION_VERSION
+
+    recorded = profile.get("metric_definition_version")
+    if recorded is not None and str(recorded) != METRIC_DEFINITION_VERSION:
+        report.results.append(MetricResult(
+            "corpus.metric_definition_version", "Corpus metric definitions",
+            status="unavailable", status_type=StatusType.UNAVAILABLE,
+            warning=f"this profile was built with metric definitions version {recorded} and "
+                    f"this code uses version {METRIC_DEFINITION_VERSION}; some metrics have "
+                    f"changed what they measure since, so rebuild the profile before trusting "
+                    f"their comparisons (see METRIC_DEFINITION_VERSION in textgrader/corpus.py)"))
+
+
 def check_preprocessing(profile, analysis, report):
     """Warn when the corpus was built from differently-prepared text."""
 
@@ -571,6 +594,7 @@ def _analyze(config, report, path=None, text=None):
 
     profile = load_profile(config, report)
     check_preprocessing(profile, analysis, report)
+    check_definition_version(profile, report)
     lexile_comparable = check_lexile_source(profile, config, report)
     comparator = Comparator(profile, analysis, settings)
 

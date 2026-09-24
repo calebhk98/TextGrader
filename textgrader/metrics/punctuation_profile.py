@@ -185,8 +185,8 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     comma_summary = summarize(comma_counts)
     out.append(finding(
         "punct.commas_per_sentence_shape", "Comma count per sentence, shape",
-        comma_summary.get("median"), "commas", family=FAMILY, sample_size=sentences_total,
-        distribution=comma_summary, min_sample=MIN_SAMPLE,
+        comma_summary.get("mean"), "commas", family=FAMILY, sample_size=sentences_total,
+        distribution={**comma_summary, "headline": "mean: these are small whole-number counts, whose median sits on one value for nearly every book"}, min_sample=MIN_SAMPLE,
         evidence=[{"first_sentence_counts": comma_counts[:20]}]))
 
     dialogue = analysis.dialogue

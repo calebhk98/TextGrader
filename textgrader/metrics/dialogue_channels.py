@@ -115,8 +115,9 @@ def _channel_findings(view: DocumentAnalysis, window: int, suffix: str,
                 distribution=ttr_summary, channel=channel, min_sample=TTR_MIN_SAMPLE,
                 warning=None if ttr_values else f"fewer than two words in {channel}"),
         finding(f"dialogue.word_length_{suffix}", f"Mean word length ({channel})",
-                word_length_summary.get("median"), "characters", family=FAMILY,
-                sample_size=len(word_lengths), distribution=word_length_summary, channel=channel,
+                word_length_summary.get("mean"), "characters", family=FAMILY,
+                sample_size=len(word_lengths),
+                distribution={**word_length_summary, "headline": "mean: these are small whole-number counts, whose median sits on one value for nearly every book"}, channel=channel,
                 min_sample=MIN_SAMPLE, warning=None if word_lengths else f"no words in {channel}"),
         finding(f"dialogue.punctuation_{suffix}", f"Punctuation marks per 1,000 words ({channel})",
                 punct_rate, "per 1,000 words", family=FAMILY, sample_size=view.word_count,
@@ -128,12 +129,14 @@ def _channel_findings(view: DocumentAnalysis, window: int, suffix: str,
 
 
 def _gap(metric_id: str, name: str, unit: str, dialogue_summary: Mapping[str, Any],
-         narration_summary: Mapping[str, Any], min_sample: int) -> dict[str, Any]:
-    d = dialogue_summary.get("median")
-    n = narration_summary.get("median")
+         narration_summary: Mapping[str, Any], min_sample: int,
+         statistic: str = "median") -> dict[str, Any]:
+    d = dialogue_summary.get(statistic)
+    n = narration_summary.get(statistic)
     value = (d - n) if d is not None and n is not None else None
     return finding(metric_id, name, value, unit, family=FAMILY, channel="full",
-                   min_sample=min_sample, distribution={"dialogue_median": d, "narration_median": n},
+                   min_sample=min_sample,
+                   distribution={f"dialogue_{statistic}": d, f"narration_{statistic}": n},
                    warning=None if value is not None else
                    "need a usable measurement in both dialogue and narration to compare")
 
@@ -156,7 +159,7 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     out.append(_gap("dialogue.ttr_gap", "Type-token ratio gap, dialogue minus narration",
                     "ratio", d_ttr, n_ttr, TTR_MIN_SAMPLE))
     out.append(_gap("dialogue.word_length_gap", "Mean word length gap, dialogue minus narration",
-                    "characters", d_wl, n_wl, MIN_SAMPLE))
+                    "characters", d_wl, n_wl, MIN_SAMPLE, statistic="mean"))
 
     punct_gap = (d_punct - n_punct) if d_punct is not None and n_punct is not None else None
     out.append(finding("dialogue.punctuation_gap",

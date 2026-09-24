@@ -45,11 +45,14 @@ WORD_HISTOGRAM_EDGES = (20, 50, 100, 200)
 # One sentence, a pair, a normal paragraph, a long one.
 SENTENCE_HISTOGRAM_EDGES = (1, 2, 5, 10)
 
-#: ``(key, id_stem, unit, label)`` for the two series, so neither can quietly
-#: acquire a measurement the other lacks.
+#: ``(key, id_stem, unit, label, headline)`` for the two series, so neither
+#: can quietly acquire a measurement the other lacks.  Words per paragraph
+#: range widely and keep the median.  Sentences per paragraph are small whole
+#: numbers whose median was 2 on 36 of the 50 reference books, so it headlines
+#: the mean.
 SERIES = (
-    ("words", "paragraph_words", "words", "paragraph length in words"),
-    ("sentences", "paragraph_sentences", "sentences", "paragraph length in sentences"),
+    ("words", "paragraph_words", "words", "paragraph length in words", "median"),
+    ("sentences", "paragraph_sentences", "sentences", "paragraph length in sentences", "mean"),
 )
 
 # The word-length autocorrelation shipped under this id before the sentence
@@ -58,14 +61,14 @@ LEGACY_WORD_AUTOCORRELATION = "rhythm.paragraph_length_autocorrelation_lag1"
 
 
 def _series_findings(stem: str, unit: str, label: str, values: Sequence[int],
-                     edges: Sequence[int]) -> list[dict[str, Any]]:
+                     edges: Sequence[int], headline: str = "median") -> list[dict[str, Any]]:
     summary = summarize(values)
     total = len(values)
     buckets = histogram(values, list(edges))
     autocorrelation = summary.get("lag1_autocorrelation")
     return [
-        finding(f"rhythm.{stem}", label.capitalize(), summary.get("median"), unit,
-                family=FAMILY, sample_size=total, distribution=summary,
+        finding(f"rhythm.{stem}", label.capitalize(), summary.get(headline), unit,
+                family=FAMILY, sample_size=total, distribution={**summary, "headline": headline},
                 min_sample=MIN_SAMPLE,
                 details=[{"bucket": name, "count": count} for name, count in buckets.items()]),
         finding(f"rhythm.{stem}_cv", f"Coefficient of variation of {label}",
@@ -88,7 +91,7 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     out: list[dict[str, Any]] = []
     if total == 0:
         warning = "no paragraphs to measure"
-        for _, stem, unit, label in SERIES:
+        for _, stem, unit, label, _ in SERIES:
             out.extend([
                 finding(f"rhythm.{stem}", label.capitalize(), None, unit, family=FAMILY,
                         sample_size=0, min_sample=MIN_SAMPLE, warning=warning),
@@ -106,8 +109,8 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
                            min_sample=MIN_SAMPLE, warning=warning))
         return out
 
-    for key, stem, unit, label in SERIES:
-        out.extend(_series_findings(stem, unit, label, series[key], edges[key]))
+    for key, stem, unit, label, headline in SERIES:
+        out.extend(_series_findings(stem, unit, label, series[key], edges[key], headline))
     word_autocorrelation = next(
         item["value"] for item in out
         if item["metric_id"] == "rhythm.paragraph_words_autocorrelation_lag1")

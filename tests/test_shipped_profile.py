@@ -137,3 +137,11 @@ def test_the_shipped_profile_carries_lexile_so_the_metric_is_comparable():
     assert source != "none"
     assert "lexile" in PROFILE["distributions"]
     assert any("lexile" in row for row in PROFILE["books"])
+
+
+def test_the_shipped_profile_uses_the_current_metric_definitions():
+    # Some ids change what their headline measures without changing name;
+    # the version records that, so a stale shipped profile is caught here.
+    from textgrader.corpus import METRIC_DEFINITION_VERSION
+
+    assert str(PROFILE.get("metric_definition_version")) == METRIC_DEFINITION_VERSION

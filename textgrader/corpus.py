@@ -39,7 +39,11 @@ from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA_VERSION = 2
 PARSER_VERSION = "2"
-METRIC_DEFINITION_VERSION = "2"
+#: Moves when an existing metric id starts measuring something different, so a
+#: profile built before the change is not silently compared against it.
+#: 3: run lengths, word lengths in characters, commas per sentence and
+#: sentences per paragraph headline the mean instead of the median.
+METRIC_DEFINITION_VERSION = "3"
 
 from .core_metrics import measure as core_measure
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing

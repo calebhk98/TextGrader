@@ -87,8 +87,9 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     summary = summarize(run_length_list)
     return [
         finding("dialogue.unnarrated_run_length", "Unnarrated dialogue run length",
-                summary.get("median"), "turns", family=FAMILY, sample_size=len(run_length_list),
-                distribution=summary, min_sample=MIN_SAMPLE, evidence=evidence),
+                summary.get("mean"), "turns", family=FAMILY, sample_size=len(run_length_list),
+                distribution={**summary, "headline": "mean: these are small whole-number counts, whose median sits on one value for nearly every book"}, min_sample=MIN_SAMPLE,
+                evidence=evidence),
         finding("dialogue.max_unnarrated_run", "Longest unnarrated dialogue run", longest,
                 "turns", family=FAMILY, sample_size=len(run_length_list), min_sample=MIN_SAMPLE,
                 evidence=evidence[:1]),

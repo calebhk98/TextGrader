@@ -107,8 +107,9 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
                     for start, length in longest]
         out.append(finding(
             f"rhythm.run_length_{band}", f"Run length of consecutive {band} sentences",
-            run_summary.get("median"), "sentences", family=FAMILY,
-            sample_size=len(band_runs), distribution=run_summary, min_sample=MIN_SAMPLE,
+            run_summary.get("mean"), "sentences", family=FAMILY,
+            sample_size=len(band_runs),
+            distribution={**run_summary, "headline": "mean: these are small whole-number counts, whose median sits on one value for nearly every book"}, min_sample=MIN_SAMPLE,
             evidence=evidence,
             warning=None if band_runs else f"no {band}-band sentences in this text"))
 
