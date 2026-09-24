@@ -277,6 +277,7 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `hdd` | moderate | lexicalrichness | no | HD-D, a hypergeometric length-resistant diversity measure. |
+| `lexical_norms_suite` | moderate | wordfreq, openpyxl, lexical-diversity, taaled, lftk | no | Age of acquisition, concreteness, imageability, familiarity, VAD, sensorimotor strength and subtitle frequency from published norm sets (downloaded once with `python -m textgrader.lexicons download all`), each with coverage, token- and type-weighted means, tails and drift. |
 | `mattr` | moderate | - | yes | Moving-average type-token ratio, length-resistant lexical diversity. |
 | `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
 | `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
@@ -302,12 +303,14 @@ of it, so a slow run always says what was slow.
 | `duplicate_sentence_clusters` | model | sentence_transformers | no | Clusters of sentences that restate one another. |
 | `local_similarity_window` | model | sentence_transformers | no | Similarity to the previous three and five sentences. |
 | `paragraph_similarity` | model | sentence_transformers | no | Paragraph-to-paragraph semantic similarity. |
+| `semantic_structure_suite` | moderate | scikit-learn, rank-bm25, gensim, tomotopy | no | Semantic structure under several independent representations (TF-IDF, BM25, LSA, opt-in GloVe, spaCy vectors and sentence embeddings), topic models fitted on the reference corpus with the graded book left out, and where the representations disagree. |
 
 ### dialogue
 
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `character_voice` | fast | - | no | Pairwise distance between transcript speakers' function-word profiles. |
+| `conversation_suite` | moderate | networkx, vaderSentiment, nrclex | no | Conversational dynamics on the existing turns and speaker attribution: turn-taking, accommodation and entrainment against a shuffled baseline, question-response, politeness, speaker separability and the reply graph. Speaker claims are withheld below the attribution-coverage bar. |
 | `dialogue_attribution` | fast | - | no | Speech tag against action beat against untagged turn. |
 | `dialogue_channels` | moderate | - | no | Every core shape measured separately for dialogue and for narration. |
 | `dialogue_contractions` | fast | - | yes | Contraction rate inside spoken text, excluding possessives. |
@@ -321,8 +324,10 @@ of it, so a slow run always says what was slow.
 
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
+| `affect_suite` | moderate | vaderSentiment, nrclex, afinn, textblob, empath, liwc, transformers | no | Sentiment, emotion and VAD per sentence from several independent engines (VADER, NRC, AFINN, TextBlob, NRC and Warriner VAD, optional Empath, a LIWC dictionary you supply, and a transformer classifier), each with its own level, volatility, arc, runs and dialogue/narration gap, plus where the engines disagree. Never a quality judgement. |
 | `causal_connectives` | fast | - | no | Causal and explanatory connective rates. |
 | `coherence_suite` | parse | spacy, networkx, nltk, sentence-transformers, fastcoref, isanlp-rst | no | Lexical, WordNet and semantic adjacency, surface *and* coreference-resolved entity grids kept side by side, a corpus-referenced entity-grid transition table, and a sampled real RST parse (tree depth, segment length, nuclearity balance, relation-family entropy). |
+| `graph_suite` | parse | spacy, networkx, igraph, fastcoref, booknlp | no | Entity, character, speaker, paragraph, topic-transition and lexical-chain graphs, each with a documented edge rule and the same network statistics (density, centralization, communities, paths), with igraph recomputing them as a cross-check. BookNLP and embedding graphs are opt-in. |
 | `hedges_boosters` | fast | - | no | Hedge, booster and modal rates. |
 | `logic_suite` | parse | spacy, transformers, fastcoref, nltk, python-dateutil | no | Surface contradiction candidates and proposition triples, cross-checked against an NLI model and coreference when installed, plus opt-in semantic role labelling, REBEL relation extraction, an argument-relation classifier and WordNet/PropBank/VerbNet/FrameNet lexical checks. The REBEL and argument-mining models are CC BY-NC-SA 4.0 (non-commercial). |
 | `rhetorical_constructions` | moderate | - | no | Repeated rhetorical templates, discovered rather than listed. |
