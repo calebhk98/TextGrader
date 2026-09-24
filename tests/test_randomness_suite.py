@@ -938,6 +938,92 @@ def test_ncd_against_corpus_reports_an_unreachable_directory_clearly(tmp_path):
     assert "exist" in item["warning"]
 
 
+def test_ncd_corpus_algorithm_defaults_to_lzma_not_zlib():
+    """zlib/gzip's fixed 32768-byte DEFLATE window is smaller than
+    2 * ncd_corpus_max_bytes (100_000 by default), so zlib cannot see back
+    far enough for NCD to work at this suite's own default byte caps (see
+    test_ncd_against_corpus_discriminates_self_from_different_at_default_
+    settings below and _group_ncd_against_corpus's docstring for the
+    measured numbers). lzma's dictionary is >= 256 KiB at every preset."""
+
+    assert rs.DEFAULTS["ncd_corpus_algorithm"] == "lzma"
+
+
+def test_ncd_against_corpus_discriminates_self_from_different_at_default_settings(tmp_path):
+    """The regression this fix exists to catch: at DEFAULT settings (no
+    algorithm or byte-cap override), on text of a realistic size (well over
+    100 KB, comparable to a real chapter), NCD of a document against an
+    IDENTICAL reference copy must land far below NCD against a genuinely
+    DIFFERENT reference. This is exactly the case zlib could not handle
+    (measured directly at these byte caps: NCD(x, x) = 0.97, NCD(x, y) =
+    0.98 for an unrelated y - indistinguishable) and lzma, the default, can:
+    see _group_ncd_against_corpus's docstring for the full numbers."""
+
+    target_text = _real_prose(seed=5000, paragraphs=600)
+    different_text = _real_prose(seed=6000, paragraphs=600)
+    assert len(target_text) > 100_000 and len(different_text) > 100_000
+
+    same_dir = tmp_path / "same"
+    same_dir.mkdir()
+    (same_dir / "identical.txt").write_text(target_text, encoding="utf-8")
+
+    different_dir = tmp_path / "different"
+    different_dir.mkdir()
+    (different_dir / "different.txt").write_text(different_text, encoding="utf-8")
+
+    same_findings = _measure(target_text, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                             ncd_corpus_dirs=[str(same_dir)])
+    diff_findings = _measure(target_text, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                             ncd_corpus_dirs=[str(different_dir)])
+
+    same_item = same_findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    diff_item = diff_findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert same_item["value"] is not None and diff_item["value"] is not None
+    assert same_item["distribution"]["algorithm"] == "lzma"
+    assert same_item["value"] < 0.2
+    assert diff_item["value"] > 0.8
+
+
+def test_ncd_against_corpus_refuses_a_windowed_compressor_past_its_window(tmp_path):
+    """The guard: explicitly choosing zlib (or gzip/lz4/snappy) at byte caps
+    that exceed its fixed window must degrade visibly, naming the window and
+    a safe max_bytes, rather than silently returning a meaningless number -
+    the exact failure mode this whole fix addresses."""
+
+    target_text = _real_prose(seed=5001, paragraphs=600)
+    corpus_dir = tmp_path / "windowed"
+    corpus_dir.mkdir()
+    (corpus_dir / "identical.txt").write_text(target_text, encoding="utf-8")
+
+    for algorithm in ("zlib", "gzip", "lz4", "snappy"):
+        if algorithm in ("lz4", "snappy") and not optional.have(rs._COMPRESSOR_MODULE_NAME[algorithm]):
+            continue
+        findings = _measure(target_text, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                            ncd_corpus_dirs=[str(corpus_dir)], ncd_corpus_algorithm=algorithm)
+        item = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+        assert item["value"] is None, algorithm
+        assert "window" in item["warning"], algorithm
+        assert str(rs._WINDOWED_COMPRESSOR_BYTES[algorithm]) in item["warning"], algorithm
+
+
+def test_ncd_against_corpus_window_guard_does_not_trigger_when_bytes_fit(tmp_path):
+    """The same windowed compressor works fine once max_bytes is lowered to
+    fit its window - the guard is about the configuration, not a blanket ban
+    on these algorithms."""
+
+    target_text = _real_prose(seed=5002, paragraphs=600)
+    corpus_dir = tmp_path / "small_window_ok"
+    corpus_dir.mkdir()
+    (corpus_dir / "identical.txt").write_text(target_text, encoding="utf-8")
+
+    findings = _measure(target_text, features={**rs.DEFAULT_FEATURES, "ncd_against_corpus": True},
+                        ncd_corpus_dirs=[str(corpus_dir)], ncd_corpus_algorithm="zlib",
+                        ncd_corpus_max_bytes=10_000)
+    item = findings[f"{rs.ID}ncd_corpus_nearest_reference"]
+    assert item["value"] is not None
+    assert item["distribution"]["compressor_window_bytes"] == 32_768
+
+
 def test_ncd_against_corpus_reads_real_reference_files_from_disk(tmp_path):
     corpus_dir = tmp_path / "ncd_corpus"
     corpus_dir.mkdir()
@@ -958,7 +1044,9 @@ def test_ncd_against_corpus_reads_real_reference_files_from_disk(tmp_path):
     assert mean_ncd["value"] is not None
     assert 0.0 <= mean_ncd["value"] <= 1.5
     assert nearest["distribution"]["reference_documents_compared"] == 4
-    assert nearest["distribution"]["algorithm"] == "zlib"
+    assert nearest["distribution"]["algorithm"] == "lzma"
+    assert nearest["distribution"]["compressor_window_bytes"] is not None
+    assert nearest["distribution"]["compressor_window_bytes"] >= 262_144
     assert nearest["evidence"][0]["reference"].endswith((".txt", ".md"))
 
 

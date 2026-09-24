@@ -142,7 +142,15 @@ than a number that mostly encodes their difference in length.
   default) is now implemented for real, reading the corpus folder directly
   at grading time behind its own switch - see "Deferred" below for why this
   one measurement, alone in this suite, touches the filesystem instead of a
-  cached profile.
+  cached profile. Its default ``ncd_corpus_algorithm`` is ``lzma``, not
+  ``zlib``: NCD needs ``compress(x + y)`` to see back across the WHOLE
+  concatenation, and zlib/gzip's DEFLATE window is a fixed 32768 bytes,
+  smaller than 2x this suite's own default byte cap - a real, measured
+  failure (an identical document and an unrelated one both scored ~0.97 NCD
+  under zlib at 100 KB), not a property of how the compared text was
+  produced. ``_group_ncd_against_corpus``'s docstring has the full numbers
+  and the guard that now refuses a number a windowed compressor cannot
+  actually compute, rather than reporting a meaningless one.
 * ``features.gibberish_detector_package`` and ``features.ncd_against_corpus``
   join ``features.kenlm_language_model`` and ``features.neural_language_model``
   under the same gating rule stated above for KenLM and the neural LM: both
@@ -379,7 +387,11 @@ DEFAULTS: dict[str, Any] = {
     "ncd_corpus_dirs": [],  # empty = disabled even if the feature flag is on; see module docstring.
     "ncd_corpus_max_reference_documents": 10,
     "ncd_corpus_max_bytes": 100_000,
-    "ncd_corpus_algorithm": "zlib",
+    # lzma, not zlib: NCD needs compress(x+y) to see back across the whole
+    # concatenation, and zlib/gzip's DEFLATE window (32768 bytes, fixed) is
+    # smaller than 2 * ncd_corpus_max_bytes by default. See
+    # _group_ncd_against_corpus's docstring and its window guard.
+    "ncd_corpus_algorithm": "lzma",
 }
 
 VOWELS = set("aeiou")
@@ -717,6 +729,76 @@ def _effective_setting(name: str, level: int) -> tuple[str, int | None]:
         # would misrepresent it as having been used when it was not.
         return "level", None
     return "level", level  # zlib, gzip: pass the configured level through.
+
+
+#: Fixed, format-mandated back-reference windows for the compressors that
+#: genuinely have a small one, in bytes. zlib/gzip's DEFLATE window is 32768
+#: bytes (2**15) by construction and is NOT affected by ``compression_level``
+#: -- level changes match-finding effort, not the window itself. LZ4's raw
+#: block format encodes match offsets in 16 bits, so 65535 (rounded up to
+#: 65536 here) is the largest distance a match can ever reference, again
+#: regardless of level. python-snappy has no documented fixed limit, but
+#: measuring it directly (compressing two 100 KB real-book excerpts,
+#: concatenated, at several sizes) shows the same breakdown pattern between
+#: roughly 64 KB and 96 KB combined input that LZ4 shows, so it is treated
+#: the same, conservatively, at 65536.
+#:
+#: This matters because NCD needs ``compress(x + y)`` to be able to reference
+#: BACK INTO x while encoding y: if ``len(x) + len(y)`` exceeds this window,
+#: the compressor cannot see the earlier copy at all, so C(x+y) comes out
+#: close to C(x) + C(y) even when x and y are identical -- NCD(x, x) and
+#: NCD(x, y) for an unrelated y then both land near 1, and the measurement
+#: cannot discriminate anything.  ``_ncd_corpus_algorithm``'s default is
+#: ``lzma`` specifically to avoid this; see ``_group_ncd_against_corpus``.
+_WINDOWED_COMPRESSOR_BYTES: dict[str, int] = {
+    "zlib": 32_768, "gzip": 32_768, "lz4": 65_536, "snappy": 65_536,
+}
+
+#: liblzma's preset -> dictionary size table (XZ Utils' documented values;
+#: not affected by anything else this module configures). Used only to
+#: report a real number in ``distribution``, never to gate anything -- at
+#: preset 0 the dictionary is already 256 KiB, comfortably above every byte
+#: cap this suite uses by default, so lzma is never a windowing risk here.
+_LZMA_PRESET_DICT_BYTES = [262_144, 1_048_576, 2_097_152, 4_194_304, 4_194_304,
+                          8_388_608, 8_388_608, 16_777_216, 33_554_432, 67_108_864]
+
+
+def _compressor_window_bytes(name: str, level: int) -> int | None:
+    """The compressor's back-reference window or dictionary size in bytes,
+    for ``distribution.compressor_window_bytes`` on every NCD finding, or
+    ``None`` when the codec has no fixed distance limit at all (PPMd builds
+    a full statistical model of the whole input; it has an order, not a
+    window).
+
+    Only ``_WINDOWED_COMPRESSOR_BYTES``' four entries are ever small enough,
+    at this suite's byte caps, to change what an NCD finding means; the rest
+    are reported for transparency, not because any of them has been observed
+    to cause the failure this documents (see ``_group_ncd_against_corpus``'s
+    docstring for the measured numbers behind the four that are).
+    """
+
+    if name in _WINDOWED_COMPRESSOR_BYTES:
+        return _WINDOWED_COMPRESSOR_BYTES[name]
+    if name == "bz2":
+        # bz2's block size is exactly compresslevel * 100_000 bytes (Python's
+        # own bz2 docs); a match cannot be found across a block boundary.
+        return max(1, min(level, 9)) * 100_000
+    if name == "lzma":
+        preset = max(0, min(level, 9))
+        return _LZMA_PRESET_DICT_BYTES[preset]
+    if name == "zstd":
+        # zstandard's default window scales with level; ~2 MiB (window log
+        # 21) is the documented default around this suite's mid-range
+        # levels and only grows from there, comfortably above every byte
+        # cap this suite uses by default.
+        return 2_097_152
+    if name == "brotli":
+        # Brotli's default window (lgwin) is 22 bits = 4 MiB unless a
+        # caller sets lgwin explicitly, which this module does not.
+        return 4_194_304
+    if name == "ppmd":
+        return None  # a context-order model, not a sliding window.
+    return None
 
 
 def _compress(name: str, data: bytes, level: int) -> tuple[bytes | None, str | None]:
@@ -1249,6 +1331,7 @@ def _group_ncd(analysis: DocumentAnalysis, opts: Mapping[str, Any]) -> list[dict
                            distribution={"algorithm": algo, "level": level, "seed": seed,
                                         "compressed_original": cx, "compressed_variant": cy,
                                         "compressed_concatenation": cxy,
+                                        "compressor_window_bytes": _compressor_window_bytes(algo, level),
                                         "note": "near 0 means compression barely notices this "
                                                 "corruption; near 1 means the corrupted text shares "
                                                 "almost nothing compressible with the original"}))
@@ -2361,6 +2444,33 @@ def _group_ncd_against_corpus(analysis: DocumentAnalysis, opts: Mapping[str, Any
     reference documents were compared in its ``distribution``, so a reader
     can tell a real "nothing looked similar" from "only three reference
     documents were readable".
+
+    **``ncd_corpus_algorithm`` defaults to ``lzma``, not ``zlib``, and this is
+    not a stylistic choice.** NCD needs ``compress(x + y)`` to be able to
+    reference back into ``x`` while it encodes ``y``. zlib/gzip's DEFLATE
+    window is a fixed 32768 bytes (LZ4 and, empirically, snappy break down
+    a little past 65536); this suite's byte caps default to
+    ``ncd_corpus_max_bytes = 100_000`` per side, so a ``zlib`` run here
+    concatenates roughly 200,000 bytes into a compressor that can only ever
+    see the last 32768 of them. The result is not merely noisy, it is
+    *unable to discriminate at all*: measured directly on two 100 KB real
+    book excerpts, ``zlib`` gave NCD(x, x) = 0.97 and NCD(x, y) = 0.98 for an
+    unrelated y -- an identical document and a different one score the same,
+    because the compressor genuinely cannot see the earlier copy, not
+    because of anything about how the text was produced or normalized. The
+    same pair scores NCD(x, x) = 0.002 and NCD(x, y) = 0.95 under ``lzma``
+    (dictionary >= 256 KiB at every preset), which is why it is the default.
+    ``zstd``, ``brotli`` and ``bz2`` (block size = ``compression_level`` *
+    100,000 bytes, so >= 100,000 at this suite's default level 6) are large
+    enough to work at these byte caps too; only ``zlib``, ``gzip``, ``lz4``
+    and ``snappy`` have a small enough window to matter here, and the guard
+    below refuses to report a number for exactly those four when the
+    configured byte caps exceed their window, rather than silently returning
+    a "different" score for an identical pair. See
+    ``_compressor_window_bytes`` for the exact figures and their sources,
+    and ``distribution.compressor_window_bytes`` on every finding here (and
+    on ``ncd_word_shuffle``/``ncd_char_shuffle``/``ncd_sentence_shuffle``
+    above) for the number that applied to it.
     """
 
     ids = (
@@ -2387,11 +2497,30 @@ def _group_ncd_against_corpus(analysis: DocumentAnalysis, opts: Mapping[str, Any
     raw_dirs = option(opts, "ncd_corpus_dirs", DEFAULTS["ncd_corpus_dirs"])
     corpus_dirs = list(raw_dirs) if isinstance(raw_dirs, (list, tuple)) else ([raw_dirs] if raw_dirs else [])
 
+    doc_bytes = analysis.text.encode("utf-8")[:max_bytes]
+    window = _compressor_window_bytes(algorithm, level)
+
+    # Refuse to report a number this compressor cannot actually compute,
+    # rather than silently returning "different" for an identical pair (see
+    # this function's docstring for the measured numbers behind this guard).
+    # Sized against the CONFIGURED max_bytes, not the actual reference byte
+    # count, so the same configuration always gives the same answer whether
+    # a given reference document happens to be shorter than the cap or not.
+    if window is not None and len(doc_bytes) + max_bytes > window:
+        safe_max_bytes = max(1000, window // 2)
+        return _unavailable(
+            f"{algorithm} has a fixed {window}-byte compression window, but the configured "
+            f"ncd_corpus_max_bytes ({max_bytes}) lets a document/reference pair reach "
+            f"{len(doc_bytes) + max_bytes} bytes combined -- {algorithm} cannot see back that "
+            f"far, so it would report every reference as maximally different, including this "
+            f"document compared against itself. Lower ncd_corpus_max_bytes to at most "
+            f"{safe_max_bytes}, or set ncd_corpus_algorithm to lzma (the default), whose "
+            f"dictionary is megabytes rather than kilobytes.",
+            word_count)
+
     references, reason, available = _ncd_corpus_reference_texts(corpus_dirs, max_documents, max_bytes)
     if not references:
         return _unavailable(reason, word_count)
-
-    doc_bytes = analysis.text.encode("utf-8")[:max_bytes]
 
     def _len(data: bytes) -> int | None:
         compressed, _ = _compress(algorithm, data, level)
@@ -2419,7 +2548,7 @@ def _group_ncd_against_corpus(analysis: DocumentAnalysis, opts: Mapping[str, Any
     common = {"algorithm": algorithm, "level": level, "reference_documents_compared": len(distances),
              "reference_documents_read": len(references), "reference_documents_available": available,
              "max_reference_documents": max_documents, "max_bytes_per_document": max_bytes,
-             "document_bytes_compared": len(doc_bytes),
+             "document_bytes_compared": len(doc_bytes), "compressor_window_bytes": window,
              "note": "near 0 means this document compresses almost as well jointly with a "
                      "reference book as either does alone (shares a lot of compressible "
                      "structure with it); near 1 means the two share almost nothing"}

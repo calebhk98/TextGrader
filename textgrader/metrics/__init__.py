@@ -336,7 +336,7 @@ REGISTRY: dict[str, MetricSpec] = dict([
               "textdescriptives_max_chars": 50000,
               "gibberish_detector_charset": "abcdefghijklmnopqrstuvwxyz",
               "ncd_corpus_dirs": [], "ncd_corpus_max_reference_documents": 10,
-              "ncd_corpus_max_bytes": 100000, "ncd_corpus_algorithm": "zlib",
+              "ncd_corpus_max_bytes": 100000, "ncd_corpus_algorithm": "lzma",
           },
           summary="Character/word/POS/punctuation language-likeness, multi-algorithm "
                   "compression ratios (zlib/gzip/bz2/lzma/zstd/brotli/lz4/snappy/pyppmd) and "
