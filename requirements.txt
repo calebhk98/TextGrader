@@ -277,3 +277,23 @@ taaled>=0.32
 # never replacing, this suite's own independently-downloaded numbers for the
 # same concepts.
 lftk>=1.0
+# Four more independent lexicon/rule-based sentiment-and-emotion engines for
+# the experimental affect_suite metric, each kept as its own disagreeing
+# channel rather than reconciled with vaderSentiment/NRCLex above:
+#   afinn    - AFINN-165 wordlist sentiment; bundles its own wordlist, no
+#              download.
+#   textblob - pattern-based polarity/subjectivity; already an install-time
+#              dependency of NRCLex above, listed here because affect_suite
+#              calls it directly; no nltk corpus needed for .sentiment.
+#   empath   - about 200 broad lexical/topical/psychological categories;
+#              bundles its own category table, and affect_suite only ever
+#              calls the local .analyze() method, never .create_category()
+#              (the one method that talks to a network backend).
+#   liwc     - a pure local parser for the LIWC .dic FORMAT, not the LIWC
+#              dictionary itself (commercially licensed, never bundled);
+#              inert until a user points affect_suite's
+#              liwc_dictionary_path option at their own licensed file.
+afinn>=0.1
+textblob>=0.15
+empath>=0.89
+liwc>=0.5

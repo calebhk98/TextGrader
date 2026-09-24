@@ -829,6 +829,56 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "docstring), never bundled in the repository; a resource that is not cached "
                   "or not licensable (English Lexicon Project, CELEX) degrades only its own "
                   "findings. Off by default; experimental."),
+    _spec("affect_suite", "affect_suite", "discourse", "moderate",
+          requires=("vaderSentiment", "nrclex", "afinn", "textblob", "empath", "liwc",
+                   "transformers", "torch"),
+          defaults={
+              "features": {
+                  "vader": True, "nrc_valence": True, "afinn": True,
+                  "textblob_polarity": True, "textblob_subjectivity": True,
+                  # Off by default: loads a Hugging Face transformer checkpoint.
+                  # This suite's cost is "moderate" (needs neither a spaCy parse
+                  # nor sentence_transformers), so MetricSpec.needs_model does
+                  # NOT exclude it from corpus profiling -- see that property's
+                  # own docstring above. This flag is the only thing standing
+                  # between a transformer model and a book nobody asked to run
+                  # one against, the same situation logic_suite's model flags
+                  # are in.
+                  "transformer_sentiment": False,
+                  "nrc_categories": True, "empath_categories": True,
+                  # On by default but inert without liwc_dictionary_path
+                  # configured: LIWC is commercially licensed and never
+                  # bundled, so leaving this on costs nothing unasked.
+                  "liwc_categories": True,
+                  "vad": True,
+                  "dialogue_narration_gap": True, "speaker_profiles": True,
+                  "sequence_correlations": True, "disagreement": True,
+              },
+              "neutral_band": 0.05,
+              "speaker_min_turns": 8,
+              "high_confidence_quantile": 0.75,
+              "empath_top_categories": 15,
+              "liwc_dictionary_path": None,
+              "afinn_language": "en",
+              "afinn_emoticons": False,
+              "transformer_model": "distilbert-base-uncased-finetuned-sst-2-english",
+              "transformer_max_chars": 512,
+          },
+          summary="Experimental sentiment/emotion/affect/tone-trajectory analysis: five "
+                  "independent per-sentence polarity/subjectivity engines (VADER, NRC EmoLex "
+                  "valence balance, AFINN, TextBlob/Pattern polarity and subjectivity, plus an "
+                  "off-by-default transformer classifier) each reporting level, volatility, "
+                  "positive/negative/neutral share, reversal rate and longest same-sign runs, an "
+                  "early/middle/late arc with linear/nonlinear trend, a dialogue-vs-narration "
+                  "gap, per-speaker affect spread and a length/rarity correlation; a cross-engine "
+                  "disagreement channel (sign disagreement, rank correlation, high-confidence "
+                  "disagreement); NRC EmoLex and Empath emotion/topic-category distributions "
+                  "(each keeping its own ontology); an optional user-supplied LIWC dictionary by "
+                  "path (never bundled); and forward-stable placeholder findings for NRC-VAD/"
+                  "Warriner-VAD valence/arousal/dominance trajectories, filled in automatically "
+                  "once Task 11's lexicon loader registers a VAD engine. Every engine and "
+                  "measurement family is independently switchable; every finding stays "
+                  "Polarity.NEUTRAL. Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

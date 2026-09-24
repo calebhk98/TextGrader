@@ -318,6 +318,40 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # project keeps rather than reconciles (see lexical_norms_suite's module
     # docstring).
     "lftk": ("lftk", "pip install lftk"),
+    # AFINN wordlist sentiment scoring for affect_suite's "afinn" engine.
+    # Pure Python, bundles its own AFINN-en-165 wordlist as a data file; no
+    # download or network call at runtime. Independent lexicon/implementation
+    # from vaderSentiment and nrclex above, kept deliberately separate rather
+    # than reconciled -- see affect_suite's module docstring for why engine
+    # disagreement is reported, not resolved.
+    "afinn": ("afinn", "pip install afinn"),
+    # Pattern-based polarity/subjectivity scoring for affect_suite's
+    # "textblob_polarity"/"textblob_subjectivity" engines. Already an
+    # install-time dependency of nrclex (see the nrclex entry above) and
+    # therefore already present in this environment; listed here in its own
+    # right because affect_suite calls TextBlob(...).sentiment directly. That
+    # property uses textblob's own bundled PatternAnalyzer and needs no nltk
+    # corpus download -- verified for real: TextBlob('...').sentiment returns
+    # a polarity/subjectivity pair with nothing but the package installed.
+    "textblob": ("textblob", "pip install textblob"),
+    # Empath's ~200 broad lexical/topical/psychological categories for
+    # affect_suite's "empath_categories" feature. Verified for real (see the
+    # module docstring): Empath() loads its category-to-word table from a
+    # bundled data/categories.tsv file at construction time, and .analyze()
+    # only ever reads that in-memory table -- the constructor's backend_url
+    # argument and the network calls it enables are reachable solely through
+    # the separate .create_category() method, which affect_suite never
+    # calls, so nothing here makes a network request.
+    "empath": ("empath", "pip install empath"),
+    # A pure local parser for LIWC's .dic dictionary FORMAT (affect_suite's
+    # "liwc_categories" feature) -- not the LIWC dictionary itself, which is
+    # commercially licensed and never bundled or downloaded by this project.
+    # The feature is a no-op unless a user points liwc_dictionary_path at
+    # their own licensed .dic file. Verified for real against a small
+    # synthetic .dic fixture (see affect_suite's module docstring): plain and
+    # wildcard ("lov*") entries both resolve to the right category with
+    # nothing but this package and a local file.
+    "liwc": ("liwc", "pip install liwc"),
 }
 
 _lock = threading.Lock()
