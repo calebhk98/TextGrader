@@ -65,3 +65,24 @@ benepar>=0.2
 # parser_consensus.py's module docstring for the exact download command and
 # measured size/cost.
 stanza>=1.8
+
+# Real character/entity/coreference/quote-speaker extraction (BookNLP) for
+# graph_suite's optional "booknlp" feature, off by default and very heavy --
+# see graph_suite.py's module docstring and config.json's `_requires_booknlp`
+# note for measured time/memory. Deliberately NOT a plain `pip install
+# booknlp` line: BookNLP's own declared dependencies include tensorflow (an
+# unused ~570MB download -- nothing in the installed package tree imports it)
+# and an unconstrained numpy bound that would upgrade this project's pinned
+# numpy 1.x to 2.x, which this project's pip-install rules refuse to do for a
+# dependency this project does not otherwise need upgraded:
+#     pip install --no-deps booknlp
+# spaCy/torch/transformers, which BookNLP does actually use, are already
+# satisfied by this file. BookNLP's checkpoints trip a real state-dict-loading
+# error against current transformers/torch (a legacy
+# `bert.embeddings.position_ids` buffer key); textgrader.optional.
+# shim_booknlp_transformers works around it, the same pattern
+# shim_fastcoref_transformers/shim_benepar_transformers already use. Without
+# the package, every `discourse.graph_booknlp_*` metric id reports
+# "unavailable" naming the exact error.
+#
+# booknlp>=1.0.8  (install separately with --no-deps; see above)

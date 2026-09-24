@@ -690,6 +690,52 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "where it loads). Every comparison is over a deterministic, seeded, "
                   "spread-across-the-book sample, never the whole book. Off by default; "
                   "experimental."),
+    _spec("graph_suite", "graph_suite", "discourse", "parse",
+          requires=("spacy", "networkx", "fastcoref", "booknlp"),
+          defaults={
+              "features": {
+                  "lexical_chain": True, "surface_name": True, "entity_cooccurrence": True,
+                  "character_cooccurrence": True, "paragraph_entity_overlap": True,
+                  "quote_speaker": True, "topic_transition": True, "temporal_drift": True,
+                  "sentence_semantic": False, "paragraph_semantic": False,
+                  "coreference_entity": False, "dependency_relation": False, "booknlp": False,
+              },
+              "min_word_len": 3,
+              "lexical_chain_gap": 3,
+              "lexical_chain_min_length": 2,
+              "surface_name_window_sentences": 3,
+              "entity_max_tracked": 150,
+              "entity_graph_window_sentences": 3,
+              "character_max_tracked": 150,
+              "character_graph_window_sentences": 3,
+              "min_mentions_for_graph": 2,
+              "paragraph_overlap_window": 5,
+              "topic_n_topics": 6,
+              "topic_max_paragraphs": 2000,
+              "semantic_model": "all-MiniLM-L6-v2",
+              "semantic_graph_k": 5,
+              "semantic_graph_min_similarity": 0.5,
+              "semantic_graph_max_units": 1500,
+              "coreference_model": "biu-nlp/f-coref",
+              "coreference_max_words": 4000,
+              "booknlp_model": "small",
+              "booknlp_pipeline": "entity,quote,supersense,event,coref",
+              "booknlp_max_words": 3000,
+              "seed": 0,
+          },
+          summary="Experimental network-science suite: named-entity/character/surface-name "
+                  "co-occurrence graphs, a paragraph entity-overlap graph, a quote-speaker "
+                  "interaction graph, a TF-IDF/k-means topic-transition graph, a lexical-chain "
+                  "graph, an early-vs-late-half temporal drift channel (edge-set change and "
+                  "community persistence), plus (off by default) sentence/paragraph "
+                  "embedding-similarity graphs, a real-coreference-resolved entity graph, a "
+                  "dependency-relation (POS-pair) aggregate graph, and real BookNLP "
+                  "character/quote extraction. Every graph reports the same battery: node/edge "
+                  "counts, density, degree shape, components, clustering, assortativity, bounded "
+                  "path statistics, seeded Louvain community structure, PageRank/betweenness/"
+                  "degree centralization, edge-weight entropy and node-reappearance distance, "
+                  "plus an independent igraph cross-check kept as a disagreement channel where "
+                  "igraph is installed. Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
