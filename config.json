@@ -634,6 +634,55 @@
       "pystylometry_max_reference_documents": 5,
       "pystylometry_max_bytes": 200000,
       "pystylometry_mfw": 200
+    },
+    "distribution_distance_suite": {
+      "enabled": false,
+      "sources": [
+        "sentence_words",
+        "paragraph_words",
+        "paragraph_sentences",
+        "word_characters",
+        "sentence_commas",
+        "turn_words"
+      ],
+      "features": {
+        "wasserstein": true,
+        "energy": true,
+        "ks": true,
+        "cramer_vonmises": true,
+        "anderson_darling": true,
+        "jensen_shannon": true,
+        "kl_divergence": true,
+        "hellinger": true,
+        "bhattacharyya": true,
+        "total_variation": true,
+        "mmd": true,
+        "quantile_vector": true,
+        "tail": true,
+        "optimal_transport": true,
+        "distance_correlation": true
+      },
+      "histogram_bins": 16,
+      "histogram_smoothing": 0.5,
+      "quantile_vector_points": [
+        0.1,
+        0.25,
+        0.5,
+        0.75,
+        0.9
+      ],
+      "tail_quantile": 0.1,
+      "mmd_max_sample": 500,
+      "distance_correlation_max_sample": 300,
+      "distance_correlation_pairs": {
+        "sentence": ["sentence_words", "sentence_commas"],
+        "paragraph": ["paragraph_words", "paragraph_sentences"]
+      },
+      "min_distinct_values": 5,
+      "_requires": "scipy (already in requirements.txt) for wasserstein_distance, energy_distance, ks_2samp, cramervonmises_2samp and anderson_ksamp. Without it, every wasserstein/energy/ks/cramer_vonmises/anderson_darling finding reports 'unavailable' naming scipy; the histogram-based (jensen_shannon/kl_divergence/hellinger/bhattacharyya/total_variation), quantile_vector, tail, mmd, optimal_transport and distance_correlation channels are dependency-free (plain math/statistics) and are unaffected.",
+      "_cramer_vonmises_requires": "at least min_distinct_values (default 5) distinct values on BOTH the manuscript side and the corpus reference curve; below that, ties alone can produce a false 'highly significant' result (measured: p=1.5e-9 between two samples of the SAME 10-value discrete distribution), so this channel reports 'unavailable' naming the reason instead of a misleading number. anderson_darling shares this same gate.",
+      "_distance_correlation_requires": "nothing extra -- hand-implemented, no package. It compares two of THIS document's own paired sequences (distance_correlation_pairs), never the corpus, because the corpus profile stores only marginal quantile curves, not joint per-item samples; see the module docstring's 'Distance correlation' section for why.",
+      "_reference_representation": "every wasserstein/energy/ks/cramer_vonmises/anderson_darling/jensen_shannon/kl_divergence/hellinger/bhattacharyya/total_variation/mmd/quantile_vector/tail/optimal_transport finding compares the manuscript's own raw per-item sample against the corpus's pooled 101-point quantile curve (profile['item_distributions'][source]['quantiles']), NOT the corpus's raw pooled values (textgrader.corpus never stores those) and NOT a distribution of per-book summary averages (those already exist separately as style.mattr-style scalar corpus comparisons). Every finding's distribution.reference field says so."
     }
   },
   "allow_external_metric_commands": false,
