@@ -171,6 +171,29 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # load_raw_text() path, which this codebase never calls (it tokenizes its
     # own sentences and calls load_token_list() instead).
     "nrclex": ("nrclex", "pip install NRCLex"),
+    # Independent, frequency-based dictionary spell checking for
+    # mechanical_quality_suite's spelling channels. Verified for real: its
+    # SpellChecker().correction('wrold') returns 'world' (see that module's
+    # docstring). Bundles its own dictionary; no network call at runtime.
+    "pyspellchecker": ("spellchecker", "pip install pyspellchecker"),
+    # A second, independent edit-distance dictionary (SymSpell) for the same
+    # suite's spelling channels, plus real word segmentation used for
+    # fused-token detection. Bundles its own frequency dictionary (English
+    # only); verified for real: word_segmentation('helloworld') returns
+    # 'hello world' (see mechanical_quality_suite's docstring).
+    "symspellpy": ("symspellpy", "pip install symspellpy"),
+    # Mixed-script homoglyph detection for mechanical_quality_suite's
+    # "confusables" feature. Verified for real: is_dangerous('paypal') is
+    # False (plain ASCII) and is_dangerous('pаypal') (Cyrillic а) is
+    # True -- see that module's docstring. Imported as its own submodule
+    # because confusable_homoglyphs/__init__.py does not import it itself.
+    "confusable_homoglyphs": ("confusable_homoglyphs.confusables",
+                             "pip install confusable-homoglyphs"),
+    # Mojibake/Unicode repair detection for mechanical_quality_suite's
+    # "encoding_ftfy" feature, used diagnostically only -- it never rewrites
+    # the analyzed text (see that module's docstring). Verified for real:
+    # fix_text('MÃ¼nchen') returns 'München'.
+    "ftfy": ("ftfy", "pip install ftfy"),
 }
 
 _lock = threading.Lock()

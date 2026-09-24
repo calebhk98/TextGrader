@@ -183,3 +183,24 @@ pystylometry>=1.4
 # here: they pull in torch, so they live in requirements-embeddings.txt beside
 # sentence-transformers for the same reason.  Every channel that wants one is
 # off by default and reports "unavailable" with an install hint without it.
+
+# Independent, frequency-based dictionary spell checking for the experimental
+# mechanical_quality_suite metric.  Bundles its own dictionary; no network
+# call at runtime.  LanguageTool (a Java server) is explicitly NOT used --
+# see that module's docstring for why, and for what replaces its role.
+pyspellchecker>=0.8
+
+# A second, independent edit-distance dictionary (SymSpell) for the same
+# suite, plus real word segmentation used for fused-token ("helloworld" ->
+# "hello world") detection.  Bundles its own English frequency dictionary.
+symspellpy>=6.7
+
+# Mixed-script homoglyph ("confusable") detection for the same suite's
+# encoding/typography channel -- flags a Cyrillic а hiding inside a Latin
+# word, while leaving plain ASCII and single-script non-English text alone.
+confusable-homoglyphs>=3.2
+
+# Mojibake/Unicode repair detection for the same suite, used diagnostically
+# only: it reports what fix_text() would change and never rewrites the
+# analyzed text (see mechanical_quality_suite's module docstring).
+ftfy>=6.1
