@@ -1186,6 +1186,7 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "partial_correlation": True, "distance_correlation": True,
               },
               "discover_min_abs_spearman": 0.7,
+              "identity_abs_spearman": 0.99,
               "pairs": [
                   ["subord", "sttr"],
                   ["fk", "lexical.word_zipf"],
@@ -1214,11 +1215,14 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "words-per-sentence AND sentences-per-paragraph relationship is a default), and "
                   "document-level aggregates (counts above each relationship's own reference "
                   "90th/95th/99th percentile, max and mean-top-k residual severity). Pairs are "
-                  "auto-discovered above discover_min_abs_spearman (default 0.7) and capped "
-                  "deterministically at max_pairs; every configured pair is kept regardless of "
-                  "its correlation strength. The fit runs after every ordinary metric (core and "
-                  "optional) in a dedicated, isolated post-metric phase in grade.py, since a "
-                  "residual needs this document's OWN already-measured metric values -- never by "
+                  "auto-discovered above discover_min_abs_spearman (default 0.7), restricted to "
+                  "metric ids this document itself has a value for, excludes near-identity pairs "
+                  "(>= identity_abs_spearman, default 0.99 -- reported instead in the PCA "
+                  "finding's near_identities) and is capped deterministically at max_pairs; every "
+                  "configured pair is kept regardless of its correlation strength. The fit runs "
+                  "after every ordinary metric (core and optional) in a dedicated, isolated "
+                  "post-metric phase in grade.py, since a residual needs this document's OWN "
+                  "already-measured metric values -- never by "
                   "one metric module calling another. Leave-one-out: a graded document that is "
                   "itself a corpus member is excluded from its own fit. Every implementation "
                   "(correlation, regression, distance correlation, mutual information, PCA) is "

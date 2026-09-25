@@ -60,22 +60,35 @@ Pair/group discovery
     core prose metrics and every metric named in a configured pair or group,
     and otherwise capped at ``max_candidate_metrics`` (alphabetical, so a
     corpus with many optional suites enabled does not silently reorder which
-    columns get considered from one run to the next).  Spearman rank
-    correlation (robust to the nonlinear-but-monotonic relationships common
-    among rates) is computed for every candidate pair; a pair whose
+    columns get considered from one run to the next).  DISCOVERY (never
+    configured pairs) is further restricted to metric ids THIS document
+    itself has a measured value for: the corpus profile carries every suite
+    that was ever profiled, including ones off by default on an ordinary
+    grading run, and discovering a pair whose predictor or target this run
+    never measured would spend one of ``max_pairs``'s slots on a finding that
+    can only ever come out "unavailable".  Spearman rank correlation (robust
+    to the nonlinear-but-monotonic relationships common among rates) is
+    computed for every candidate pair; a pair whose
     ``abs(spearman) >= discover_min_abs_spearman`` (default 0.7) is
-    auto-discovered.  Every pair named in ``pairs`` (config) is kept
-    regardless of its correlation strength -- the task spec's own words/
-    paragraph-given-words/sentence-and-sentences/paragraph relationship is one
-    of the ``DEFAULT_PAIRS``/``DEFAULT_GROUPS`` below, alongside the spec's
-    other named cross-family examples (syntax-given-vocabulary, readability-
-    given-lexical-rarity, semantic-coherence-given-lexical-overlap,
-    sentence-length-variation-given-paragraph-variation).  Auto-discovered
-    pairs are capped at ``max_pairs`` (deterministic: by descending
-    ``abs(spearman)``, ties broken alphabetically) so a corpus with hundreds of
-    correlated columns cannot make one document's report unboundedly long;
-    configured pairs are never dropped by this cap.  A pair below
-    ``min_joint_coverage`` -- configured or discovered -- is reported
+    auto-discovered, UNLESS it is at or above ``identity_abs_spearman``
+    (default 0.99), in which case it is almost certainly two measurements of
+    the same underlying thing (a rate and its complement, the same count
+    under two names) rather than a genuine relationship -- its residual would
+    be about zero forever, so it is reported separately as a "near identity"
+    (see ``style.relationship_pca_diagnostic``'s
+    ``distribution["near_identities"]``) rather than spending a discovery
+    slot.  Every pair named in ``pairs`` (config) is kept regardless of its
+    correlation strength or the identity threshold -- the task spec's own
+    words/paragraph-given-words/sentence-and-sentences/paragraph relationship
+    is one of the ``DEFAULT_PAIRS``/``DEFAULT_GROUPS`` below, alongside the
+    spec's other named cross-family examples (syntax-given-vocabulary,
+    readability-given-lexical-rarity, semantic-coherence-given-lexical-
+    overlap, sentence-length-variation-given-paragraph-variation).
+    Auto-discovered pairs are capped at ``max_pairs`` (deterministic: by
+    descending ``abs(spearman)``, ties broken alphabetically) so a corpus
+    with hundreds of correlated columns cannot make one document's report
+    unboundedly long; configured pairs are never dropped by this cap.  A pair
+    below ``min_joint_coverage`` -- configured or discovered -- is reported
     unavailable rather than fit from too little data (this project's rule
     against reporting an unstable number as if it were a real one).
 
@@ -160,6 +173,10 @@ PREFIX = "style.relationship_"
 FEATURE_VERSION = 1
 
 DEFAULT_DISCOVER_MIN_ABS_SPEARMAN = 0.7
+#: A discovered pair at or above this is treated as two measurements of the
+#: same underlying thing (a rate and its complement, the same count under two
+#: names) rather than a genuine relationship -- see ``_discover_pairs``.
+DEFAULT_IDENTITY_ABS_SPEARMAN = 0.99
 DEFAULT_MAX_PAIRS = 12
 DEFAULT_MIN_JOINT_COVERAGE = 0.7
 DEFAULT_BOOTSTRAP_SAMPLES = 200
@@ -212,6 +229,7 @@ DEFAULT_FEATURES: dict[str, bool] = {
 DEFAULTS: dict[str, Any] = {
     "features": DEFAULT_FEATURES,
     "discover_min_abs_spearman": DEFAULT_DISCOVER_MIN_ABS_SPEARMAN,
+    "identity_abs_spearman": DEFAULT_IDENTITY_ABS_SPEARMAN,
     "pairs": DEFAULT_PAIRS,
     "groups": DEFAULT_GROUPS,
     "max_pairs": DEFAULT_MAX_PAIRS,
@@ -298,10 +316,24 @@ def _candidate_pool(books: Sequence[Mapping[str, Any]], configured_members: set[
 
 def _discover_pairs(books: Sequence[Mapping[str, Any]], pool: Sequence[str],
                     min_joint_coverage: float, min_abs_spearman: float,
-                    already: set[frozenset]) -> list[tuple[str, str, float]]:
-    """Every candidate pair meeting the discovery threshold, most-correlated first."""
+                    identity_abs_spearman: float,
+                    already: set[frozenset]) -> tuple[list[tuple[str, str, float]],
+                                                      list[tuple[str, str, float]]]:
+    """Every candidate pair meeting the discovery threshold, most-correlated first.
+
+    Returns ``(found, near_identities)``.  A pair at or above
+    ``identity_abs_spearman`` (default 0.99) is almost certainly two
+    measurements of the same underlying thing (a rate and its complement, a
+    count reported two ways) rather than a genuine cross-metric relationship:
+    its residual is about zero forever and would otherwise spend one of the
+    ``max_pairs`` discovery slots on a finding with nothing to say. Such a
+    pair is reported separately, as ``near_identities`` (surfaced in the PCA/
+    diagnostic finding's distribution -- see the module docstring), never
+    silently dropped.
+    """
 
     found: list[tuple[str, str, float]] = []
+    near_identities: list[tuple[str, str, float]] = []
     for i, a in enumerate(pool):
         for b in pool[i + 1:]:
             key = frozenset((a, b))
@@ -312,10 +344,15 @@ def _discover_pairs(books: Sequence[Mapping[str, Any]], pool: Sequence[str],
                 continue
             pairs = rel.paired(_column(books, a), _column(books, b))
             value = rel.spearman(pairs)
-            if value is not None and abs(value) >= min_abs_spearman:
+            if value is None:
+                continue
+            if abs(value) >= identity_abs_spearman:
+                near_identities.append((a, b, value))
+            elif abs(value) >= min_abs_spearman:
                 found.append((a, b, value))
     found.sort(key=lambda item: (-abs(item[2]), item[0], item[1]))
-    return found
+    near_identities.sort(key=lambda item: (-abs(item[2]), item[0], item[1]))
+    return found, near_identities
 
 
 # ------------------------------------------------------------------ pair fit
@@ -419,16 +456,19 @@ def _profile_fingerprint(profile: Mapping[str, Any] | None) -> tuple[Any, ...]:
 
 
 def _fit(profile: Mapping[str, Any] | None, source: str | None,
-         config: Mapping[str, Any]) -> dict[str, Any]:
-    """Fit (or fetch the cached fit for) this profile, this excluded source and
-    these tunables.  Cached once per profile per process -- see the module
-    docstring's "Where the fit comes from"."""
+         config: Mapping[str, Any],
+         document_keys: frozenset[str] | None = None) -> dict[str, Any]:
+    """Fit (or fetch the cached fit for) this profile, this excluded source,
+    these tunables, and this document's OWN set of measured metric keys (which
+    bounds pair DISCOVERY -- see ``_fit_uncached``).  Cached once per profile
+    per process -- see the module docstring's "Where the fit comes from"."""
 
     pairs_config = tuple(tuple(item) for item in (option(config, "pairs", DEFAULT_PAIRS) or []))
     groups_config = tuple(sorted((k, tuple(v)) for k, v in
                                  (option(config, "groups", DEFAULT_GROUPS) or {}).items()))
     key = (source, pairs_config, groups_config,
           round(float(option(config, "discover_min_abs_spearman", DEFAULT_DISCOVER_MIN_ABS_SPEARMAN)), 6),
+          round(float(option(config, "identity_abs_spearman", DEFAULT_IDENTITY_ABS_SPEARMAN)), 6),
           int(option(config, "max_pairs", DEFAULT_MAX_PAIRS)),
           round(float(option(config, "min_joint_coverage", DEFAULT_MIN_JOINT_COVERAGE)), 6),
           int(option(config, "bootstrap_samples", DEFAULT_BOOTSTRAP_SAMPLES)),
@@ -437,18 +477,20 @@ def _fit(profile: Mapping[str, Any] | None, source: str | None,
           int(option(config, "min_corpus_documents", DEFAULT_MIN_CORPUS_DOCUMENTS)),
           int(option(config, "distance_sample_cap", DEFAULT_DISTANCE_SAMPLE_CAP)),
           tuple(sorted((k, bool(v)) for k, v in
-                       (option(config, "features", DEFAULT_FEATURES) or {}).items())))
+                       (option(config, "features", DEFAULT_FEATURES) or {}).items())),
+          tuple(sorted(document_keys)) if document_keys is not None else None)
     fingerprint = _profile_fingerprint(profile)
     cached = _FIT_CACHE.get(key)
     if cached is not None and cached[0] == fingerprint:
         return cached[1]
-    result = _fit_uncached(profile, source, config)
+    result = _fit_uncached(profile, source, config, document_keys)
     _FIT_CACHE[key] = (fingerprint, result)
     return result
 
 
 def _fit_uncached(profile: Mapping[str, Any] | None, source: str | None,
-                  config: Mapping[str, Any]) -> dict[str, Any]:
+                  config: Mapping[str, Any],
+                  document_keys: frozenset[str] | None) -> dict[str, Any]:
     min_corpus = int(option(config, "min_corpus_documents", DEFAULT_MIN_CORPUS_DOCUMENTS))
     all_books = list((profile or {}).get("books") or [])
     excluded_indices = {i for i, book in enumerate(all_books) if _book_matches_source(book, source)}
@@ -461,7 +503,8 @@ def _fit_uncached(profile: Mapping[str, Any] | None, source: str | None,
         meta["reason"] = (f"only {len(books)} usable reference book(s) after leave-one-out "
                           f"exclusion (needs at least {min_corpus}); set "
                           f"metric_relationships.min_corpus_documents to lower the floor")
-        return {"books": [], "pairs": {}, "groups": {}, "pca": None, "meta": meta}
+        return {"books": [], "pairs": {}, "groups": {}, "pca": None, "near_identities": [],
+               "meta": meta}
 
     configured_pairs_raw = [tuple(item) for item in (option(config, "pairs", DEFAULT_PAIRS) or [])
                             if isinstance(item, (list, tuple)) and len(item) == 2]
@@ -473,13 +516,26 @@ def _fit_uncached(profile: Mapping[str, Any] | None, source: str | None,
 
     max_candidates = int(option(config, "max_candidate_metrics", DEFAULT_MAX_CANDIDATE_METRICS))
     pool = _candidate_pool(books, configured_members, max_candidates)
+    # Pair DISCOVERY (never configured pairs, which are always attempted
+    # regardless -- see the module docstring) is restricted to metric ids this
+    # document itself has a value for. The corpus profile carries every
+    # profiled suite, including ones off by default on an ordinary grading
+    # run (e.g. a volatility channel from an off-by-default affect suite);
+    # discovering a pair whose predictor or target this run never measured
+    # would only ever emit an "unavailable" finding and spend one of
+    # ``max_pairs``'s slots on it.
+    discovery_pool = ([key for key in pool if key in document_keys]
+                      if document_keys is not None else pool)
     min_joint_coverage = float(option(config, "min_joint_coverage", DEFAULT_MIN_JOINT_COVERAGE))
     min_abs_spearman = float(option(config, "discover_min_abs_spearman",
                                     DEFAULT_DISCOVER_MIN_ABS_SPEARMAN))
+    identity_abs_spearman = float(option(config, "identity_abs_spearman",
+                                         DEFAULT_IDENTITY_ABS_SPEARMAN))
     max_pairs = int(option(config, "max_pairs", DEFAULT_MAX_PAIRS))
 
     already = {frozenset(pair) for pair in configured_pairs_raw}
-    discovered = _discover_pairs(books, pool, min_joint_coverage, min_abs_spearman, already)
+    discovered, near_identities = _discover_pairs(books, discovery_pool, min_joint_coverage,
+                                                  min_abs_spearman, identity_abs_spearman, already)
     discovered = discovered[:max_pairs]
 
     selected: list[tuple[str, str, str]] = []  # (target, predictor, origin)
@@ -523,12 +579,15 @@ def _fit_uncached(profile: Mapping[str, Any] | None, source: str | None,
 
     meta.update({
         "candidate_pool_size": len(pool), "candidate_pool": pool,
+        "discovery_pool_size": len(discovery_pool),
         "configured_pairs": len(configured_pairs_raw), "discovered_pairs": len(discovered),
+        "near_identities_found": len(near_identities),
         "pairs_fit": len(pair_fits), "groups_fit": len(group_fits),
-        "discover_min_abs_spearman": min_abs_spearman, "min_joint_coverage": min_joint_coverage,
-        "max_pairs": max_pairs,
+        "discover_min_abs_spearman": min_abs_spearman, "identity_abs_spearman": identity_abs_spearman,
+        "min_joint_coverage": min_joint_coverage, "max_pairs": max_pairs,
     })
-    return {"books": books, "pairs": pair_fits, "groups": group_fits, "pca": pca, "meta": meta}
+    return {"books": books, "pairs": pair_fits, "groups": group_fits, "pca": pca,
+           "near_identities": near_identities, "meta": meta}
 
 
 # ------------------------------------------------------------------ findings
@@ -713,16 +772,26 @@ def _aggregate_findings(severities: Sequence[Mapping[str, Any]],
     return out
 
 
-def _pca_finding(pca: Mapping[str, Any] | None) -> dict[str, Any]:
+def _pca_finding(pca: Mapping[str, Any] | None,
+                 near_identities: Sequence[tuple[str, str, float]]) -> dict[str, Any]:
+    """The corpus-only PCA diagnostic, plus the near-identity pairs discovery
+    excluded from becoming their own findings (see ``_discover_pairs``) --
+    surfaced here, never silently dropped."""
+
     metric_id = f"{PREFIX}pca_diagnostic"
     name = "Explained-variance share of the leading components of TextGrader's own metrics"
+    identities_payload = [{"a": a, "b": b, "spearman": value} for a, b, value in near_identities]
     if not pca:
         return finding(metric_id, name, None, "share", family=FAMILY,
+                       distribution={"near_identities": identities_payload} if identities_payload
+                       else None,
                        warning="not enough fully-covered numeric columns in the candidate pool "
                                "to compute a diagnostic PCA")
-    shares = pca["explained_variance_share"]
-    return finding(metric_id, name, shares[0] if shares else None, "share", family=FAMILY,
-                   sample_size=pca["n_rows"], distribution=pca,
+    dist = dict(pca)
+    dist["near_identities"] = identities_payload
+    return finding(metric_id, name, pca["explained_variance_share"][0]
+                   if pca["explained_variance_share"] else None, "share", family=FAMILY,
+                   sample_size=pca["n_rows"], distribution=dist,
                    warning="diagnostic only; never used to drop or replace an original metric")
 
 
@@ -761,7 +830,8 @@ def relationship_findings(analysis: DocumentAnalysis, document_values: Mapping[s
             f"document's ('{doc_unit}'); comparing metric relationships across units would "
             f"measure how the text was divided, not how its metrics relate")
 
-    fit = _fit(profile, analysis.source, config)
+    document_keys = frozenset(document_values.keys())
+    fit = _fit(profile, analysis.source, config, document_keys)
     if not fit["pairs"] and not fit["groups"] and fit["meta"].get("reason"):
         return _unavailable(fit["meta"]["reason"])
 
@@ -779,5 +849,5 @@ def relationship_findings(analysis: DocumentAnalysis, document_values: Mapping[s
         severities.extend(group_severities)
     findings.extend(_aggregate_findings(severities, config))
     if _feature(config, "pca_diagnostic", True):
-        findings.append(_pca_finding(fit["pca"]))
+        findings.append(_pca_finding(fit["pca"], fit.get("near_identities", [])))
     return findings

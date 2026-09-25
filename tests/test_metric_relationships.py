@@ -413,13 +413,17 @@ def test_discovery_finds_a_strong_pair_and_ignores_a_weak_one():
     for i in range(40):
         x = rng.uniform(0, 10)
         books.append({
-            "strong_a": x, "strong_b": 2 * x + rng.gauss(0, 0.1),
+            # Noise large enough that this is a strong but not a NEAR-PERFECT
+            # (identity-threshold) relationship -- this test is about the
+            # ordinary discovery threshold, not the identity-collapse guard
+            # (see test_near_identity_pairs_are_not_emitted_but_are_recorded).
+            "strong_a": x, "strong_b": 2 * x + rng.gauss(0, 2.0),
             "weak_a": rng.gauss(0, 1), "weak_b": rng.gauss(0, 1),
             "source_filename": f"book{i:03d}.txt",
         })
     profile = _profile(books)
     config = _config(pairs=[], groups={}, discover_min_abs_spearman=0.7,
-                     max_candidate_metrics=10)
+                     identity_abs_spearman=1.5, max_candidate_metrics=10)
     findings = mr.relationship_findings(_analysis(), {"strong_a": 5.0, "strong_b": 10.0,
                                                       "weak_a": 0.1, "weak_b": 0.1},
                                         config=config, profile=profile)
@@ -435,11 +439,13 @@ def test_max_pairs_caps_discovered_pairs_deterministically():
         row = {"source_filename": f"book{i:03d}.txt"}
         x = rng.uniform(0, 10)
         for j in range(6):
-            row[f"m{j}"] = (j + 1) * x + rng.gauss(0, 0.02 * (j + 1))
+            row[f"m{j}"] = (j + 1) * x + rng.gauss(0, 1.5 * (j + 1))
         books.append(row)
     profile = _profile(books)
-    config = _config(pairs=[], groups={}, discover_min_abs_spearman=0.5, max_pairs=2,
-                     max_candidate_metrics=10)
+    # A high identity_abs_spearman: this test is about the max_pairs CAP, not
+    # about the separate identity-collapse guard (tested elsewhere).
+    config = _config(pairs=[], groups={}, discover_min_abs_spearman=0.5, identity_abs_spearman=1.5,
+                     max_pairs=2, max_candidate_metrics=10)
     document_values = {f"m{j}": float(j + 1) for j in range(6)}
     findings1 = mr.relationship_findings(_analysis(), document_values, config=config,
                                          profile=profile)
@@ -462,6 +468,117 @@ def test_configured_pairs_are_kept_even_below_the_discovery_threshold():
     findings = mr.relationship_findings(_analysis(), {"a": 0.5, "b": 0.5}, config=config,
                                         profile=profile)
     assert "style.relationship_residual_a_given_b" in _by_id(findings)
+
+
+def test_near_identity_pairs_are_not_emitted_but_are_recorded():
+    """Two measurements of the same underlying thing (here: b = 100 - a, a
+    rate and its complement) must not consume a discovery slot as a fake
+    'relationship', but must still be visible somewhere -- never silently
+    dropped.
+    """
+
+    rng = random.Random(27)
+    books = []
+    for i in range(40):
+        a = rng.uniform(0, 100)
+        x = rng.uniform(0, 10)
+        books.append({
+            "identity_a": a, "identity_b": 100.0 - a + rng.gauss(0, 1e-6),
+            # Noise large enough to be a strong, but not a near-perfect
+            # (identity-threshold), relationship.
+            "strong_a": x, "strong_b": 2 * x + rng.gauss(0, 2.0),
+            "source_filename": f"book{i:03d}.txt",
+        })
+    profile = _profile(books)
+    config = _config(pairs=[], groups={}, discover_min_abs_spearman=0.7,
+                     identity_abs_spearman=0.99, max_candidate_metrics=10)
+    document_values = {"identity_a": 40.0, "identity_b": 60.0, "strong_a": 5.0, "strong_b": 10.0}
+    findings = mr.relationship_findings(_analysis(), document_values, config=config,
+                                        profile=profile)
+    ids = set(_by_id(findings))
+    assert not any("identity_a" in metric_id and "identity_b" in metric_id for metric_id in ids)
+    assert any("strong_a" in metric_id and "strong_b" in metric_id for metric_id in ids)
+    pca = _by_id(findings)["style.relationship_pca_diagnostic"]
+    identities = pca["distribution"]["near_identities"]
+    assert any({item["a"], item["b"]} == {"identity_a", "identity_b"} for item in identities)
+    for item in identities:
+        assert abs(item["spearman"]) >= 0.99
+
+
+def test_identity_threshold_is_configurable():
+    # b is an EXACT strictly-increasing function of a: Spearman is exactly
+    # 1.0 regardless of noise, so which side of the threshold it falls on is
+    # controlled entirely by identity_abs_spearman, not by chance.
+    books = [{"a": float(i), "b": 2.0 * i, "source_filename": f"b{i}.txt"} for i in range(30)]
+    profile = _profile(books)
+    document_values = {"a": 5.0, "b": 10.0}
+    # A threshold above 1.0 can never classify anything as an identity; one
+    # below 1.0 always does, for an exact monotonic pair like this one.
+    strict = _config(pairs=[], groups={}, discover_min_abs_spearman=0.7,
+                     identity_abs_spearman=1.5)
+    loose = _config(pairs=[], groups={}, discover_min_abs_spearman=0.7, identity_abs_spearman=0.9)
+    strict_ids = set(_by_id(mr.relationship_findings(_analysis(), document_values, config=strict,
+                                                      profile=profile)))
+    loose_ids = set(_by_id(mr.relationship_findings(_analysis(), document_values, config=loose,
+                                                     profile=profile)))
+    assert any("style.relationship_residual_a_given_b" == metric_id
+              or "style.relationship_residual_b_given_a" == metric_id for metric_id in strict_ids)
+    assert not any("residual_a_given_b" in metric_id or "residual_b_given_a" in metric_id
+                  for metric_id in loose_ids)
+
+
+# --------------------------------------------------- discovery restricted to document
+
+def test_discovery_never_proposes_a_pair_the_document_did_not_measure():
+    """A pair that IS strongly related in the corpus profile, but whose
+    predictor this particular document has no value for (an off-by-default
+    suite the corpus was profiled with but this run never enabled), must not
+    be auto-discovered -- it can only ever come out 'unavailable' and would
+    just spend one of ``max_pairs``'s slots.
+    """
+
+    rng = random.Random(29)
+    books = []
+    for i in range(40):
+        x = rng.uniform(0, 10)
+        books.append({
+            # Noise large enough to be a strong but not near-perfect
+            # relationship (kept clear of the separate identity-collapse
+            # guard, tested elsewhere).
+            "measured_a": x, "unmeasured_b": 2 * x + rng.gauss(0, 2.0),
+            "measured_c": rng.gauss(0, 1), "measured_d": rng.gauss(0, 1),
+            "source_filename": f"book{i:03d}.txt",
+        })
+    profile = _profile(books)
+    config = _config(pairs=[], groups={}, discover_min_abs_spearman=0.7,
+                     max_candidate_metrics=10)
+    # This document has no value for "unmeasured_b" at all.
+    document_values = {"measured_a": 5.0, "measured_c": 0.1, "measured_d": 0.1}
+    findings = mr.relationship_findings(_analysis(), document_values, config=config,
+                                        profile=profile)
+    ids = set(_by_id(findings))
+    assert not any("unmeasured_b" in metric_id for metric_id in ids)
+
+    # Sanity check: give the document a value for "unmeasured_b" too, and the
+    # very same strong corpus relationship IS discovered.
+    document_values_full = {**document_values, "unmeasured_b": 10.0}
+    findings_full = mr.relationship_findings(_analysis(), document_values_full, config=config,
+                                             profile=profile)
+    ids_full = set(_by_id(findings_full))
+    assert any("measured_a" in metric_id and "unmeasured_b" in metric_id for metric_id in ids_full)
+
+
+def test_fit_cache_is_keyed_by_document_measured_keys():
+    # Noise large enough to be a strong but not near-perfect relationship, so
+    # discovery (not the separate identity-collapse guard) is what is tested.
+    books = _books_with_relation(30, seed=30, noise=2.0)
+    profile = _profile(books)
+    config = _config(pairs=[], groups={}, discover_min_abs_spearman=0.7)
+    fit_partial = mr._fit(profile, "unrelated.txt", config, frozenset({"a"}))
+    fit_full = mr._fit(profile, "unrelated.txt", config, frozenset({"a", "b"}))
+    assert fit_partial is not fit_full
+    assert fit_partial["pairs"] == {}
+    assert ("a", "b") in fit_full["pairs"] or ("b", "a") in fit_full["pairs"]
 
 
 # ------------------------------------------------------------- aggregate/PCA
