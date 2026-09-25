@@ -1176,6 +1176,57 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "Runs on prose too, as an experimental cadence/sound-texture probe -- free "
                   "verse and prose are never force-fit into a meter. Off by default; "
                   "experimental."),
+    _spec("automatic_feature_generation", "automatic_features", "distribution_shape", "moderate",
+          defaults={
+              "mode": "minimal",
+              "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
+              # null (rather than a fixed list/string/int) on these three
+              # means "derive it from mode" -- see _DEFAULT_EXTRACTORS_BY_MODE/
+              # _DEFAULT_MAX_FINDINGS in automatic_features.py. This matters
+              # because both grade.py and corpus.py build a metric's options
+              # by starting from THESE defaults and only overriding the keys
+              # a caller's config names; a caller who sets only "mode" must
+              # still get that mode's own extractors/preset/cap, not the
+              # ones written here. common.option() already treats an
+              # explicit null exactly like an absent key, which is what
+              # makes this work with no special-casing anywhere else.
+              "extractors": None,
+              "tsfresh_feature_set": None,
+              "allow_pattern": None,
+              "deny_pattern": None,
+              "max_findings": None,
+              "max_sequence_length": 3000,
+              "min_lengths": {},
+              "detrend": False,
+              "window_words": 2000,
+              "embedding_model": "all-MiniLM-L6-v2",
+              "language": "en",
+              "topic_n_topics": 4,
+              "topic_model": "nmf",
+              "topic_random_state": 42,
+              "topic_max_features": 2000,
+              "include_full_feature_vector": False,
+              "full_feature_vector_max_features": 2000,
+          },
+          summary="Bulk, per-catalogue-feature automatic expansion of every named "
+                  "textgrader.sequences channel into candidate document-level features, in three "
+                  "modes: 'minimal' (ten hand-picked, dependency-free robust statistics per "
+                  "sequence -- extra quantiles, IQR, MAD, skewness, kurtosis, coefficient of "
+                  "variation, range -- the default), 'standard' (minimal plus catch22's 22 "
+                  "canonical features and tsfresh's 10-feature minimal preset, each its own "
+                  "stable id, unlike timeseries_suite which folds tsfresh into one finding), and "
+                  "'comprehensive' (standard plus tsfresh's 750+-feature comprehensive preset, "
+                  "each exploded into its own sanitized id, deterministically capped). Ids are "
+                  "'style.autofeature_<sequence>_<extractor>_<feature>', with every tsfresh/"
+                  "catch22 raw name mapped through a deterministic, collision-free sanitizer; "
+                  "mode and library versions are recorded in every finding's distribution. "
+                  "Overlaps with timeseries_suite's own hand-curated catch22/tsfresh ids are kept "
+                  "(never silently duplicated) and named in distribution['overlaps_existing_"
+                  "metric_id']. Allowlist/denylist regexes, per-extractor minimum lengths, a "
+                  "deterministic evenly-strided downsample above max_sequence_length and a hard "
+                  "max_findings cap with a deterministic (sorted-name) selection rule bound the "
+                  "output; a crashing or NaN-producing extractor degrades only its own findings. "
+                  "Off by default; experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
