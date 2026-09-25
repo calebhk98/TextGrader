@@ -1176,6 +1176,55 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "Runs on prose too, as an experimental cadence/sound-texture probe -- free "
                   "verse and prose are never force-fit into a meter. Off by default; "
                   "experimental."),
+    _spec("metric_relationships", "metric_relationships", "distribution_shape", "moderate",
+          defaults={
+              "features": {
+                  "disagreement": True, "residual": True, "symmetric": True,
+                  "multivariate": True, "percentile_counts": True, "max_severity": True,
+                  "topk_severity": True, "pca_diagnostic": True, "bootstrap_stability": True,
+                  "loo_stability": True, "mutual_information": True,
+                  "partial_correlation": True, "distance_correlation": True,
+              },
+              "discover_min_abs_spearman": 0.7,
+              "pairs": [
+                  ["subord", "sttr"],
+                  ["fk", "lexical.word_zipf"],
+                  ["semantic.structure_bm25_centroid_relatedness", "top100"],
+                  ["slcv", "rhythm.paragraph_words_cv"],
+              ],
+              "groups": {"wpp": ["wps", "spp"]},
+              "max_pairs": 12,
+              "min_joint_coverage": 0.7,
+              "bootstrap_samples": 200,
+              "seed": 0,
+              "top_k": 3,
+              "max_candidate_metrics": 120,
+              "min_corpus_documents": 12,
+              "distance_sample_cap": 200,
+          },
+          summary="Experimental meta-analysis layer over TextGrader's OWN metric values: fits, "
+                  "from the reference corpus's already-computed per-book metrics (no change to "
+                  "corpus.py), how strongly related pairs/groups normally move together -- "
+                  "Pearson/Spearman/Kendall tau-b/distance correlation/mutual information/"
+                  "bootstrap and leave-one-out correlation stability, plus a diagnostic-only PCA "
+                  "-- then reports, per document, pairwise standardized disagreement, a linear "
+                  "residual of one metric given another (kept as the interpretable baseline), an "
+                  "order-independent orthogonal ('symmetric') residual, a multivariate residual "
+                  "predicting one metric from a configured group (the words-per-paragraph given "
+                  "words-per-sentence AND sentences-per-paragraph relationship is a default), and "
+                  "document-level aggregates (counts above each relationship's own reference "
+                  "90th/95th/99th percentile, max and mean-top-k residual severity). Pairs are "
+                  "auto-discovered above discover_min_abs_spearman (default 0.7) and capped "
+                  "deterministically at max_pairs; every configured pair is kept regardless of "
+                  "its correlation strength. The fit runs after every ordinary metric (core and "
+                  "optional) in a dedicated, isolated post-metric phase in grade.py, since a "
+                  "residual needs this document's OWN already-measured metric values -- never by "
+                  "one metric module calling another. Leave-one-out: a graded document that is "
+                  "itself a corpus member is excluded from its own fit. Every implementation "
+                  "(correlation, regression, distance correlation, mutual information, PCA) is "
+                  "pure Python -- no optional package dependency at all. Correlated metrics are "
+                  "never deleted or hidden; every finding is Polarity.NEUTRAL. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

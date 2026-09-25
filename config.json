@@ -1257,6 +1257,45 @@
       "poesy_max_seconds": 20.0,
       "max_lines_analyzed": 2000,
       "max_words_analyzed": 30000
+    },
+    "metric_relationships": {
+      "enabled": false,
+      "features": {
+        "disagreement": true,
+        "residual": true,
+        "symmetric": true,
+        "multivariate": true,
+        "percentile_counts": true,
+        "max_severity": true,
+        "topk_severity": true,
+        "pca_diagnostic": true,
+        "bootstrap_stability": true,
+        "loo_stability": true,
+        "mutual_information": true,
+        "partial_correlation": true,
+        "distance_correlation": true
+      },
+      "_requires_none": "This suite needs no optional package at all: correlation, regression, distance correlation, mutual information and PCA are all implemented in pure Python in textgrader/relationships.py (see that module's docstring for why dcor/pingouin/hyppo/statsmodels were not added). Every feature flag above only turns a channel on or off; none of them gate on package availability.",
+      "discover_min_abs_spearman": 0.7,
+      "pairs": [
+        ["subord", "sttr"],
+        ["fk", "lexical.word_zipf"],
+        ["semantic.structure_bm25_centroid_relatedness", "top100"],
+        ["slcv", "rhythm.paragraph_words_cv"]
+      ],
+      "_pairs_note": "[target, predictor] pairs kept regardless of their corpus correlation strength, so the task spec's own named cross-family examples are always evaluated when the corpus profile has both columns: syntax complexity given vocabulary sophistication, readability given lexical rarity, semantic coherence given lexical overlap, and sentence-length variation given paragraph variation. A pair whose corpus source metric is missing (an optional suite that was not enabled when the corpus profile was built) reports 'unavailable' for that pair only; every other configured/discovered pair is unaffected.",
+      "groups": {
+        "wpp": ["wps", "spp"]
+      },
+      "_groups_note": "target metric id -> list of predictor metric ids, for a multivariate residual. The default is the task spec's own required example: words-per-paragraph given BOTH words-per-sentence AND sentences-per-paragraph.",
+      "max_pairs": 12,
+      "min_joint_coverage": 0.7,
+      "bootstrap_samples": 200,
+      "seed": 0,
+      "top_k": 3,
+      "max_candidate_metrics": 120,
+      "min_corpus_documents": 12,
+      "distance_sample_cap": 200
     }
   },
   "allow_external_metric_commands": false,

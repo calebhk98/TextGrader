@@ -604,6 +604,8 @@ def _analyze(config, report, path=None, text=None):
         report.results.extend(core)
     report.results.extend(project_rules(analysis, config))
     report.results.extend(_optional_results(analysis, config, profile, comparator))
+    report.results.extend(_relationship_results(report.results, analysis, config, profile,
+                                                comparator))
     if path is not None:
         report.results.extend(_external_results(path, config))
         report.results.extend(_bundled_results(path, config))
@@ -812,6 +814,68 @@ def _finding_result(finding, spec, analysis, comparator, comparable, profile, el
         return item
     return comparator.apply(item, metric_id, value, finding.get("sample_size"),
                             finding.get("min_sample"))
+
+
+def _document_metric_values(results):
+    """Map corpus-profile-column metric ids to this document's already-measured value.
+
+    A corpus profile row keys core metrics by their bare name (``"wps"``,
+    ``"_words"``) and every other suite's findings by that finding's own
+    ``metric_id`` verbatim (see ``textgrader.corpus.build_profile``, which
+    writes ``book[finding["metric_id"]] = value`` directly). ``grade.py``'s own
+    core results instead carry the ``"prose."`` prefix (``"prose.wps"``), so
+    this reverses exactly that one prefix -- nothing else needed a translation.
+    """
+
+    values = {}
+    for result in results:
+        if (result.value is None or isinstance(result.value, bool)
+                or not isinstance(result.value, (int, float))):
+            continue
+        if result.metric_id.startswith("prose."):
+            bare = result.metric_id[len("prose."):]
+            key = f"_{bare}" if bare in ("words", "sentences", "paragraphs") else bare
+        else:
+            key = result.metric_id
+        values.setdefault(key, result.value)
+    return values
+
+
+def _relationship_results(report_results_so_far, analysis, config, profile, comparator):
+    """Post-metric phase: dependence/disagreement/residual features BETWEEN
+    TextGrader's own metrics (Task 22).
+
+    Deliberately isolated and added in exactly one place in ``_analyze``,
+    after every ordinary metric (core and optional) has produced its
+    findings: a residual of one metric given another needs THIS document's
+    own already-measured values for both, which is why this cannot run
+    inside ``_optional_results``'s ordinary per-metric loop and must never
+    have one metric module call another recursively -- see
+    ``textgrader.metrics.metric_relationships``'s module docstring.
+    """
+
+    metric_config = config.get("metrics", {}) or {}
+    name = "metric_relationships"
+    if not metric_enabled(metric_config, name):
+        return []
+    spec = REGISTRY.get(name)
+    if spec is None:  # pragma: no cover - registry always carries this row
+        return []
+    options = metric_options(metric_config, name)
+    document_values = _document_metric_values(report_results_so_far)
+    started = time.monotonic()
+    try:
+        module = importlib.import_module(f"textgrader.metrics.{spec.module}")
+        findings = module.relationship_findings(analysis, document_values, config=options,
+                                                profile=profile)
+    except Exception as exc:
+        return [MetricResult(f"metric.{name}", name.replace("_", " ").title(), status="error",
+                             status_type=StatusType.INTERNAL_ERROR, family=spec.family,
+                             error=f"{type(exc).__name__}: {exc}")]
+    elapsed = time.monotonic() - started
+    comparable = options_match_profile(profile, name, options)
+    return [_finding_result(finding, spec, analysis, comparator, comparable, profile, elapsed)
+           for finding in findings or []]
 
 
 def _external_results(path, config):
