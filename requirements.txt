@@ -365,3 +365,24 @@ textdistance>=4.6
 # Fast exact multi-pattern (Aho-Corasick) matching, used to locate every
 # occurrence of a detected repeated run in one linear pass.
 pyahocorasick>=2.0
+# Broad classical-readability-formula coverage for the experimental
+# readability_suite metric (Flesch, Flesch-Kincaid, Gunning Fog, SMOG,
+# Coleman-Liau, ARI, Dale-Chall, Linsear Write, Spache, LIX, RIX, McAlpine
+# EFLAW, plus several formulas calibrated for other languages, off by
+# default). Pure Python; pulls in nltk (already a dependency) and pyphen (a
+# small hyphenation-dictionary package).
+textstat>=0.7
+# A second, independent readability-formula implementation for the same
+# suite. PyPI name is py-readability-metrics; it imports as `readability`.
+# Confirmed for real: every formula except SMOG raises
+# readability.exceptions.ReadabilityException below 100 words (SMOG below 30
+# sentences) rather than silently returning a meaningless number --
+# readability_suite catches that and reports it, never lets it crash.
+py-readability-metrics>=1.4
+# CMU Pronouncing Dictionary access for readability_suite's independent
+# syllable-counter cross-check (TextGrader's own vowel-cluster heuristic vs
+# textstat's pyphen-based counter vs real CMUdict phonetic transcriptions).
+# Also the syllable-counting backend pystylometry's own readability formulas
+# use internally (see the "pystylometry" entry above) -- installed once,
+# used by both. Pure Python; pulls in cmudict.
+pronouncing>=0.2

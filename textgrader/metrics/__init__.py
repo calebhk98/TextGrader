@@ -1077,6 +1077,66 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "semantic_clusters -- overlapping channels name the existing metric id in "
                   "their distribution's overlaps_existing_metric_id. Off by default; "
                   "experimental."),
+    _spec("readability_suite", "readability_suite", "readability", "moderate",
+          requires=("textstat", "py_readability_metrics", "pronouncing", "pystylometry"),
+          defaults={
+              "features": {
+                  "textstat_formulas": True, "textstat_mcalpine_eflaw": True,
+                  "readability_metrics_formulas": True, "pystylometry_formulas": True,
+                  "syllable_crosscheck": True, "difficult_word_crosscheck": True,
+                  "formula_aggregate": True,
+                  # On by default: pystylometry's own regex sentence splitter merges most
+                  # dialogue sentences on real prose (verified: 513 sentences on Alice in
+                  # Wonderland against a canonical 1,459), silently inflating every
+                  # sentence-length-based formula it computes -- this re-runs those
+                  # formulas over text rebuilt from TextGrader's own canonical sentence
+                  # boundaries as a directly comparable cross-check. See the module
+                  # docstring's "Segmentation diagnostics".
+                  "pystylometry_canonical_segmentation": True,
+                  # Off by default: seven formulas textstat exposes that were calibrated
+                  # for languages other than English -- see the module docstring.
+                  "textstat_locale_formulas": False,
+                  # Off by default: pystylometry's own compute_gunning_fog() loads its
+                  # OWN spaCy pipeline, independent of the shared cost="parse" pipeline
+                  # every other metric in this codebase shares -- see the module docstring.
+                  "pystylometry_gunning_fog": False,
+              },
+              "syllable_max_unique_words": 20000,
+              "max_evidence": 20,
+              # How far (as a fraction) a library's own sentence count may drift from
+              # TextGrader's canonical one before that implementation's grade-scale
+              # findings are excluded from the primary cross-formula aggregate (a
+              # formula_grade_spread_raw finding keeps the unfiltered version visible
+              # regardless). See the module docstring's "Segmentation diagnostics".
+              "segmentation_tolerance": 0.10,
+          },
+          summary="Experimental readability-formula cross-check suite: Flesch Reading Ease, "
+                  "Flesch-Kincaid grade, Gunning Fog, SMOG, Coleman-Liau, Automated Readability "
+                  "Index, Dale-Chall, Linsear Write and Spache from three independent libraries "
+                  "(textstat, py-readability-metrics, pystylometry) alongside TextGrader's own "
+                  "existing fk/ari core values (never changed by this suite), each formula's "
+                  "cross-implementation disagreement kept as its own finding rather than "
+                  "reconciled; FORCAST, the Fry readability graph and Powers-Sumner-Kearl "
+                  "(pystylometry only -- no other installed library implements them); LIX, RIX "
+                  "and McAlpine EFLAW, plus (off by default) seven formulas calibrated for "
+                  "languages other than English; a Jaccard difficult-word-list disagreement "
+                  "(textstat's Dale-Chall-derived list vs pystylometry's own bundled "
+                  "familiar-word list); a three-way syllable-counter disagreement rate over "
+                  "every unique word (TextGrader's own vowel-cluster heuristic vs textstat's "
+                  "pyphen-based counter vs real CMUdict phonetic transcriptions via the "
+                  "'pronouncing' package); every library finding's distribution carries its own "
+                  "sentence/word/syllable counts beside TextGrader's canonical ones plus a "
+                  "sentence_count_ratio_vs_canonical, so a real tokenization failure (found on "
+                  "real dialogue prose: pystylometry's own regex sentence splitter merges most "
+                  "quote-opening sentences) is visible rather than looking like a formula "
+                  "disagreement; a canonical-segmentation cross-check re-running every "
+                  "sentence-length-sensitive pystylometry formula over text rebuilt from "
+                  "TextGrader's own sentence boundaries; and mean/median/max/spread/SD across "
+                  "every same-scale formula-implied grade level whose own sentence count is not "
+                  "a tokenization outlier on this document, plus a separate, unfiltered "
+                  "formula_grade_spread_raw so the raw disagreement stays visible. Every finding "
+                  "is Polarity.NEUTRAL and none feed the maturity aggregate. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
