@@ -377,6 +377,38 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # cleanly (pip install --dry-run showed no downgrade of numpy/scipy) and
     # exercised for real (HDPModel.add_doc/.train/.infer) before use.
     "tomotopy": ("tomotopy", "pip install tomotopy"),
+    # Broad classical-readability-formula coverage for
+    # textgrader.metrics.readability_suite (Flesch, Flesch-Kincaid, Gunning
+    # Fog, SMOG, Coleman-Liau, ARI, Dale-Chall, Linsear Write, Spache, LIX,
+    # RIX, McAlpine EFLAW, plus several formulas calibrated for other
+    # languages). Confirmed for real: textstat.flesch_kincaid_grade,
+    # .gunning_fog etc. take raw text and do their own tokenization
+    # internally, independent of TextGrader's own pipeline -- see that
+    # module's docstring for why that is the point, not a gap. Pulls in nltk
+    # (already a project dependency) and pyphen (a hyphenation dictionary,
+    # its own small package).
+    "textstat": ("textstat", "pip install textstat"),
+    # A second, independent readability-formula implementation for
+    # readability_suite, PyPI name "py-readability-metrics", importing as
+    # "readability". Confirmed for real: Readability(text).flesch_kincaid()
+    # etc. raise readability.exceptions.ReadabilityException below 100 words
+    # (30 sentences for SMOG) rather than silently returning a meaningless
+    # number -- readability_suite catches that and reports it, never lets it
+    # crash the run. Keyed "py_readability_metrics" (not "readability") so
+    # this dict entry cannot be mistaken for a project-wide "readability"
+    # concept; nothing else in this codebase imports the same module name.
+    "py_readability_metrics": ("readability", "pip install py-readability-metrics"),
+    # CMU Pronouncing Dictionary access for readability_suite's independent
+    # syllable-counter cross-check (core_metrics.syllables' own vowel-cluster
+    # heuristic vs textstat's pyphen-based counter vs real CMUdict
+    # phonetic-transcription syllable counts). Confirmed for real:
+    # pronouncing.phones_for_word("hello") returns CMU phonetic
+    # transcriptions and pronouncing.syllable_count(...) counts stress
+    # markers. Also the syllable-counting backend pystylometry's own
+    # readability formulas use internally (see the "pystylometry" entry
+    # above and readability_suite's module docstring) -- installed once,
+    # used by both.
+    "pronouncing": ("pronouncing", "pip install pronouncing"),
 }
 
 _lock = threading.Lock()

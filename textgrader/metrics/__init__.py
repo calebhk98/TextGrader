@@ -920,6 +920,43 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "profile cache, never on the graded text; and explicit cross-representation "
                   "disagreement (rank correlation, single-representation and consensus "
                   "low-coherence flags). Off by default; experimental."),
+    _spec("readability_suite", "readability_suite", "readability", "moderate",
+          requires=("textstat", "py_readability_metrics", "pronouncing", "pystylometry"),
+          defaults={
+              "features": {
+                  "textstat_formulas": True, "textstat_mcalpine_eflaw": True,
+                  "readability_metrics_formulas": True, "pystylometry_formulas": True,
+                  "syllable_crosscheck": True, "difficult_word_crosscheck": True,
+                  "formula_aggregate": True,
+                  # Off by default: seven formulas textstat exposes that were calibrated
+                  # for languages other than English -- see the module docstring.
+                  "textstat_locale_formulas": False,
+                  # Off by default: pystylometry's own compute_gunning_fog() loads its
+                  # OWN spaCy pipeline, independent of the shared cost="parse" pipeline
+                  # every other metric in this codebase shares -- see the module docstring.
+                  "pystylometry_gunning_fog": False,
+              },
+              "syllable_max_unique_words": 20000,
+              "max_evidence": 20,
+          },
+          summary="Experimental readability-formula cross-check suite: Flesch Reading Ease, "
+                  "Flesch-Kincaid grade, Gunning Fog, SMOG, Coleman-Liau, Automated Readability "
+                  "Index, Dale-Chall, Linsear Write and Spache from three independent libraries "
+                  "(textstat, py-readability-metrics, pystylometry) alongside TextGrader's own "
+                  "existing fk/ari core values (never changed by this suite), each formula's "
+                  "cross-implementation disagreement kept as its own finding rather than "
+                  "reconciled; FORCAST, the Fry readability graph and Powers-Sumner-Kearl "
+                  "(pystylometry only -- no other installed library implements them); LIX, RIX "
+                  "and McAlpine EFLAW, plus (off by default) seven formulas calibrated for "
+                  "languages other than English; a Jaccard difficult-word-list disagreement "
+                  "(textstat's Dale-Chall-derived list vs pystylometry's own bundled "
+                  "familiar-word list); a three-way syllable-counter disagreement rate over "
+                  "every unique word (TextGrader's own vowel-cluster heuristic vs textstat's "
+                  "pyphen-based counter vs real CMUdict phonetic transcriptions via the "
+                  "'pronouncing' package); and mean/median/max/spread/SD across every "
+                  "same-scale formula-implied grade level this run produced. Every finding is "
+                  "Polarity.NEUTRAL and none feed the maturity aggregate. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
