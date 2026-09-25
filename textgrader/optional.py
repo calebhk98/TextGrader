@@ -382,6 +382,79 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # cleanly (pip install --dry-run showed no downgrade of numpy/scipy) and
     # exercised for real (HDPModel.add_doc/.train/.infer) before use.
     "tomotopy": ("tomotopy", "pip install tomotopy"),
+    # Statistical word-segmentation for malformed_text_suite's "word_segmentation"
+    # feature (one of three independent segmenters compared -- see that
+    # module's docstring). Verified for real: wordninja.split('thisisatest')
+    # returns ['this', 'is', 'a', 'test']. Pure Python, bundles its own word
+    # list, no network call at runtime.
+    "wordninja": ("wordninja", "pip install wordninja"),
+    # A second, independent word-segmentation implementation for the same
+    # feature. Verified for real: wordsegment.load(); wordsegment.segment(
+    # 'thisisatest') returns ['this', 'is', 'a', 'test']. Bundles its own
+    # unigram/bigram frequency tables (Peter Norvig's), loaded once per
+    # process (malformed_text_suite._wordsegment_module).
+    "wordsegment": ("wordsegment", "pip install wordsegment"),
+    # An independent statistical language-ID channel for malformed_text_suite's
+    # "language_id_langid" feature. Verified for real:
+    # langid.classify('This is a test sentence in English.') returns
+    # ('en', -81.29...) -- a log-likelihood, not a normalized probability;
+    # malformed_text_suite loads its own LanguageIdentifier via
+    # from_modelstring(norm_probs=True) instead, so the reported confidence is
+    # a real 0-1 probability. Bundles its own pretrained model, no download.
+    "langid": ("langid", "pip install langid"),
+    # A second independent statistical language-ID channel (naive-Bayes over
+    # character n-grams, a Python port of Google's language-detection
+    # library) for malformed_text_suite's "language_id_langdetect" feature,
+    # included "despite known quirks" per the task brief precisely because
+    # its disagreement with the other four detectors is itself the signal.
+    # Nondeterministic by default (its NB sampling uses an internal RNG);
+    # malformed_text_suite seeds it once per process
+    # (DetectorFactory.seed = 0) before first use, per the task's
+    # "set deterministic seeds" rule. Verified for real:
+    # detect_langs('This is a test sentence in English.') returns
+    # [en:0.999...].
+    "langdetect": ("langdetect", "pip install langdetect"),
+    # A high-accuracy language-ID channel for malformed_text_suite's
+    # "language_id_lingua" feature, the task brief's own pick for short-text
+    # accuracy. Verified for real: a LanguageDetectorBuilder over English and
+    # French correctly detects_language_of('Ceci est une phrase de test en
+    # francais.') as Language.FRENCH. Its full from_all_languages() builder
+    # lazily loads n-gram models for all 75 supported languages on first
+    # detection call, measured at ~900MB resident; malformed_text_suite
+    # restricts the default candidate set to ~14 major languages instead
+    # (measured ~215MB) -- see that module's docstring for why a restricted
+    # set does not reintroduce "every invented word looks foreign".
+    "lingua": ("lingua", "pip install lingua-language-detector"),
+    # fastText's own supervised language-identification channel
+    # (malformed_text_suite's "language_id_fasttext" feature), using
+    # Facebook's published `lid.176` model (938KB compressed .ftz;
+    # downloaded once to ~/.cache/textgrader/fasttext/ on first use, never
+    # bundled in the repository). Verified for real:
+    # fasttext.load_model('lid.176.ftz').predict('Dies ist ein Testsatz auf
+    # Deutsch.', k=1) returns (('__label__de',), array([0.9999...])). See
+    # shim_fasttext_numpy2 below for a known, currently-inert compatibility
+    # issue between fastText's predict() and numpy 2.
+    "fasttext": ("fasttext", "pip install fasttext"),
+    # CLD3 (Compact Language Detector 3) for malformed_text_suite's
+    # "language_id_cld3" feature, via the actively-maintained `gcld3` binding
+    # rather than the task brief's `pycld3`: pycld3 needs `longintrepr.h`, a
+    # CPython-internal header CPython removed from its public include path in
+    # 3.11 (`pip install pycld3` fails to compile here with "fatal error:
+    # longintrepr.h: No such file or directory" -- reproduced directly).
+    # gcld3 builds instead, but needs the Protocol Buffers compiler (protoc)
+    # on the BUILD machine (`apt-get install -y protobuf-compiler`, a
+    # build-time tool, not a new language runtime -- the installed wheel is
+    # pure C++/Python); without protoc, `pip install gcld3` fails with
+    # "RuntimeError: The Protobuf compiler, `protoc`, ... could not be
+    # found." Verified for real once built:
+    # gcld3.NNetLanguageIdentifier(min_num_bytes=0, max_num_bytes=1000)
+    # .FindLanguage(text='...').language returns 'en'/'fr' correctly. Needs
+    # no downloaded model: its neural weights are compiled into the
+    # extension.
+    "gcld3": ("gcld3", "pip install gcld3 (needs the system protobuf-compiler package and a "
+                       "C++ toolchain at BUILD time -- e.g. apt-get install -y "
+                       "protobuf-compiler; the older pycld3 binding does not build on Python "
+                       "3.11+, see textgrader/optional.py's comment above)"),
 }
 
 _lock = threading.Lock()
@@ -538,6 +611,74 @@ def shim_booknlp_transformers():
         yield
     finally:
         torch.nn.Module.load_state_dict = original
+
+
+def shim_fasttext_numpy2() -> None:
+    """Retry ``fasttext``'s ``predict()`` under numpy 2, where it currently raises.
+
+    fastText's own ``FastText.py`` (both the ``fasttext`` and
+    ``fasttext-wheel`` PyPI distributions ship the identical file) calls
+    ``np.array(probs, copy=False)`` inside ``predict()``. numpy 1.x reads
+    ``copy=False`` as "avoid a copy where possible"; numpy 2.x reads it as
+    "never copy, raise if a copy is required" -- and converting a freshly
+    built Python list of floats into an ndarray always needs one, so
+    ``predict()`` raises ``ValueError: Unable to avoid copy while creating an
+    array as requested`` on its very first call under numpy 2.
+
+    This project pins numpy 1.x everywhere (and this task's own rules forbid
+    upgrading it for one dependency), so the bug does not fire in this
+    environment -- verified for real: with numpy 1.26.4 installed,
+    ``fasttext.load_model(...).predict(...)`` already returns real
+    predictions with no patching at all (see
+    ``textgrader.metrics.malformed_text_suite``'s module docstring). This
+    function is therefore a deliberate, verified no-op below numpy 2: it
+    checks the installed numpy major version first and returns immediately
+    unless it is >= 2. It exists so that IF numpy is ever allowed to move to
+    2.x for some unrelated reason, fastText's language-ID channel degrades to
+    one retried call (with ``numpy.array`` temporarily tolerant of
+    ``copy=False``, restored immediately afterwards) instead of an unhandled
+    ``ValueError`` on every single call.
+    """
+
+    try:
+        import numpy
+    except Exception:  # pragma: no cover - numpy itself unavailable
+        return
+    try:
+        major = int(str(numpy.__version__).split(".")[0])
+    except Exception:  # pragma: no cover - unparseable version string
+        return
+    if major < 2:
+        return
+    try:
+        from fasttext import FastText as _fasttext_module
+    except Exception:  # pragma: no cover - fasttext itself unavailable
+        return
+    original = _fasttext_module._FastText.predict
+    if getattr(original, "_textgrader_numpy2_patched", False):
+        return
+
+    def _patched(self, *args, **kwargs):
+        try:
+            return original(self, *args, **kwargs)
+        except ValueError as exc:
+            if "copy" not in str(exc).lower():
+                raise
+            real_array = numpy.array
+
+            def _tolerant_array(obj, *a, **kw):
+                if kw.get("copy", None) is False:
+                    kw["copy"] = None
+                return real_array(obj, *a, **kw)
+
+            numpy.array = _tolerant_array
+            try:
+                return original(self, *args, **kwargs)
+            finally:
+                numpy.array = real_array
+
+    _patched._textgrader_numpy2_patched = True
+    _fasttext_module._FastText.predict = _patched
 
 
 def have(name: str) -> bool:

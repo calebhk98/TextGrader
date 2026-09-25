@@ -1,0 +1,27 @@
+# Optional packages that compile native code when pip installs them.
+#
+# Kept out of requirements.txt because a missing build tool makes pip fail the
+# whole install, taking every pure-Python optional package down with it.
+# Install these separately, and only if you want their channels; each one's
+# absence is reported as 'unavailable' for its own findings and nothing else.
+#
+# Build tools: a C++ compiler for both (build-essential on Debian/Ubuntu), and
+# for gcld3 the Protocol Buffers compiler (apt-get install protobuf-compiler).
+
+# A sixth language-ID channel for malformed_text_suite: fastText's own
+# supervised language-identification model (Facebook's published `lid.176`,
+# downloaded once to ~/.cache/textgrader/fasttext/ on first use -- never
+# bundled in the repository). Verified compatible with this project's pinned
+# numpy 1.x; textgrader.optional.shim_fasttext_numpy2 documents a currently-
+# inert numpy-2 compatibility issue in fastText's own predict() method.
+fasttext>=0.9
+
+# A seventh, CLD3-based language-ID channel for malformed_text_suite, via the
+# actively-maintained `gcld3` binding rather than the `pycld3` binding most
+# guides name (pycld3 does not build on Python 3.11+: it needs a CPython-
+# internal header CPython removed from its public include path -- see
+# textgrader/optional.py's comment). gcld3 needs the system Protocol Buffers
+# compiler on the BUILD machine only (e.g. `apt-get install -y
+# protobuf-compiler`; a build-time tool, not a new language runtime -- the
+# installed wheel is pure C++/Python). Needs no downloaded model.
+gcld3>=3.0

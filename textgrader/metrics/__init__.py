@@ -966,6 +966,65 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "(named in each finding's distribution['overlaps_existing_metric_id']) rather "
                   "than replacements; every sequence, feature and pair is independently "
                   "switchable and off by default."),
+    _spec("malformed_text_suite", "malformed_text_suite", "lexical", "moderate",
+          requires=("wordfreq", "symspellpy", "wordninja", "wordsegment", "langid",
+                   "langdetect", "lingua", "fasttext", "gcld3"),
+          defaults={
+              "features": {
+                  "token_shape": True, "script_distribution": True,
+                  "charclass_entropy": True, "suspicious_token_frequency": True,
+                  "word_segmentation": True, "dictionary_disagreement": True,
+                  "language_id_lingua": True, "language_id_langid": True,
+                  "language_id_langdetect": True, "language_id_fasttext": True,
+                  "language_id_cld3": True, "language_id": True,
+              },
+              "language": "en",
+              "long_token_min_length": 15,
+              "long_token_tail_quantile": 0.99,
+              "suspicious_min_length": 8,
+              "suspicious_zipf_threshold": 1.0,
+              "suspicious_max_candidates": 300,
+              "recognized_zipf_threshold": 2.0,
+              "segmentation_plausible_zipf": 3.0,
+              "split_word_fragment_zipf_max": 4.5,
+              "split_word_joined_zipf_min": 3.0,
+              "split_word_min_combined_length": 6,
+              "split_word_max_fragment_length": 6,
+              "max_reported": 25,
+              "lingua_languages": ["en", "fr", "es", "de", "it", "pt", "nl", "la",
+                                   "sv", "da", "pl", "ru", "tr", "id"],
+              "language_id_min_chars": 12,
+              "language_id_low_confidence_threshold": 0.5,
+              "language_id_run_length": 80,
+              "language_id_max_runs": 20,
+              "language_id_max_paragraphs": 400,
+              "language_id_min_paragraph_chars": 40,
+              "language_id_section_words": 3000,
+              "language_id_max_sections": 60,
+              "language_id_max_document_chars": 200000,
+              "cld3_max_bytes": 3000,
+              "fasttext_model_path": "",
+              "fasttext_model_url": "https://dl.fbaipublicfiles.com/fasttext/"
+                                    "supervised-models/lid.176.ftz",
+          },
+          summary="Experimental malformed-text/word-segmentation/language-ID/tokenization-"
+                  "anomaly suite: token-shape rates (long tokens, mixed alphanumerics, "
+                  "repeated symbols, character-class entropy, Unicode-script distribution "
+                  "entropy), wordfreq-based general-vocabulary recognition and "
+                  "very-low-frequency-token rates, bounded word-segmentation disagreement "
+                  "over suspicious no-space tokens (wordninja vs wordsegment vs SymSpell, "
+                  "with a fused-word-candidate rate requiring 2-of-3 agreement), a "
+                  "split-word-candidate rate (adjacent short tokens whose join is a common "
+                  "real word), a wordfreq-vs-SymSpell dictionary/frequency disagreement rate, "
+                  "and language identification at document/section/paragraph/sentence level "
+                  "from up to five independent detectors (Lingua, langid.py, seeded "
+                  "langdetect, fastText's lid.176, and CLD3 via gcld3) reporting confidence "
+                  "distributions, a low-confidence-sentence rate, a code-switch rate, "
+                  "paragraph/sentence off-majority-language rates, section-level language "
+                  "entropy, and both unanimous and mean-pairwise detector agreement. Every "
+                  "channel that overlaps mechanical_quality_suite's fused-token/dictionary/"
+                  "OCR/entropy findings says so in its own distribution. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
