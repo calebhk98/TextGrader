@@ -1135,9 +1135,27 @@ def _gcld3_detector(config: Mapping[str, Any] | None) -> tuple[Any, str | None]:
     return outcome
 
 
+#: Decimal places kept on every detector confidence.  Lingua's confidence for
+#: the same text differs in its last bits from call to call (56.8720080273263
+#: against 56.87200802732632 after aggregation), which made two builds of the
+#: same corpus profile differ.  Ten places is far below any difference that
+#: means anything and makes every detector's output reproducible.
+CONFIDENCE_DECIMALS = 10
+
+
 def _detect_one(name: str, text: str, config: Mapping[str, Any] | None
                 ) -> tuple[dict[str, Any] | None, str | None]:
     """One detector's best label + confidence (0-1) for ``text``, normalized."""
+
+    result, reason = _detect_one_raw(name, text, config)
+    if result is not None and result.get("confidence") is not None:
+        result = {**result, "confidence": round(result["confidence"], CONFIDENCE_DECIMALS)}
+    return result, reason
+
+
+def _detect_one_raw(name: str, text: str, config: Mapping[str, Any] | None
+                    ) -> tuple[dict[str, Any] | None, str | None]:
+    """The detector's own output, before :func:`_detect_one` rounds it."""
 
     if not text or not text.strip():
         return None, "empty text"

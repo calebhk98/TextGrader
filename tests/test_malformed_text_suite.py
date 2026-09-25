@@ -487,3 +487,19 @@ def test_every_registered_id_runs_clean_through_grade_py(tmp_path, base_config):
     report = grade.analyze(source, config)
     errors = [item for item in report.results if item.status_type is StatusType.INTERNAL_ERROR]
     assert not errors, [(item.metric_id, item.error) for item in errors]
+
+
+
+def test_detector_confidences_are_reproducible_to_the_bit():
+    # Lingua's raw confidence varies in its last bits between identical calls,
+    # which made two builds of one corpus profile differ byte for byte.
+    from textgrader.metrics import malformed_text_suite as m
+
+    text = "One sentence here. Another sentence follows it, and then a third one."
+    for name in m.DETECTOR_ORDER:
+        first, _ = m._detect_one(name, text, {})
+        if first is None:
+            continue
+        for _ in range(5):
+            again, _ = m._detect_one(name, text, {})
+            assert again["confidence"] == first["confidence"]
