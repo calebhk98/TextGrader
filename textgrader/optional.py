@@ -624,6 +624,78 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # per-line scan is combinatorial in stress ambiguity -- measured at about
     # 6 seconds for 60 lines in this environment.
     "poesy": ("poesy", "pip install poesy"),
+    # OpenCL-backed recurrence-plot/RQA computation for
+    # nonlinear_dynamics_suite's off-by-default "pyrqa_crosscheck" feature.
+    # `pip install --dry-run pyrqa` shows a clean, no-downgrade install
+    # (PyRQA itself plus pyopencl/Mako/pytools/siphash24, every one a
+    # manylinux or pure-Python wheel -- confirmed with
+    # `pip download --no-deps --only-binary=:all:` for every dependency
+    # except pyrqa itself, which has no published wheel at all but is a
+    # plain-Python sdist (no C extension anywhere in its source tree; `pip
+    # install` builds a `py3-none-any` wheel from it locally with no
+    # compiler invoked) -- so it belongs in requirements.txt, not
+    # requirements-native.txt. Importing `pyrqa`/`pyrqa.computation` never
+    # touches OpenCL itself; only constructing an actual computation does,
+    # and every RQAComputation in this pyrqa version needs a real OpenCL
+    # context (there is no CPU-only path). This container has none:
+    # `pyopencl.get_platforms()` raises
+    # `pyopencl._cl.LogicError: clGetPlatformIDs failed:
+    # PLATFORM_NOT_FOUND_KHR` (reproduced directly, and again running a real
+    # RQAComputation against a trivial sine-wave series), so this feature
+    # reports 'unavailable' quoting that exact error here. RQA's own core
+    # measures are implemented directly in numpy in
+    # nonlinear_dynamics_suite.py as the default, always-available backend --
+    # see that module's docstring.
+    "pyrqa": ("pyrqa", "pip install pyrqa (needs a real OpenCL platform -- a GPU driver, or "
+                       "POCL/oclgrind for CPU-only OpenCL -- to actually run a computation; "
+                       "without one, pyopencl.get_platforms() raises "
+                       "'pyopencl._cl.LogicError: clGetPlatformIDs failed: "
+                       "PLATFORM_NOT_FOUND_KHR')"),
+    # Hurst/DFA/Lyapunov/correlation-dimension nonlinear-dynamics estimators
+    # for nonlinear_dynamics_suite's "hurst_nolds"/"dfa_nolds"/
+    # "lyapunov_nolds"/"correlation_dimension_nolds" features -- independent
+    # implementations from this codebase's own timeseries_suite hurst/dfa
+    # (see that module's docstring for which existing id each overlaps).
+    # nolds 0.6.3 fails to import outright under Python 3.11 with a real,
+    # unrelated packaging bug (see shim_nolds_resources below); every call
+    # site goes through that shim first. Every nolds call in this codebase
+    # passes fit="poly" rather than nolds' own default fit="RANSAC", which is
+    # genuinely randomized (verified: three repeated nolds.hurst_rs calls on
+    # the same input gave three different floats with the default) --
+    # "poly" (ordinary least squares) gave bit-identical results across
+    # repeated calls in the same check.
+    "nolds": ("nolds", "pip install nolds"),
+    # Higuchi/Petrosian fractal dimension, sample/approximate entropy and
+    # Lempel-Ziv complexity cross-checks for nonlinear_dynamics_suite's
+    # "*_antropy" features. Verified for real: antropy.__doc__-less module
+    # exposes higuchi_fd/petrosian_fd/sample_entropy/app_entropy/
+    # lziv_complexity/perm_entropy/spectral_entropy/svd_entropy/
+    # detrended_fluctuation, matching its documented purpose (a lightweight
+    # entropy/fractal/complexity toolkit); deterministic across repeated
+    # calls with its own defaults (verified directly).
+    "antropy": ("antropy", "pip install antropy"),
+    # Additional entropy estimators (fuzzy entropy, dispersion entropy, and
+    # many more not currently wired in) for nonlinear_dynamics_suite's
+    # "fuzzy_entropy_entropyhub"/"dispersion_entropy_entropyhub" features --
+    # genuinely different symbolization schemes from this codebase's other
+    # entropy estimators (a smooth fuzzy-membership match instead of ApEn/
+    # SampEn's hard radius, and an NCDF-mapped small alphabet instead of
+    # ordinal ranking). Confirmed for real: EntropyHub.FuzzEn/DispEn are
+    # deterministic across repeated calls with their own defaults. The PyPI
+    # distribution and the import name differ in case (`pip install
+    # EntropyHub`, `import EntropyHub`); this entry's key is lowercase for
+    # consistency with every other key in this dict, but the module name it
+    # imports is not.
+    "entropyhub": ("EntropyHub", "pip install EntropyHub"),
+    # Ordinal-pattern permutation entropy and Bandt-Pompe/Rosso statistical
+    # complexity for nonlinear_dynamics_suite's "permutation_entropy_ordpy"/
+    # "ordinal_complexity_ordpy" features. The statistical complexity (from
+    # the entropy-complexity plane) is not computed anywhere else in this
+    # codebase -- entropy alone cannot distinguish order from randomness, the
+    # gap this measure is built to fill. Confirmed for real:
+    # ordpy.complexity_entropy/permutation_entropy are deterministic across
+    # repeated calls.
+    "ordpy": ("ordpy", "pip install ordpy"),
 }
 
 _lock = threading.Lock()
@@ -848,6 +920,60 @@ def shim_fasttext_numpy2() -> None:
 
     _patched._textgrader_numpy2_patched = True
     _fasttext_module._FastText.predict = _patched
+
+
+def shim_nolds_resources() -> None:
+    """Let ``nolds`` 0.6.3 import under Python 3.11's stricter ``importlib.resources``.
+
+    ``nolds`` ships both ``nolds/datasets.py`` (a module, imported eagerly by
+    ``nolds/__init__.py`` to preload two bundled fixture arrays) and
+    ``nolds/datasets/`` (a plain data directory with no ``__init__.py``,
+    holding those fixtures' ``.npy``/``.csv`` files) side by side under the
+    same name. Python's regular import machinery resolves ``nolds.datasets``
+    to the ``.py`` module, but that module's own loader functions
+    (``load_brown72``, ``load_qrandom``) call
+    ``importlib.resources.files(__name__)`` to reach their sibling data
+    directory -- and ``importlib.resources.files()`` on Python 3.11+ raises
+    ``TypeError: 'nolds.datasets' is not a package`` the moment it is asked
+    for a module rather than a real package, which is exactly what
+    ``__name__`` is here. Reproduced directly: ``import nolds`` alone raises
+    this, before a single ``nolds`` function (``hurst_rs``, ``dfa``,
+    ``sampen``, ``corr_dim``, ``lyap_r``, none of which touch this fixture
+    machinery at all) is reachable.
+
+    The fix patches ``importlib.resources.files`` (module-global) to fall
+    back, on exactly that ``TypeError``, to the resolved module's own parent
+    directory -- which is precisely where ``nolds/datasets/``'s files live,
+    since ``nolds/datasets.py`` and ``nolds/datasets/`` are siblings inside
+    ``nolds/``. Verified for real: with this patch installed, ``import
+    nolds`` succeeds and ``nolds.hurst_rs``/``nolds.dfa``/``nolds.sampen``/
+    ``nolds.corr_dim``/``nolds.lyap_r`` all run and return real numbers.
+    Installed once (idempotent -- a second call is a no-op) and left for the
+    life of the process: ``importlib.resources.files`` has no state of its
+    own to corrupt, and the fallback only ever triggers on this exact
+    "resolved to a module, not a package" failure, so a package whose own
+    ``files()`` call already succeeds never reaches the fallback branch at
+    all.
+    """
+
+    import importlib.resources as resources
+
+    if getattr(resources.files, "_textgrader_nolds_patched", False):
+        return
+    original = resources.files
+
+    def _tolerant_files(anchor: Any = None) -> Any:
+        try:
+            return original(anchor)
+        except TypeError as exc:
+            if "is not a package" not in str(exc):
+                raise
+            import pathlib
+            module = importlib.import_module(anchor) if isinstance(anchor, str) else anchor
+            return pathlib.Path(module.__file__).parent
+
+    _tolerant_files._textgrader_nolds_patched = True
+    resources.files = _tolerant_files
 
 
 def have(name: str) -> bool:
