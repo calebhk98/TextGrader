@@ -17,7 +17,7 @@ git clone https://github.com/calebhk98/TextGrader && cd TextGrader
 pip install -r requirements.txt            # optional: nothing here is required
 python -m spacy download en_core_web_sm     # for the syntax metrics
 pip install -r requirements-embeddings.txt  # for the semantic metrics (pulls torch)
-pip install -r requirements-native.txt     # optional: two language-ID detectors that need a C++ compiler and protoc
+pip install -r requirements-native.txt     # optional: packages that compile (a C++ compiler; protoc for gcld3)
 ```
 
 Python 3.9+. The core and 24 of the 57 metrics run on the standard library

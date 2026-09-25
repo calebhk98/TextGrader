@@ -25,3 +25,9 @@ fasttext>=0.9
 # protobuf-compiler`; a build-time tool, not a new language runtime -- the
 # installed wheel is pure C++/Python). Needs no downloaded model.
 gcld3>=3.0
+
+# TLSH locality-sensitive fuzzy hashing for reuse_suite's longer blocks; PyPI
+# name is `py-tlsh`, imports as `tlsh`. It ships no binary wheel for common
+# platforms (checked on CPython 3.11 x86_64), so pip compiles it with a C++
+# compiler. Without it only reuse_suite's tlsh channel reports 'unavailable'.
+py-tlsh>=5.0

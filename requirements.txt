@@ -338,3 +338,30 @@ wordsegment>=1.3
 langid>=1.1
 langdetect>=1.0
 lingua-language-detector>=2.1
+# Approximate-duplication / fuzzy-reuse / structural-reuse / motif-detection
+# metrics for the experimental reuse_suite (off by default). Every package
+# below is pure Python or ships a binary wheel, with no system dependency
+# and no model download (py-tlsh, which compiles, is in requirements-native.txt); each is confirmed for real against a
+# small fixture in textgrader/optional.py's PACKAGES comments before use.
+# MinHash/LSH approximate-Jaccard candidate generation (never all-pairs).
+datasketch>=1.6
+# A real 64-bit SimHash implementation plus its own candidate-bucketing index.
+simhash>=2.1
+# Pure-Python, ssdeep-compatible context-triggered piecewise fuzzy hashing.
+# The real `ssdeep` package needs a system libfuzzy/C toolchain this
+# container does not have (`pip install ssdeep` fails to build here); ppdeep
+# is the pure-Python alternative the task spec names.
+ppdeep>=20200505
+# Fast token/string fuzzy similarity (ratio, token-sort, token-set ratios).
+rapidfuzz>=3.0
+# Fast, real Levenshtein (edit) distance, independent of RapidFuzz's own.
+python-Levenshtein>=0.25
+# Jaro/Jaro-Winkler string similarity.
+jellyfish>=1.0
+# 30+ independent string/token/sequence distance algorithms, kept alongside
+# (not instead of) the libraries above -- see this project's rule to
+# preserve library disagreement rather than reconcile it.
+textdistance>=4.6
+# Fast exact multi-pattern (Aho-Corasick) matching, used to locate every
+# occurrence of a detected repeated run in one linear pass.
+pyahocorasick>=2.0
