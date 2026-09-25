@@ -846,7 +846,11 @@ def _feature_rhyme_findings(config: Mapping[str, Any] | None,
     if similarities:
         return shape("rhythm.prosody_feature_rhyme_similarity",
                      "PanPhon feature-based similarity of nearby line-ending rimes",
-                     similarities, "percent", family=FAMILY, min_sample=PAIR_MIN_SAMPLE)
+                     similarities, "percent", family=FAMILY, min_sample=PAIR_MIN_SAMPLE,
+                     # Most nearby line endings share no rime at all, so the
+                     # median was 0 on all 50 reference books (and on a sonnet
+                     # quatrain); the mean keeps the resolution.
+                     headline="mean")
     return [unavailable("rhythm.prosody_feature_rhyme_similarity",
                         "PanPhon feature-based similarity of nearby line-ending rimes",
                         reason or "no comparable line-ending pairs", family=FAMILY)]

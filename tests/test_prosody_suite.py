@@ -467,3 +467,22 @@ def test_prose_never_crashes_or_is_forced_into_a_meter():
     # fabricated meter classification with high confidence.
     assert findings["rhythm.prosody_dominant_meter_confidence"]["value"] is not None
     assert findings["rhythm.prosody_pronunciation_coverage"]["value"] == pytest.approx(100.0)
+
+
+
+def test_feature_rhyme_similarity_headlines_the_mean_of_a_mostly_zero_sample():
+    # Most nearby line endings share no rime, so the median is 0 for nearly
+    # every text and a corpus comparison on it could not tell texts apart.
+    from textgrader import optional
+    if optional.require("pronouncing")[0] is None or optional.require("panphon")[0] is None:
+        pytest.skip("needs pronouncing and panphon")
+    poem = ("Shall I compare thee to a summer's day?\n"
+            "Thou art more lovely and more temperate:\n"
+            "Rough winds do shake the darling buds of May,\n"
+            "And summer's lease hath all too short a date;")
+    analysis = DocumentAnalysis.from_text(poem)
+    item = {f["metric_id"]: f for f in prosody_suite.measure(analysis, {})}[
+        "rhythm.prosody_feature_rhyme_similarity"]
+    assert item["distribution"]["median"] == 0.0
+    assert item["value"] == pytest.approx(item["distribution"]["mean"])
+    assert item["value"] > 0
