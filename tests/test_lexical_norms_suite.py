@@ -21,6 +21,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import os
+
 import pytest
 
 from textgrader import lexicons
@@ -520,12 +522,12 @@ def test_real_warriner_and_nrc_agree_on_direction_but_are_kept_separate():
 
 # ------------------------------------------------------------- real corpus
 #
-# The 50-book reference corpus this task's instructions point at. Skips
-# cleanly wherever that scratch directory does not exist (any environment
-# other than this task's own).
 
-CORPUS_DIR = Path(
-    "/tmp/claude-0/-home-user-TextGrader/6d83dbcd-d4fb-5dbb-b487-24be17a4fb81/scratchpad/corpus")
+# Real-book checks run only when TEXTGRADER_REAL_CORPUS names a folder of
+# corpus .txt files (e.g. one built with corpus_builder); they are slow
+# benchmarks rather than unit tests, so every other run skips them.
+_REAL_CORPUS = os.environ.get("TEXTGRADER_REAL_CORPUS", "")
+CORPUS_DIR = Path(_REAL_CORPUS) if _REAL_CORPUS else Path("/nonexistent-textgrader-real-corpus")
 
 
 @pytest.mark.skipif(not CORPUS_DIR.is_dir(), reason="reference corpus not present in this environment")

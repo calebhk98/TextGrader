@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 from pathlib import Path
 
@@ -448,8 +449,11 @@ def test_full_feature_vector_is_attached_only_when_explicitly_requested():
 
 # --------------------------------------------------------- variation over real books
 
-CORPUS_DIR = Path("/tmp/claude-0/-home-user-TextGrader/6d83dbcd-d4fb-5dbb-b487-24be17a4fb81"
-                  "/scratchpad/corpus")
+# Real-book checks run only when TEXTGRADER_REAL_CORPUS names a folder of
+# corpus .txt files (e.g. one built with corpus_builder); they are slow
+# benchmarks rather than unit tests, so every other run skips them.
+_REAL_CORPUS = os.environ.get("TEXTGRADER_REAL_CORPUS", "")
+CORPUS_DIR = Path(_REAL_CORPUS) if _REAL_CORPUS else Path("/nonexistent-textgrader-real-corpus")
 
 
 def _corpus_books(n=4):
