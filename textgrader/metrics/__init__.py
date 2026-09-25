@@ -920,6 +920,52 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "profile cache, never on the graded text; and explicit cross-representation "
                   "disagreement (rank correlation, single-representation and consensus "
                   "low-coherence flags). Off by default; experimental."),
+    _spec("signal_processing_suite", "signal_processing_suite", "sentence_rhythm", "moderate",
+          defaults={
+              "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
+              "features": {
+                  "welch_spectral": True, "spectral_centroid": True, "spectral_bandwidth": True,
+                  "spectral_flatness": True, "spectral_rolloff": True, "band_energy": True,
+                  "peaks": True, "zero_crossing_rate": True,
+                  "cepstral_peak": False, "multiscale_variance": False,
+                  "cross_correlation": True, "cross_spectrum": False, "coherence": True,
+              },
+              "pairs": [["sentence_words", "sentence_punctuation"]],
+              "welch_nperseg": 256,
+              "welch_noverlap": None,
+              "welch_window": "hann",
+              "welch_detrend": "constant",
+              "band_edges": [0.3333333333333333, 0.6666666666666666],
+              "rolloff_percent": 0.85,
+              "peak_prominence_sigma": 0.5,
+              "peak_min_distance": 1,
+              "cepstral_min_quefrency": 2,
+              "multiscale_min_blocks": 4,
+              "cross_correlation_max_lag": 10,
+              "window_words": 2000,
+              "language": "en",
+              "embedding_model": "all-MiniLM-L6-v2",
+              "topic_n_topics": 4,
+              "topic_model": "nmf",
+              "topic_random_state": 42,
+              "topic_max_features": 2000,
+              "min_lengths": {},
+              "max_findings": 200,
+          },
+          summary="Experimental generic signal-processing features over the same named sequences "
+                  "as timeseries_suite (sentence length, punctuation, parse depth, embedding-based "
+                  "sentence similarity, sentiment, emotion, topic id, ...): Welch periodograms, "
+                  "spectral centroid/bandwidth/flatness/roll-off, low/mid/high band energy shares, "
+                  "time-domain peak count/prominence/distance, a zero-crossing rate, a real-cepstrum "
+                  "peak-prominence summary, a multiscale (aggregated-variance) scaling exponent, "
+                  "and cross-sequence cross-correlation/cross-spectral-phase/coherence between two "
+                  "sequences that share a sample unit. Reuses textgrader.sequences' registry "
+                  "entirely -- adding a sequence there (a stress sequence, a POS-code channel) "
+                  "makes it usable here with no code change, once a caller names it. Several "
+                  "features are deliberate variants of an existing timeseries_suite/catch22 id "
+                  "(named in each finding's distribution['overlaps_existing_metric_id']) rather "
+                  "than replacements; every sequence, feature and pair is independently "
+                  "switchable and off by default."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

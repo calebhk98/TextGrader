@@ -1043,6 +1043,57 @@
       "topic_profile_paragraph_word_cap": 300,
       "topic_profile_max_terms": 250,
       "hdp_iterations": 200
+    },
+    "signal_processing_suite": {
+      "enabled": false,
+      "sequences": [
+        "sentence_words",
+        "paragraph_words",
+        "sentence_punctuation"
+      ],
+      "features": {
+        "welch_spectral": true,
+        "spectral_centroid": true,
+        "spectral_bandwidth": true,
+        "spectral_flatness": true,
+        "spectral_rolloff": true,
+        "band_energy": true,
+        "peaks": true,
+        "zero_crossing_rate": true,
+        "cepstral_peak": false,
+        "multiscale_variance": false,
+        "cross_correlation": true,
+        "cross_spectrum": false,
+        "coherence": true
+      },
+      "pairs": [
+        ["sentence_words", "sentence_punctuation"]
+      ],
+      "welch_nperseg": 256,
+      "welch_noverlap": null,
+      "welch_window": "hann",
+      "welch_detrend": "constant",
+      "band_edges": [0.3333333333333333, 0.6666666666666666],
+      "rolloff_percent": 0.85,
+      "peak_prominence_sigma": 0.5,
+      "peak_min_distance": 1,
+      "cepstral_min_quefrency": 2,
+      "multiscale_min_blocks": 4,
+      "cross_correlation_max_lag": 10,
+      "window_words": 2000,
+      "language": "en",
+      "embedding_model": "all-MiniLM-L6-v2",
+      "topic_n_topics": 4,
+      "topic_model": "nmf",
+      "topic_random_state": 42,
+      "topic_max_features": 2000,
+      "min_lengths": {},
+      "max_findings": 200,
+      "_requires_scipy_signal": "scipy (already a project dependency; pip install scipy) for its 'signal' submodule. Needed by 'welch_spectral', 'spectral_centroid', 'spectral_bandwidth', 'spectral_flatness', 'spectral_rolloff', 'band_energy' and 'peaks' (all Welch-periodogram-based or scipy.signal.find_peaks-based) and by the pair features 'coherence'/'cross_spectrum' (scipy.signal.coherence/csd). Without it, each of those features' findings report 'unavailable' with an install hint instead of a number; 'zero_crossing_rate', 'cepstral_peak', 'multiscale_variance' and 'cross_correlation' need only numpy and are unaffected.",
+      "_requires_numpy": "numpy (already a project dependency; pip install numpy). Needed by every feature in this suite except 'zero_crossing_rate' (pure Python). Without it, the rest report 'unavailable'.",
+      "_requires_pairs_matching_units": "'pairs' entries are only computed when both named sequences share the same sample_unit (sentence with sentence, paragraph with paragraph, window with window) -- see textgrader/sequences.py for each sequence's sample_unit. A mismatched pair reports why, with no computation attempted, rather than silently truncating to the shorter sequence.",
+      "_requires_parse_or_model_sequences": "any sequence in textgrader.sequences.SEQUENCES that needs the shared spaCy parse (e.g. sentence_parse_depth, sentence_dependency_distance, sentence_clause_count, sentence_pos_entropy, sentence_entity_count), an embedding model (sentence_similarity_prev, sentence_distance_centroid) or a fitted topic model (window_topic_id) can be named in 'sequences' or 'pairs', but none is by default -- this suite's cost is 'moderate', so enabling one of those sequences here does NOT by itself trigger --parse-metrics/--model-metrics during corpus profiling; add the sequence deliberately, and profile with the matching flag, or its findings will report why the sequence itself is unavailable rather than silently skipping.",
+      "_requires_stress_sequence": "once a sibling task registers textgrader.prosody.stress_sequence into textgrader.sequences.SEQUENCES, add 'stress_sequence' to 'sequences' (and to a 'pairs' entry, if a matching sample_unit pair is wanted) above -- no code change in this suite is needed; see signal_processing_suite.py's module docstring."
     }
   },
   "allow_external_metric_commands": false,

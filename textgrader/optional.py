@@ -26,6 +26,11 @@ PACKAGES: dict[str, tuple[str, str]] = {
     "numpy": ("numpy", "pip install numpy"),
     "scipy": ("scipy", "pip install scipy"),
     "scipy.stats": ("scipy.stats", "pip install scipy"),
+    # Welch periodograms, coherence/cross-spectrum and peak-finding for
+    # signal_processing_suite. Plain `import scipy` does not itself import the
+    # `signal` submodule, so this is its own entry rather than reusing "scipy"
+    # above -- same reasoning as the "scipy.stats" entry beside it.
+    "scipy.signal": ("scipy.signal", "pip install scipy"),
     "pandas": ("pandas", "pip install pandas"),
     "regex": ("regex", "pip install regex"),
     "wordfreq": ("wordfreq", "pip install wordfreq"),
