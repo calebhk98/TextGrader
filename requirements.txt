@@ -316,3 +316,43 @@ gensim>=4.3
 # project's task table names first for this role, is explicitly out of scope:
 # it is a Java program, and this project is Python-only. Torch-free.
 tomotopy>=0.12
+
+# Five independent packages for the experimental malformed_text_suite metric's
+# word-segmentation and language-identification channels (each kept as its
+# own disagreeing channel, never reconciled -- see that module's docstring):
+#   wordninja   - statistical word segmentation; bundles its own word list.
+#   wordsegment - a second, independent word segmentation implementation;
+#                 bundles its own unigram/bigram frequency tables.
+#   langid      - an independent statistical language-ID channel; bundles its
+#                 own pretrained model, no download.
+#   langdetect  - a second independent statistical language-ID channel
+#                 (nondeterministic by default; malformed_text_suite seeds it
+#                 once per process before first use).
+#   lingua-language-detector - a high-accuracy language-ID channel (imports
+#                 as `lingua`), the task brief's own pick for short-text
+#                 accuracy; malformed_text_suite restricts its default
+#                 candidate language set for memory (~215MB vs ~900MB for
+#                 every language it ships -- see that module's docstring).
+wordninja>=2.0
+wordsegment>=1.3
+langid>=1.1
+langdetect>=1.0
+lingua-language-detector>=2.1
+
+# A sixth language-ID channel for malformed_text_suite: fastText's own
+# supervised language-identification model (Facebook's published `lid.176`,
+# downloaded once to ~/.cache/textgrader/fasttext/ on first use -- never
+# bundled in the repository). Verified compatible with this project's pinned
+# numpy 1.x; textgrader.optional.shim_fasttext_numpy2 documents a currently-
+# inert numpy-2 compatibility issue in fastText's own predict() method.
+fasttext>=0.9
+
+# A seventh, CLD3-based language-ID channel for malformed_text_suite, via the
+# actively-maintained `gcld3` binding rather than the `pycld3` binding most
+# guides name (pycld3 does not build on Python 3.11+: it needs a CPython-
+# internal header CPython removed from its public include path -- see
+# textgrader/optional.py's comment). gcld3 needs the system Protocol Buffers
+# compiler on the BUILD machine only (e.g. `apt-get install -y
+# protobuf-compiler`; a build-time tool, not a new language runtime -- the
+# installed wheel is pure C++/Python). Needs no downloaded model.
+gcld3>=3.0
