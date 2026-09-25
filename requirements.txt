@@ -414,3 +414,13 @@ phonemizer>=3.0
 # module docstring for the real Sonnet-18 scan this environment reproduced
 # without espeak. Pulls in prosodic itself as a dependency.
 poesy>=0.4
+
+# Optional: corpus_builder/dataset_adapters.py's build_wikitext_corpus, a
+# Task 24 dataset adapter that reads one pinned Hugging Face `datasets`
+# revision to build an (unshipped) WikiText reference profile. Nothing in
+# textgrader/ imports this; corpus_builder deliberately keeps its own
+# lazy-import/actionable-error pattern rather than routing through
+# textgrader.optional.require (see dataset_adapters.py's module docstring).
+# `pip install --dry-run datasets` showed no downgrade to numpy/scipy/
+# scikit-learn/torch/transformers/spacy in this project's environment.
+datasets>=2.14
