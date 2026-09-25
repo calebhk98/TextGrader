@@ -75,6 +75,32 @@ achieved (which the discreteness of a finite sample keeps only approximately
 at the target) -- so a reader never has to reconstruct the threshold from the
 settings alone.
 
+**Why ``target_rr`` is the default, and what that costs.** ``rqa_determinism``
+and ``rqa_laminarity`` (and, to a lesser extent, ``rqa_trend``) are only
+comparable between two books when both recurrence plots were built at the
+*same recurrence density*: a book thresholded into a denser plot shows higher
+determinism/laminarity than an otherwise-identical one thresholded into a
+sparser plot, purely because a denser plot offers more chances for points to
+line up into a diagonal or vertical run. Pinning the recurrence rate near
+``target_recurrence_rate`` holds that density constant across every book,
+which is the whole point of defaulting to this mode. The cost is real and is
+not hidden: under ``target_rr``, ``rqa_recurrence_rate`` stops being a
+measurement of the sequence and becomes a diagnostic that the threshold
+search worked close to its target -- book-to-book differences in it are
+threshold-search quantization, not signal, and its own finding says so in a
+``distribution["set_by_threshold_mode"]`` flag and a warning naming
+``rqa_threshold`` instead. ``rqa_threshold`` (the radius the search actually
+had to choose, in units of the sampled series' own standard deviation) is
+where the real cross-book information moves to: a series whose embedded
+trajectory is more spread out, or noisier, needs a proportionally larger raw
+radius to reach the same target density, and standardizing by the series' own
+spread is what keeps that comparable across books of very different absolute
+scale. Under ``threshold_mode="std_fraction"`` this inverts:
+``rqa_recurrence_rate`` becomes the genuine measurement (a fixed radius
+produces very different densities on different books) and ``rqa_threshold``
+is simply the configured ``threshold_std_fraction`` restated in the same
+units, which both findings' own ``aggregation`` text says explicitly.
+
 **PyRQA:** ``pip install --dry-run pyrqa`` shows a clean, no-downgrade
 install (``PyRQA-8.1.0`` plus ``pyopencl``, ``Mako``, ``pytools``,
 ``siphash24`` -- all pure-Python or manylinux wheels, no compiler needed; see
@@ -252,7 +278,7 @@ DEFAULT_SEQUENCES = ("sentence_words", "paragraph_words", "sentence_punctuation"
 
 #: The ten RQA core measures, sharing one recurrence-matrix computation.
 _RQA_FEATURE_ORDER = (
-    "rqa_recurrence_rate", "rqa_determinism", "rqa_avg_diagonal_length",
+    "rqa_recurrence_rate", "rqa_threshold", "rqa_determinism", "rqa_avg_diagonal_length",
     "rqa_longest_diagonal_line", "rqa_diagonal_entropy", "rqa_laminarity",
     "rqa_trapping_time", "rqa_longest_vertical_line", "rqa_recurrence_time",
     "rqa_trend",
@@ -278,6 +304,7 @@ DEFAULT_FEATURE_GROUPS = _RQA_FEATURE_ORDER
 
 FEATURE_LABELS = {
     "rqa_recurrence_rate": "RQA recurrence rate",
+    "rqa_threshold": "RQA recurrence threshold",
     "rqa_determinism": "RQA determinism",
     "rqa_avg_diagonal_length": "RQA average diagonal-line length",
     "rqa_longest_diagonal_line": "RQA longest diagonal line",
@@ -304,7 +331,8 @@ FEATURE_LABELS = {
 }
 
 FEATURE_UNITS = {
-    "rqa_recurrence_rate": "%", "rqa_determinism": "%", "rqa_avg_diagonal_length": "points",
+    "rqa_recurrence_rate": "%", "rqa_threshold": "series standard deviations",
+    "rqa_determinism": "%", "rqa_avg_diagonal_length": "points",
     "rqa_longest_diagonal_line": "points", "rqa_diagonal_entropy": "bits",
     "rqa_laminarity": "%", "rqa_trapping_time": "points", "rqa_longest_vertical_line": "points",
     "rqa_recurrence_time": "points", "rqa_trend": "per 1,000 diagonal steps",
@@ -540,13 +568,19 @@ def _rqa_result(ctx: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | No
 
         mode = cfg["threshold_mode"]
         off_theiler = dist[~theiler_mask]
+        # The series' own standard deviation -- computed unconditionally,
+        # not only under threshold_mode="std_fraction", because it is also
+        # what makes the *chosen* threshold comparable across books of
+        # different absolute scale (see rqa_threshold below and the module
+        # docstring's "Threshold selection" section).
+        std_values = float(numpy.std(values))
         if mode == "std_fraction":
-            scale = float(numpy.std(values))
-            threshold = cfg["threshold_std_fraction"] * scale
+            threshold = cfg["threshold_std_fraction"] * std_values
         else:
             mode = "target_rr"
             pct = min(max(cfg["target_recurrence_rate"], 0.0), 1.0) * 100.0
             threshold = float(numpy.percentile(off_theiler, pct)) if off_theiler.size else 0.0
+        threshold_std_units = threshold / std_values if std_values > 0 else None
 
         recurrence = (dist <= threshold) & ~theiler_mask
         achieved_rr = float(recurrence.sum()) / off_theiler.size if off_theiler.size else 0.0
@@ -566,6 +600,7 @@ def _rqa_result(ctx: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | No
         return {
             "matrix_size": matrix, "recurrence": recurrence, "theiler_mask": theiler_mask,
             "theiler_window": theiler, "threshold": threshold, "threshold_mode": mode,
+            "std_values": std_values, "threshold_std_units": threshold_std_units,
             "achieved_recurrence_rate": achieved_rr, "capped": capped,
             "embedding_dimension": m, "time_delay": tau,
             "diagonal_lengths": diagonal_lengths, "vertical_lengths": vertical_lengths,
@@ -579,6 +614,7 @@ def _rqa_common_distribution(result: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "matrix_size": result["matrix_size"], "threshold": result["threshold"],
         "threshold_mode": result["threshold_mode"],
+        "threshold_std_units": result["threshold_std_units"],
         "achieved_recurrence_rate_percent": 100.0 * result["achieved_recurrence_rate"],
         "embedding_dimension": result["embedding_dimension"], "time_delay": result["time_delay"],
         "theiler_window": result["theiler_window"],
@@ -631,10 +667,75 @@ def _feature_rqa_recurrence_rate(values, cfg, ctx) -> _Outcome:
     if result is None:
         return _Outcome(None, warning=reason)
     common = _rqa_common_distribution(result)
-    return _Outcome(100.0 * result["achieved_recurrence_rate"], distribution={
+    value = 100.0 * result["achieved_recurrence_rate"]
+    if result["threshold_mode"] == "target_rr":
+        # See the module docstring's "Threshold selection" section: under the
+        # default mode this number is chosen, not measured -- it is pinned
+        # near target_recurrence_rate by the very percentile search that
+        # picks the threshold, so the actual cross-book signal moved into
+        # the threshold itself (rqa_threshold, below), not into this rate.
+        return _Outcome(value, distribution={
+            **common, "set_by_threshold_mode": True,
+            "aggregation": "share of off-Theiler-band embedded-vector pairs whose distance is "
+                           "at or below the threshold -- fixed near target_recurrence_rate by "
+                           "construction under threshold_mode='target_rr' (the default); this "
+                           "is a diagnostic that the threshold search worked, not a measurement "
+                           "of the sequence"},
+            warning=f"this value is set by threshold_mode='target_rr' targeting "
+                    f"{100.0 * cfg['target_recurrence_rate']:.1f}%, not measured from the "
+                    f"sequence -- differences between books here are threshold-search "
+                    f"quantization, not signal; compare rqa_threshold across books instead")
+    return _Outcome(value, distribution={
         **common,
-        "aggregation": "share of off-Theiler-band embedded-vector pairs whose Euclidean "
-                       "distance is at or below the chosen threshold"})
+        "aggregation": "share of off-Theiler-band embedded-vector pairs whose distance is at "
+                       "or below a threshold fixed as threshold_std_fraction times the "
+                       "series' own standard deviation (threshold_mode='std_fraction') -- a "
+                       "genuine measurement here, since nothing about the threshold search "
+                       "targets a particular rate"})
+
+
+def _feature_rqa_threshold(values, cfg, ctx) -> _Outcome:
+    """The recurrence-distance threshold actually chosen, in units of the series' own SD.
+
+    Under ``threshold_mode="target_rr"`` (the default), ``rqa_recurrence_rate``
+    is pinned near ``target_recurrence_rate`` by construction (see that
+    feature's own docstring/warning) -- the information about how tightly or
+    loosely this sequence's embedded trajectory revisits itself moves into
+    *how large a radius was needed* to hit that target, not into the
+    resulting rate. This finding reports exactly that radius, standardized by
+    the sampled series' own standard deviation so it is comparable across
+    books of very different absolute scale (a book whose sentence-length
+    values range 3-60 and one whose values range 0.1-0.9 should not be
+    compared on raw distance units). A more spread-out or noisier series
+    needs a proportionally larger raw threshold to reach the same target
+    recurrence rate; the standardized value strips out pure scale
+    differences and is what should actually be compared across a corpus.
+    """
+
+    result, reason = _rqa_result(ctx)
+    if result is None:
+        return _Outcome(None, warning=reason)
+    common = _rqa_common_distribution(result)
+    value = result["threshold_std_units"]
+    if value is None:
+        return _Outcome(None, distribution=common,
+                        warning="the sampled series has zero standard deviation; a "
+                                "standardized threshold is undefined")
+    if result["threshold_mode"] == "target_rr":
+        aggregation = ("the recurrence-distance threshold chosen to reach "
+                       f"target_recurrence_rate={100.0 * cfg['target_recurrence_rate']:.1f}%, "
+                       "expressed in units of the sampled series' own standard deviation -- "
+                       "under threshold_mode='target_rr' (the default) this, not "
+                       "rqa_recurrence_rate, is the real cross-book measurement")
+    else:
+        aggregation = ("the fixed recurrence-distance threshold (threshold_std_fraction times "
+                       "the series' own standard deviation), restated here in the same "
+                       "standardized units for a consistent id across both threshold_mode "
+                       "settings; under threshold_mode='std_fraction' this is simply the "
+                       "configured threshold_std_fraction value")
+    return _Outcome(value, distribution={
+        **common, "raw_threshold": result["threshold"], "std_of_sampled_values": result["std_values"],
+        "aggregation": aggregation})
 
 
 def _feature_rqa_determinism(values, cfg, ctx) -> _Outcome:
@@ -831,6 +932,7 @@ def _feature_rqa_trend(values, cfg, ctx) -> _Outcome:
 
 _RQA_FEATURES: dict[str, Callable[..., _Outcome]] = {
     "rqa_recurrence_rate": _feature_rqa_recurrence_rate,
+    "rqa_threshold": _feature_rqa_threshold,
     "rqa_determinism": _feature_rqa_determinism,
     "rqa_avg_diagonal_length": _feature_rqa_avg_diagonal_length,
     "rqa_longest_diagonal_line": _feature_rqa_longest_diagonal_line,
@@ -906,8 +1008,20 @@ def _feature_pyrqa_crosscheck(values, cfg, ctx) -> _Outcome:
 # ------------------------------------------------------------- library estimators
 
 def _require_nolds():
-    shim_nolds_resources()
-    return require("nolds")
+    """``require("nolds")``, with the import-time shim active for exactly that call.
+
+    ``shim_nolds_resources`` is a context manager (see its own docstring for
+    why -- a permanent, module-global patch is the exact mistake this
+    project's own BookNLP shim already made and had to be rewritten to
+    avoid), so it is entered and exited here, around ``require`` alone, every
+    single time this is called. After the first successful (or failed) real
+    import, ``require``'s own cache means every later call re-enters and
+    exits the context manager without ``importlib.resources.files`` ever
+    actually being touched -- a harmless no-op, not a second exposure window.
+    """
+
+    with shim_nolds_resources():
+        return require("nolds")
 
 
 def _feature_hurst_nolds(values, cfg, ctx) -> _Outcome:

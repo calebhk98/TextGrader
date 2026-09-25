@@ -1180,10 +1180,10 @@ REGISTRY: dict[str, MetricSpec] = dict([
           defaults={
               "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
               "feature_groups": [
-                  "rqa_recurrence_rate", "rqa_determinism", "rqa_avg_diagonal_length",
-                  "rqa_longest_diagonal_line", "rqa_diagonal_entropy", "rqa_laminarity",
-                  "rqa_trapping_time", "rqa_longest_vertical_line", "rqa_recurrence_time",
-                  "rqa_trend",
+                  "rqa_recurrence_rate", "rqa_threshold", "rqa_determinism",
+                  "rqa_avg_diagonal_length", "rqa_longest_diagonal_line", "rqa_diagonal_entropy",
+                  "rqa_laminarity", "rqa_trapping_time", "rqa_longest_vertical_line",
+                  "rqa_recurrence_time", "rqa_trend",
               ],
               "embedding_dimension": 2,
               "time_delay": 1,
@@ -1214,7 +1214,10 @@ REGISTRY: dict[str, MetricSpec] = dict([
           },
           summary="Experimental recurrence-quantification and nonlinear-dynamics suite over the "
                   "same named sequences as timeseries_suite: a numpy-only recurrence "
-                  "quantification analysis core (recurrence rate, determinism, average/longest "
+                  "quantification analysis core (recurrence rate, the chosen recurrence "
+                  "threshold in units of the series' own SD -- the real cross-book measurement "
+                  "under the default target-recurrence-rate threshold mode, where recurrence "
+                  "rate itself is fixed by construction --, determinism, average/longest "
                   "diagonal line, diagonal-line entropy, laminarity, trapping time, longest "
                   "vertical line, recurrence time and TREND nonstationarity), each sharing one "
                   "capped, deterministically-sampled recurrence matrix; an off-by-default PyRQA/"

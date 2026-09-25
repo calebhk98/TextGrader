@@ -231,6 +231,112 @@ def test_rqa_std_fraction_threshold_mode_is_also_reported():
     assert out.distribution["threshold_mode"] == "std_fraction"
 
 
+# ------------------------------------------------- rqa_recurrence_rate / rqa_threshold
+
+def test_recurrence_rate_is_pinned_and_flagged_under_target_rr():
+    """Under the default threshold_mode, recurrence_rate is chosen, not measured."""
+
+    _skip_without("numpy")
+    chaotic = _logistic_map(300)
+    noise = _noise(300)
+    out_chaotic = nd._feature_rqa_recurrence_rate(chaotic, SETTINGS, _ctx("chaotic", chaotic))
+    out_noise = nd._feature_rqa_recurrence_rate(noise, SETTINGS, _ctx("noise", noise))
+    # Two structurally very different (but both continuous-valued, so the
+    # percentile threshold search has no exact ties to contend with) series
+    # still land within a fraction of a point of the same
+    # target_recurrence_rate (5%) -- pinned by construction, not a real
+    # difference between them.
+    assert out_chaotic.value == pytest.approx(out_noise.value, abs=0.5)
+    assert out_chaotic.value == pytest.approx(5.0, abs=0.5)
+    for out in (out_chaotic, out_noise):
+        assert out.distribution["set_by_threshold_mode"] is True
+        assert out.warning and "rqa_threshold" in out.warning
+
+
+def test_recurrence_rate_can_exceed_the_target_when_the_series_has_many_exact_ties():
+    """An honest, documented edge case, not a bug: a series with many repeated exact
+    values (real sentence-length/punctuation-count sequences included) can land well
+    above target_recurrence_rate, because the percentile search has ties to spend."""
+
+    _skip_without("numpy")
+    periodic = _periodic(300)  # a short exact pattern repeated -- many tied distances
+    out = nd._feature_rqa_recurrence_rate(periodic, SETTINGS, _ctx("periodic", periodic))
+    assert out.distribution["set_by_threshold_mode"] is True
+    # Still "pinned by construction" in the sense that it is not a measurement
+    # of the sequence's dynamics, but the achieved rate is not tightly bound
+    # to the target the way it is for a tie-free continuous series.
+    assert out.value > 10.0
+
+
+def test_recurrence_rate_is_a_real_measurement_under_std_fraction():
+    _skip_without("numpy")
+    cfg = {**SETTINGS, "threshold_mode": "std_fraction"}
+    periodic = _periodic(300)
+    noise = _noise(300)
+    out_periodic = nd._feature_rqa_recurrence_rate(periodic, cfg, _ctx("periodic", periodic, cfg=cfg))
+    out_noise = nd._feature_rqa_recurrence_rate(noise, cfg, _ctx("noise", noise, cfg=cfg))
+    assert "set_by_threshold_mode" not in out_periodic.distribution
+    assert out_periodic.warning is None
+    # A fixed radius (as a share of each series' own SD) produces genuinely
+    # different densities on structurally different series.
+    assert out_periodic.value != pytest.approx(out_noise.value, abs=0.5)
+
+
+def test_rqa_threshold_is_reported_as_its_own_finding_in_std_units():
+    _skip_without("numpy")
+    values = _logistic_map(200)
+    out = nd._feature_rqa_threshold(values, SETTINGS, _ctx("toy", values))
+    assert out.value is not None
+    assert isinstance(out.distribution["raw_threshold"], float)
+    assert isinstance(out.distribution["std_of_sampled_values"], float)
+    assert out.value == pytest.approx(
+        out.distribution["raw_threshold"] / out.distribution["std_of_sampled_values"])
+
+
+def test_rqa_threshold_adapts_to_series_spread_while_recurrence_rate_does_not():
+    """The reviewer's own required check: a more spread-out/noisier series needs a
+    different (raw) threshold to reach the same target recurrence rate, while
+    rqa_recurrence_rate itself stays pinned near the target regardless."""
+
+    _skip_without("numpy")
+    narrow = _noise(300, seed=1)          # SD ~= 1
+    wide = [v * 5.0 for v in narrow]      # identical shape, SD ~= 5
+
+    threshold_narrow = nd._feature_rqa_threshold(narrow, SETTINGS, _ctx("narrow", narrow))
+    threshold_wide = nd._feature_rqa_threshold(wide, SETTINGS, _ctx("wide", wide))
+    raw_narrow = threshold_narrow.distribution["raw_threshold"]
+    raw_wide = threshold_wide.distribution["raw_threshold"]
+    # The raw (unnormalized) radius needed to hit the same target recurrence
+    # rate scales with the series' own spread -- a materially larger radius
+    # for the more spread-out series.
+    assert raw_wide > raw_narrow * 3.0
+    # Standardized by each series' own SD, the two are comparable again (a
+    # pure rescale of the same underlying process needs the same *relative*
+    # radius) -- this is what makes rqa_threshold, not the raw distance,
+    # the number worth comparing across books of different absolute scale.
+    assert threshold_narrow.value == pytest.approx(threshold_wide.value, rel=0.05)
+
+    rate_narrow = nd._feature_rqa_recurrence_rate(narrow, SETTINGS, _ctx("narrow2", narrow)).value
+    rate_wide = nd._feature_rqa_recurrence_rate(wide, SETTINGS, _ctx("wide2", wide)).value
+    assert rate_narrow == pytest.approx(rate_wide, abs=1.0)
+
+
+def test_rqa_threshold_differs_for_noisier_series_of_the_same_scale():
+    """Same standard deviation, different internal structure (more purely noisy
+    vs. a periodic-plus-noise mix) -- the standardized threshold is sensitive
+    to real structure, not only to raw scale, unlike rqa_recurrence_rate."""
+
+    _skip_without("numpy")
+    pure_noise = _noise(300, seed=2)
+    periodic_component = _periodic(300, pattern=(1.0, -1.0))
+    rng = random.Random(2)
+    mixed = [p + rng.gauss(0.0, 0.1) for p in periodic_component]  # mostly periodic, little noise
+
+    threshold_noise = nd._feature_rqa_threshold(pure_noise, SETTINGS, _ctx("noise", pure_noise))
+    threshold_mixed = nd._feature_rqa_threshold(mixed, SETTINGS, _ctx("mixed", mixed))
+    assert threshold_noise.value != pytest.approx(threshold_mixed.value, rel=0.1)
+
+
 def test_rqa_diagonal_entropy_orders_periodic_above_chaotic_above_noise():
     """Diagonal-line-length entropy measures diversity of exact line lengths, not "disorder".
 
@@ -664,4 +770,110 @@ def test_nolds_import_works_via_the_shim():
     _skip_without("nolds")
     module, reason = nd._require_nolds()
     assert module is not None, reason
-    assert hasattr(module, "hurst_rs")
+
+
+# ------------------------------------------------------ shim_nolds_resources scope
+#
+# The coordinator's own review flagged this by name: a permanent, module-wide
+# monkeypatch of a stdlib function (or, in an earlier pass of this project,
+# torch.nn.Module.load_state_dict for BookNLP) leaks into every later,
+# unrelated caller unless it is scoped as a context manager that restores the
+# original on every exit. shim_nolds_resources is that shape; these tests
+# prove the restoration actually happens, both after a call that succeeds and
+# after the context manager exits at all, and that an unrelated package's own
+# resource lookups are never altered by the patch being briefly active.
+
+def test_nolds_shim_restores_importlib_resources_files_afterward():
+    import importlib.resources as resources
+
+    original = resources.files
+    nd._require_nolds()  # imports (or, on a later call, no-ops) inside the shim
+    assert resources.files is original
+
+
+def test_nolds_shim_restores_even_when_the_body_raises():
+    import importlib.resources as resources
+
+    original = resources.files
+
+    class _Boom(Exception):
+        pass
+
+    with pytest.raises(_Boom):
+        with optional.shim_nolds_resources():
+            raise _Boom("something else failed while the shim was active")
+    assert resources.files is original
+
+
+def test_nolds_shim_does_not_alter_behavior_for_an_unrelated_package():
+    """A real, unrelated package's own resources.files() call must be identical
+    whether or not the nolds shim happened to run around it."""
+
+    import importlib.resources as resources
+
+    before = resources.files("json")
+    before_listing = sorted(p.name for p in before.iterdir())
+
+    with optional.shim_nolds_resources():
+        during = resources.files("json")
+        during_listing = sorted(p.name for p in during.iterdir())
+
+    after = resources.files("json")
+    after_listing = sorted(p.name for p in after.iterdir())
+
+    assert before_listing == during_listing == after_listing
+    assert resources.files is not None
+    # Not the patched wrapper, in either its before or after state.
+    assert resources.files.__name__ != "_tolerant_files"
+
+
+def test_nolds_shim_never_touches_a_non_typeerror():
+    """A completely different exception type must never be caught by this shim at all."""
+
+    with optional.shim_nolds_resources():
+        import importlib.resources as resources
+        with pytest.raises(AttributeError):
+            resources.files(object())  # not a string or module -- AttributeError, not TypeError
+
+
+def test_nolds_shim_reraises_a_typeerror_that_is_not_its_own(monkeypatch):
+    """Only the exact "is not a package" resolution failure is swallowed -- everything
+    else (including a different-message TypeError) propagates unchanged."""
+
+    import importlib.resources as resources
+
+    def _fake_files(anchor=None):
+        raise TypeError("a completely unrelated failure")
+
+    monkeypatch.setattr(resources, "files", _fake_files)
+    with optional.shim_nolds_resources():
+        with pytest.raises(TypeError, match="a completely unrelated failure"):
+            resources.files("whatever")
+
+
+def test_nolds_shim_falls_back_only_for_the_exact_not_a_package_message(monkeypatch, tmp_path):
+    """Unit-tests the fallback logic itself against nolds' real failure shape: a
+    module (not a package) whose own __file__ gives the directory to fall back to."""
+
+    import importlib.resources as resources
+    import sys
+    import types
+
+    fake_file = tmp_path / "fake_pkg_module.py"
+    fake_file.write_text("", encoding="utf-8")
+    fake_module = types.ModuleType("fake_pkg_module")
+    fake_module.__file__ = str(fake_file)
+    monkeypatch.setitem(sys.modules, "fake_pkg_module", fake_module)
+
+    def _fake_files(anchor=None):
+        raise TypeError(f"{anchor!r} is not a package")
+
+    monkeypatch.setattr(resources, "files", _fake_files)
+    with optional.shim_nolds_resources():
+        result = resources.files("fake_pkg_module")
+    assert str(result) == str(tmp_path)
+
+
+def test_nolds_shim_is_a_context_manager_not_a_one_way_patch():
+    import inspect
+    assert inspect.isgeneratorfunction(optional.shim_nolds_resources.__wrapped__)

@@ -922,7 +922,8 @@ def shim_fasttext_numpy2() -> None:
     _fasttext_module._FastText.predict = _patched
 
 
-def shim_nolds_resources() -> None:
+@contextlib.contextmanager
+def shim_nolds_resources():
     """Let ``nolds`` 0.6.3 import under Python 3.11's stricter ``importlib.resources``.
 
     ``nolds`` ships both ``nolds/datasets.py`` (a module, imported eagerly by
@@ -941,25 +942,75 @@ def shim_nolds_resources() -> None:
     ``sampen``, ``corr_dim``, ``lyap_r``, none of which touch this fixture
     machinery at all) is reachable.
 
-    The fix patches ``importlib.resources.files`` (module-global) to fall
-    back, on exactly that ``TypeError``, to the resolved module's own parent
-    directory -- which is precisely where ``nolds/datasets/``'s files live,
-    since ``nolds/datasets.py`` and ``nolds/datasets/`` are siblings inside
-    ``nolds/``. Verified for real: with this patch installed, ``import
-    nolds`` succeeds and ``nolds.hurst_rs``/``nolds.dfa``/``nolds.sampen``/
+    The fix patches ``importlib.resources.files`` (module-global -- there is
+    no per-package hook to patch instead) to fall back, on exactly that
+    ``TypeError``, to the resolved module's own parent directory, which is
+    precisely where ``nolds/datasets/``'s files live, since
+    ``nolds/datasets.py`` and ``nolds/datasets/`` are siblings inside
+    ``nolds/``. Verified for real: with this patch active, ``import nolds``
+    succeeds and ``nolds.hurst_rs``/``nolds.dfa``/``nolds.sampen``/
     ``nolds.corr_dim``/``nolds.lyap_r`` all run and return real numbers.
-    Installed once (idempotent -- a second call is a no-op) and left for the
-    life of the process: ``importlib.resources.files`` has no state of its
-    own to corrupt, and the fallback only ever triggers on this exact
-    "resolved to a module, not a package" failure, so a package whose own
-    ``files()`` call already succeeds never reaches the fallback branch at
-    all.
+
+    **This is a context manager, not a one-way patch, on purpose.**
+    ``importlib.resources.files`` is not nolds' function to own: every other
+    package in this process that reads a bundled data file through it (and
+    several do) shares that exact same global name, so replacing it
+    permanently -- an earlier version of this function did exactly that,
+    guarded only by an idempotency flag -- would leak nolds' own recovery
+    behaviour into every other caller for the rest of the process, precisely
+    the mistake this project already learned from once: a previous pass's
+    ``torch.nn.Module.load_state_dict`` override for BookNLP leaked into
+    every later model load until it was rewritten as
+    :func:`shim_booknlp_transformers` below. The fix here takes the same
+    shape: patch ``resources.files``, run *only* the import this shim exists
+    for inside the ``with`` block, and restore the original function in
+    ``finally`` whether that import succeeds, fails, or raises something
+    else entirely -- so nothing outside that one call ever observes the
+    patched version.
+    ``textgrader.metrics.nonlinear_dynamics_suite._require_nolds`` is the one
+    call site, and it wraps only ``optional.require("nolds")``: the entire
+    reason this needs to run at all is that ``require`` caches the outcome of
+    ``nolds``'s *first* import, so on every call after the first the ``with``
+    block patches, does nothing (the cached result is returned without
+    importing anything), and restores -- a harmless no-op, not a second
+    exposure window.
+
+    A caller that never imports ``nolds`` is unaffected outside this context
+    manager's lifetime, full stop: before it is ever entered and the instant
+    it exits -- via ``finally``, so this holds even if ``require("nolds")``
+    itself raises -- ``importlib.resources.files`` is restored to the
+    identical object it was before, byte for byte
+    (``test_nolds_shim_restores_importlib_resources_files_afterward``,
+    ``test_nolds_shim_restores_even_when_the_body_raises``). *Within* the
+    brief window it is active, the fallback's own trigger condition (does
+    this ``TypeError`` say "is not a package") is honest about what it is:
+    generic, not nolds-specific -- ``importlib.resources.files('os.path')``
+    hits the identical message for an unrelated module, and would get the
+    same directory-fallback recovery instead of the exception, *if* some
+    other caller's own resource lookup happened to raise it during this
+    exact window. Every resource lookup that already succeeds (essentially
+    every real package's own ``files()`` call, including standard-library
+    ones -- see ``test_nolds_shim_does_not_alter_behavior_for_an_unrelated_package``,
+    which checks a real package's own listing before, during and after) is
+    completely unaffected, because it never reaches the ``except`` clause at
+    all, and any other exception -- a different-message ``TypeError``
+    included -- is re-raised unchanged rather than swallowed
+    (``test_nolds_shim_reraises_a_typeerror_that_is_not_its_own``,
+    ``test_nolds_shim_never_touches_a_non_typeerror``). What this design
+    does not claim is that literally no other caller, anywhere, could ever
+    observe the fallback recovery instead of an exception during that one
+    narrow window -- only a permanent global patch could claim that, and a
+    permanent global patch is exactly what this function is a context
+    manager to avoid. The remaining exposure is bounded to the duration of
+    one ``optional.require("nolds")`` call (a single import statement, or,
+    after the first call, a cache read that never touches
+    ``importlib.resources`` at all), which is the trade this project already
+    made once and had to unwind for ``shim_booknlp_transformers`` before this
+    function existed.
     """
 
     import importlib.resources as resources
 
-    if getattr(resources.files, "_textgrader_nolds_patched", False):
-        return
     original = resources.files
 
     def _tolerant_files(anchor: Any = None) -> Any:
@@ -972,8 +1023,11 @@ def shim_nolds_resources() -> None:
             module = importlib.import_module(anchor) if isinstance(anchor, str) else anchor
             return pathlib.Path(module.__file__).parent
 
-    _tolerant_files._textgrader_nolds_patched = True
     resources.files = _tolerant_files
+    try:
+        yield
+    finally:
+        resources.files = original
 
 
 def have(name: str) -> bool:
