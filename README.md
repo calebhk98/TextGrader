@@ -246,6 +246,7 @@ of it, so a slow run always says what was slow.
 | `sentence_length_deltas` | fast | - | no | Distribution of the change in length between adjacent sentences. |
 | `sentence_length_entropy` | fast | - | no | Entropy of the sentence-length distribution, normalized for range. |
 | `sentence_run_lengths` | fast | - | no | Run-length distribution of short/medium/long sentence bands. |
+| `signal_processing_suite` | moderate | scipy, PyWavelets | no | Welch spectra, spectral centroid, bandwidth, flatness and roll-off, band energies, peaks, zero crossings, cepstral peak and multiscale variance over any registered sequence (including syllable stress), plus cross-correlation and coherence between sequences of the same unit. Complements `timeseries_suite`. |
 | `sentence_segmentation` | fast | pysbd | no | Which segmenter was used, and how much it disagrees with the built-in one. |
 | `timeseries_suite` | moderate | statsmodels, ruptures, pycatch22, PyWavelets, tsfresh | no | Trend, autocorrelation, spectral, catch24 and wavelet features over named linguistic sequences; pick the sequences and the feature groups separately in config. |
 
@@ -283,6 +284,7 @@ of it, so a slow run always says what was slow.
 | `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
 | `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
 | `mechanical_quality_suite` | moderate | pyspellchecker, symspellpy, ftfy, confusable-homoglyphs | no | Typography, encoding, homoglyph, hyphenation and spelling checks with two independent spell checkers, invented names excluded as recurring vocabulary, and every dialect-sensitive rate split between narration and dialogue. |
+| `malformed_text_suite` | moderate | lingua, langid, langdetect, wordninja, wordsegment (fasttext, gcld3 from requirements-native.txt) | no | Language ID at document, paragraph and sentence level from up to five detectors, with code-switching and detector disagreement; word-segmentation disagreement on suspicious strings; token shape and script mix. Invented names are not treated as foreign. |
 | `randomness_suite` | moderate | wordfreq, zstandard, brotli, lz4, snappy, pyppmd, kenlm | no | Language-likeness, multi-codec compression and entropy channels, including a KenLM model trained on the text itself. |
 | `word_rarity` | moderate | wordfreq | no | Zipf word-rarity distribution from general-language frequencies. |
 
@@ -292,6 +294,7 @@ of it, so a slow run always says what was slow.
 | --- | --- | --- | --- | --- |
 | `lemma_repetition` | parse | spacy | no | Repetition measured over lemmas, so walk/walked/walking cannot hide. |
 | `local_repetition` | moderate | - | yes | Content-word reuse inside sliding windows. |
+| `reuse_suite` | moderate | datasketch, rapidfuzz, levenshtein, jellyfish, textdistance, simhash, ppdeep (py-tlsh from requirements-native.txt) | no | Exact and near-duplicate sentences and paragraphs found by MinHash/LSH candidate generation (never all pairs), edit-distance and fuzzy-hash similarity, longest repeated runs, and the same reuse measured over function words, punctuation, word shapes and other structural views. |
 | `repeated_ngrams` | moderate | - | yes | Repeated word sequences, scored by excess occurrences rather than by type count. |
 | `repetition_distance` | moderate | - | no | How soon a content word is reused, in tokens. |
 | `sentence_openings` | fast | - | yes | How often a sentence starts with the same few words as another. |
@@ -366,6 +369,18 @@ of it, so a slow run always says what was slow.
 | --- | --- | --- | --- | --- |
 | `function_words` | fast | - | no | Burrows's Delta against the corpus function-word profiles. |
 | `stylometry_suite` | moderate | lexicalrichness, sentence-transformers | no | Authorship channels kept separate on purpose: n-gram profiles, lexical richness, section stability, impostors, and nearest-reference distances over cached per-book embeddings. |
+
+### prosody
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `prosody_suite` | moderate | pronouncing, panphon (g2p-en, phonemizer, poesy optional) | no | Physical lines and stanzas (hard-wrapped prose is rejoined, not read as verse), stress, meter fit, end, internal and near rhyme kept as separate channels, and alliteration, assonance and consonance, with pronunciation coverage always reported. Runs on prose too. |
+
+### readability
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `readability_suite` | moderate | textstat, py-readability-metrics, pystylometry, pronouncing | no | About twenty classical readability formulas from three libraries side by side with the core values, each library's own sentence and word counts, per-formula disagreement, syllable-counter disagreement, and across-formula summaries over implementations whose sentence splitting agrees with TextGrader's. The core `fk`, `ari` and `lexile` are unchanged. |
 
 ### distribution shape
 

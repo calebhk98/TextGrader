@@ -127,7 +127,7 @@ to add them there (see this module's own docstring above on reuse). Task 16
 is expected to expose a stress sequence
 (``textgrader.prosody.stress_sequence``) that the orchestrator registers into
 ``textgrader.sequences.SEQUENCES`` after merging; once it is, adding
-``"stress_sequence"`` to this suite's ``sequences`` setting is the *entire*
+``"syllable_stress"`` (the name it is registered under) to this suite's ``sequences`` setting is the *entire*
 integration step -- see the module docstring's opening section and the
 registry-agnostic test named above. ``librosa`` (the task's one "optional,
 experimental" library suggestion) is not used: every feature this suite

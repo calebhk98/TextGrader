@@ -630,3 +630,29 @@ def test_degrades_fully_with_every_optional_package_disabled(monkeypatch, manusc
         assert zc.value is not None
     finally:
         optional.reset_cache()
+
+
+def test_the_registered_syllable_stress_sequence_gets_signal_features():
+    # Task 16's stress sequence is registered in textgrader.sequences, so this
+    # suite measures it from a config change alone.
+    from textgrader import optional
+    if optional.require("pronouncing")[0] is None or optional.require("scipy.signal")[0] is None:
+        pytest.skip("needs pronouncing and scipy.signal")
+    from textgrader.document import DocumentAnalysis
+    from textgrader.metrics import signal_processing_suite as sp
+
+    line = "The quick brown fox jumps over the lazy dog beside the river bank today."
+    analysis = DocumentAnalysis.from_text("\n\n".join([line] * 40))
+    findings = {item["metric_id"]: item for item in sp.measure(
+        analysis, {"sequences": ["syllable_stress"], "features": {"welch_spectral": True}})}
+    item = findings["rhythm.signal_syllable_stress_welch_spectral"]
+    assert item["value"] is not None
+    # The same line repeated makes the stress series periodic, with a period
+    # of that line's syllable count, so the peak sits on 1/period or one of
+    # its harmonics.
+    from textgrader import prosody
+    values, _coverage, _settings = prosody.stress_sequence(analysis)
+    period = len(values) / 40
+    assert period == int(period)
+    dominant = item["distribution"]["dominant_frequency"]
+    assert abs(dominant * period - round(dominant * period)) < 0.15

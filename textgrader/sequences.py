@@ -582,6 +582,29 @@ def _build_sentence_distance_centroid(analysis: DocumentAnalysis, settings: Mapp
 
 # ---------------------------------------------------------------------- registry
 
+def _build_syllable_stress(analysis: DocumentAnalysis, settings: Mapping[str, Any]) -> Sequence:
+    module, reason = require("pronouncing")
+    if module is None:
+        return _empty("syllable_stress", "stress", "syllable", reason, settings)
+    from . import prosody  # imported here: prosody builds on document, not on this module
+
+    values, coverage, stress_settings = prosody.stress_sequence(
+        analysis, {"use_g2p_fallback": bool(settings.get("use_g2p_fallback", False))})
+    recorded = {**settings, **stress_settings, "pronunciation_coverage": coverage}
+    ratio = coverage.get("coverage_ratio")
+    warning = None
+    if not values:
+        warning = "no word in this text had a resolved pronunciation"
+    elif ratio is not None and ratio < 0.9:
+        warning = (f"only {100 * ratio:.1f}% of words had a resolved pronunciation; unresolved "
+                   f"words are skipped, so neighbouring positions are not always adjacent syllables")
+    return Sequence("syllable_stress", tuple(values), "stress", "syllable",
+                    "Lexical stress of each resolved syllable in reading order (1 stressed, "
+                    "0 unstressed) from CMUdict via textgrader.prosody.stress_sequence. Words "
+                    "with no pronunciation are skipped, not zero-filled.",
+                    recorded, warning)
+
+
 def _spec(name: str, sample_unit: str, unit: str, family: str, requires: tuple[str, ...],
          description: str, build) -> tuple[str, SequenceSpec]:
     item = SequenceSpec(name, sample_unit, unit, family, requires, description, build)
@@ -633,6 +656,9 @@ SEQUENCES: dict[str, SequenceSpec] = dict([
     _spec("window_topic_id", "window", "topic index", "book_drift", ("sklearn",),
           "Dominant NMF/LDA topic index per fixed-size window (nominal label).",
           _build_window_topic_id),
+    _spec("syllable_stress", "syllable", "stress", "sentence_rhythm", ("pronouncing",),
+          "Lexical stress per resolved syllable (1 stressed, 0 unstressed), from CMUdict.",
+          _build_syllable_stress),
 ])
 
 

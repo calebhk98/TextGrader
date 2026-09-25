@@ -1046,7 +1046,7 @@ def test_worst_case_selection_is_still_bounded_by_max_findings():
     # max_findings still hard-caps it regardless of how large it grows.
     from textgrader import sequences as seq
     worst_case = len(seq.SEQUENCES) * len(ts.FEATURE_NAMES)
-    assert worst_case == 893
+    assert worst_case == 940  # 20 sequences since syllable_stress (tasks 16/20) joined
     analysis = _analysis(_long_text(paragraphs=150))
     findings = ts.measure(analysis, config={
         "sequences": list(seq.SEQUENCES), "feature_groups": list(ts.FEATURE_NAMES)})
