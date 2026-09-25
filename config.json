@@ -3,6 +3,9 @@
   "chapters_dir": "chapters",
   "characters_dir": "characters",
   "corpus_profile": "data/prose_reference.json",
+  "reference_profiles": {
+    "_notes": "Optional Task 24 profile library, alongside (never instead of) corpus_profile above, which remains the primary profile and behaves exactly as before this key existed. Each alias here names one additional corpus profile grade.py will also compare a document against, producing an independent reference-fit reading per profile rather than one forced genre label -- see docs/experimental-tasks/24-*.md and textgrader/metrics/reference_fit.py. Never a normal metrics switch: it is a library of PROFILES, so it lives at the top level next to corpus_profile, not under 'metrics'. Example entry (a profile built with `python -m textgrader.corpus`, see corpus_builder/README.md -- never commit the built .json itself):\n      \"brown_news\": {\"path\": \"path/to/brown_news_profile.json\", \"label\": \"Brown Corpus: news\", \"genre\": \"news\", \"domain\": \"journalism\", \"period\": \"1961\", \"comparison_unit\": \"passage\", \"notes\": \"NLTK Brown Corpus, news category, built via corpus_builder/dataset_adapters.py\"}\n    Relative 'path' values resolve the same way corpus_profile's does: relative to the directory this config.json was loaded from."
+  },
   "corpus_dirs": [],
   "analysis": {
     "comparison_unit": "unknown",
@@ -744,6 +747,17 @@
       "_cramer_vonmises_requires": "at least min_distinct_values (default 5) distinct values on BOTH the manuscript side and the corpus reference curve; below that, ties alone can produce a false 'highly significant' result (measured: p=1.5e-9 between two samples of the SAME 10-value discrete distribution), so this channel reports 'unavailable' naming the reason instead of a misleading number. anderson_darling shares this same gate.",
       "_distance_correlation_requires": "nothing extra -- hand-implemented, no package. It compares two of THIS document's own paired sequences (distance_correlation_pairs), never the corpus, because the corpus profile stores only marginal quantile curves, not joint per-item samples; see the module docstring's 'Distance correlation' section for why.",
       "_reference_representation": "every wasserstein/energy/ks/cramer_vonmises/anderson_darling/jensen_shannon/kl_divergence/hellinger/bhattacharyya/total_variation/mmd/quantile_vector/tail/optimal_transport finding compares the manuscript's own raw per-item sample against the corpus's pooled 101-point quantile curve (profile['item_distributions'][source]['quantiles']), NOT the corpus's raw pooled values (textgrader.corpus never stores those) and NOT a distribution of per-book summary averages (those already exist separately as style.mattr-style scalar corpus comparisons). Every finding's distribution.reference field says so."
+    },
+    "reference_fit": {
+      "enabled": false,
+      "min_corpus_documents": 8,
+      "min_coverage": 0.6,
+      "max_features": 20,
+      "central_band_z": 1.0,
+      "loo_sample_size": 12,
+      "loo_calibration_threshold": 1.5,
+      "_requires": "nothing extra -- reuses textgrader.feature_matrix (plain statistics, no package).",
+      "_task_24": "one reference-fit reading per configured profile: corpus_profile (aliased 'primary') plus every alias under the top-level reference_profiles block. See textgrader/metrics/reference_fit.py's module docstring."
     },
     "mechanical_quality_suite": {
       "enabled": false,

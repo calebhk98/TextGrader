@@ -44,6 +44,12 @@ TOP_LEVEL_KEYS = frozenset({
     "metrics", "project_rules", "project_measures",
     "metric_commands", "allow_external_metric_commands",
     "chapter_bands",
+    # Task 24: the optional reference-profile library alongside corpus_profile.
+    # Not in SECTION_KEYS: its own keys are aliases the caller names, not a
+    # fixed set, and each alias's shape (path/label/genre/domain/period/
+    # comparison_unit/notes) is documented, not schema-checked, the same way
+    # corpus_builder's own settings validate themselves rather than living here.
+    "reference_profiles",
 })
 
 

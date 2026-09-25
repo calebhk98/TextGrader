@@ -580,6 +580,24 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "plus a within-document distance-correlation channel between naturally paired "
                   "sequences. Every distance is its own finding, kept separate from any p-value; "
                   "every family is independently switchable. Off by default; experimental."),
+    _spec("reference_fit", "reference_fit", "distribution_shape", "moderate",
+          defaults={
+              "min_corpus_documents": 8, "min_coverage": 0.6, "max_features": 20,
+              "central_band_z": 1.0, "loo_sample_size": 12, "loo_calibration_threshold": 1.5,
+          },
+          summary="Task 24: a reference-fit VECTOR, one independent overall-fit reading per "
+                  "configured reference profile (config.json's corpus_profile, aliased "
+                  "'primary', plus every profile under reference_profiles) -- never a forced "
+                  "genre label. Reuses the anomaly_suite feature space (core-prose rates/"
+                  "percentages/means, median/MAD-standardized) to report, per profile: two "
+                  "robust overall fit distances (mean and RMS absolute standardized deviation), "
+                  "the median absolute standardized distance, the share of metrics inside a "
+                  "central band, how many metrics could be validly compared, and a leave-one-"
+                  "out self-calibration reading that says so when a profile is not tightly "
+                  "self-consistent. Once two or more profiles are usable, also reports the "
+                  "nearest/second-nearest profile and their margin (descriptive only) and which "
+                  "profile finds which shared metric most/least typical. Off by default; "
+                  "experimental."),
     _spec("mechanical_quality_suite", "mechanical_quality_suite", "lexical", "moderate",
           requires=("pyspellchecker", "symspellpy", "ftfy", "confusable_homoglyphs"),
           defaults={

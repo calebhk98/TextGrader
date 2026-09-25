@@ -184,7 +184,21 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                   include_parse_metrics: bool = False,
                   include_model_metrics: bool = False,
                   metric_selection: str = "auto",
-                  progress=None) -> dict[str, Any]:
+                  progress=None,
+                  # ---- Task 24: additive reference-profile metadata --------
+                  # None of these change what is measured; they are recorded
+                  # so a profile used as one alias of several under
+                  # config.json's "reference_profiles" carries enough
+                  # provenance to show in a report and to judge whether it is
+                  # even an appropriate reference for a given document. Every
+                  # one defaults to None, so an existing caller that supplies
+                  # none of them writes a profile identical to before this
+                  # task -- see grade.py's load_profile/load_reference_profiles,
+                  # which already read these keys with .get(...).
+                  source: str | None = None, license_note: str | None = None,
+                  language: str | None = None, date_range: str | None = None,
+                  genre: str | None = None, domain: str | None = None,
+                  dataset_revision: str | None = None) -> dict[str, Any]:
     """Precompute, once, what every grading run would otherwise recompute.
 
     A profile is a cache.  Measuring forty reference books is slow and the
@@ -393,6 +407,12 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "corpus_name": corpus_name,
         "comparison_unit": comparison_unit,
         "build_timestamp": _timestamp(built_at),
+        # Task 24 reference-profile metadata: source/licence/language/date
+        # range/genre/domain/revision, every one optional and additive. See
+        # this function's docstring and grade.py's load_reference_profiles.
+        "source": source, "license_note": license_note, "language": language,
+        "date_range": date_range, "genre": genre, "domain": domain,
+        "dataset_revision": dataset_revision,
         "text_processing": processing.fingerprint(),
         # Retained under the pre-2.0 name so older readers still find it.
         "preprocessing": processing.fingerprint(),
@@ -520,6 +540,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="also profile the semantic metrics, which download and run a "
                              "sentence-embedding model over every book")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--source", default=None,
+                        help="Task 24: where this corpus came from, e.g. a dataset name/URL")
+    parser.add_argument("--license-note", default=None,
+                        help="Task 24: the corpus's licence/terms, recorded on the profile")
+    parser.add_argument("--language", default=None, help="Task 24: the corpus's language code")
+    parser.add_argument("--date-range", default=None,
+                        help="Task 24: the corpus's date range/period, e.g. '1961' or '1990-1992'")
+    parser.add_argument("--genre", default=None, help="Task 24: a genre label for this profile")
+    parser.add_argument("--domain", default=None, help="Task 24: a domain label for this profile")
+    parser.add_argument("--dataset-revision", default=None,
+                        help="Task 24: the exact dataset revision/tag/commit/version used")
     args = parser.parse_args(argv)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8")) if args.manifest else None
     config = json.loads(args.config.read_text(encoding="utf-8")) if args.config else {}
@@ -539,7 +570,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         split_sections=args.split_sections, min_section_words=args.min_section_words,
         include_core_metrics=not args.no_core_metrics,
         include_parse_metrics=args.parse_metrics,
-        include_model_metrics=args.model_metrics, progress=progress)
+        include_model_metrics=args.model_metrics, progress=progress,
+        source=args.source, license_note=args.license_note, language=args.language,
+        date_range=args.date_range, genre=args.genre, domain=args.domain,
+        dataset_revision=args.dataset_revision)
     write_profile(profile, args.output)
     if not args.quiet:
         print(f"\nwrote {profile['book_count']} {args.comparison_unit}(s) to {args.output}")
