@@ -142,6 +142,70 @@ action='insufficient_data'"), and it is what lets a document with, say, 40
 words show every readability-formula finding as insufficient data even though
 two of the three libraries happily returned a number for it.
 
+Segmentation diagnostics: a real tokenizer failure, not a formula difference
+-------------------------------------------------------------------------------
+
+Every sentence-length-based formula divides by however many sentences the
+*library's own* splitter found, so a splitter that merges sentences inflates
+every one of them at once, and that failure looks identical to a genuine
+formula disagreement unless the sentence/word counts themselves are visible.
+This was caught on real text: on Alice in Wonderland (26,539 canonical words,
+1,459 canonical sentences), pystylometry's regex sentence splitter
+(``pystylometry._utils.split_sentences``, shared by every formula in
+``pystylometry.readability``) found only **513** sentences -- because its
+splitting rule is ``[.!?]+`` followed by whitespace and an immediate capital
+Latin letter, and a dialogue sentence that opens on a quotation mark
+("“Come here," she said. "Now!") defeats that lookahead at *every*
+sentence-final period before an opening quote. The result: pystylometry's own
+``ari``/``coleman_liau``/``flesch``-based FK/``smog`` grades on this book
+landed at 21.8-62.0, against 6.5-8.3 from every other implementation and from
+TextGrader's own core value -- not because pystylometry's syllable counting
+or arithmetic disagrees, but because its average sentence length was
+~3x too high. textstat's sentence counter (1,512) and py-readability-metrics'
+(1,624) are both within about 4-11% of canonical on the same book -- normal
+independent-tokenization variance, not a systemic failure -- so only
+pystylometry gets the fixes below.
+
+Two independent fixes, both automatic and visible in every finding:
+
+1. **Every library finding's ``distribution`` now carries the segmentation
+   counts that produced it**: ``library_sentence_count``, ``library_word_count``
+   (and ``library_syllable_count`` where the library exposes one) alongside
+   TextGrader's own ``canonical_sentence_count``/``canonical_word_count``
+   (``len(analysis.sentences)``/``len(analysis.words)``), plus
+   ``sentence_count_ratio_vs_canonical`` and ``words_per_sentence_ratio_vs_canonical``.
+   A reader can now tell "this formula disagrees" from "this library merged
+   half the book's sentences" by looking at one number, on every single
+   finding, not just the ones this task happened to catch.
+2. **A canonical-segmentation cross-check for pystylometry**
+   (``pystylometry_canonical_segmentation``, on by default): every
+   sentence-length-sensitive pystylometry formula is run a second time on
+   text rebuilt from ``analysis.sentences`` -- one canonical sentence per
+   line, a single leading quote/bracket character stripped (pystylometry's
+   capital-letter lookahead cannot see past it) and a period appended where
+   the canonical sentence had no terminal punctuation. This is verified, not
+   assumed: on Alice, a straight rebuild (no quote-stripping) still only got
+   pystylometry to 692 of 1,459 sentences (47%); stripping the leading quote
+   gets it to 1,404 of 1,459 (96.2%) -- close, but the exact-match assumption
+   the task's rebuild-and-verify instruction implies does not fully hold for
+   this library's regex, so the *achieved* ratio is reported honestly via the
+   same ``sentence_count_ratio_vs_canonical`` field on the canonical-seg
+   findings themselves, rather than silently assumed to be 1.0. These live
+   under their own ids (``..._pystylometry_canonical_seg``); the raw,
+   library-native-segmentation ids are unchanged. ``forcast`` has no
+   canonical-seg counterpart: its formula (single-syllable words in a fixed
+   150-word sample) never uses sentence length, confirmed by inspecting
+   ``pystylometry.readability.additional_formulas`` -- no sentence-count field
+   exists anywhere in ``FORCASTResult``.
+
+The cross-formula aggregate (below) then only pools implementations whose own
+sentence count is within a tolerance (``segmentation_tolerance``, 10% by
+default) of canonical on *this* document, with the excluded ones named and
+reasoned in ``distribution``; a second, ``_raw`` finding keeps the
+unfiltered spread visible so the raw disagreement is never hidden, only kept
+separate from the number meant to be read as "how much do formulas
+disagree".
+
 Formulas covered
 -------------------
 
@@ -217,6 +281,14 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "syllable_crosscheck": True,
     "difficult_word_crosscheck": True,
     "formula_aggregate": True,
+    # On by default: pystylometry's own regex sentence splitter merges most
+    # dialogue sentences on real prose (see the module docstring's
+    # "Segmentation diagnostics"), so this cross-check -- the same formulas
+    # run again over text rebuilt from TextGrader's own canonical sentence
+    # boundaries -- is part of the fix, not an optional extra. It roughly
+    # doubles this suite's pystylometry cost, which is why it stays a
+    # separate, switchable flag rather than being unconditional.
+    "pystylometry_canonical_segmentation": True,
     # Off by default: seven formulas textstat exposes that were calibrated for
     # languages other than English (Spanish, German, Italian, ...). See the
     # module docstring.
@@ -230,6 +302,16 @@ DEFAULT_FEATURES: dict[str, bool] = {
 
 DEFAULT_SYLLABLE_MAX_UNIQUE_WORDS = 20_000
 DEFAULT_MAX_EVIDENCE = 20
+#: How far a library's own sentence count may drift from TextGrader's
+#: canonical one (as a fraction, e.g. 0.10 = +/-10%) before that
+#: implementation's grade-scale findings are excluded from the primary
+#: cross-formula aggregate. See the module docstring's "Segmentation
+#: diagnostics".
+DEFAULT_SEGMENTATION_TOLERANCE = 0.10
+#: Leading characters stripped from each canonical sentence before handing it
+#: to pystylometry's splitter, so its capital-letter lookahead can see the
+#: sentence's real first letter instead of an opening quote/bracket.
+_CANONICAL_SEG_STRIP_CHARS = "\"'“‘’("
 
 #: Formula keys (the part after the library prefix, e.g. "textstat_fk" ->
 #: "fk") that live on the same 0-~18 US-grade scale and so are safe to pool
@@ -316,6 +398,101 @@ def _grade_number(value: Any) -> float | None:
     return None
 
 
+def _segmentation_info(library_sentences: int | None, library_words: int | None,
+                       canonical_sentences: int | None, canonical_words: int | None,
+                       library_syllables: int | None = None
+                       ) -> tuple[dict[str, Any], float | None]:
+    """Compare one library's own sentence/word counts against canonical.
+
+    Returns ``(distribution_fields, sentence_count_ratio)``. The ratio is
+    ``library_sentences / canonical_sentences`` -- the one number that
+    directly answers "did this library's splitter merge or split sentences
+    compared to TextGrader's own segmentation", independent of anything the
+    formula itself computes. ``None`` when either count is unavailable, which
+    ``_Collector.record`` below treats as "nothing to distrust" rather than
+    as a failure: several formulas (FORCAST) do not use sentence length at
+    all, and have no sentence count to compare.
+    """
+
+    info: dict[str, Any] = {
+        "library_sentence_count": library_sentences, "library_word_count": library_words,
+        "canonical_sentence_count": canonical_sentences, "canonical_word_count": canonical_words,
+    }
+    if library_syllables is not None:
+        info["library_syllable_count"] = library_syllables
+    sentence_ratio = None
+    if library_sentences and canonical_sentences:
+        sentence_ratio = library_sentences / canonical_sentences
+        info["sentence_count_ratio_vs_canonical"] = sentence_ratio
+    if library_sentences and library_words and canonical_sentences and canonical_words:
+        canonical_wps = canonical_words / canonical_sentences
+        if canonical_wps:
+            info["words_per_sentence_ratio_vs_canonical"] = \
+                (library_words / library_sentences) / canonical_wps
+    return info, sentence_ratio
+
+
+def _pystylometry_segmentation(result: Any) -> tuple[int | None, int | None, int | None]:
+    """Best-effort ``(sentence_count, word_count, syllable_count)`` pystylometry
+    itself used to compute one formula result.
+
+    pystylometry's per-formula result objects expose this under several
+    different, inconsistent shapes (checked directly against real output
+    before writing this): ``ari``/``coleman_liau``/``dale_chall``/``flesch``/
+    ``smog`` carry ``total_sentence_count``/``total_word_count`` (or, for
+    ``fry``, ``total_sentences``/``total_words``) inside ``.metadata``;
+    ``powers_sumner_kearl`` carries ``total_sentences``/``total_words``/
+    ``total_syllables`` as fields on the result itself; ``linsear_write``
+    exposes neither directly, only ``avg_sentence_length`` and
+    ``.metadata['total_words']``, from which the sentence count is derived;
+    ``forcast`` exposes no sentence-length concept at all (it never raises
+    one), so this correctly returns ``None`` for it.
+    """
+
+    meta = getattr(result, "metadata", {}) or {}
+    sentences = (meta.get("total_sentence_count") or meta.get("total_sentences")
+                or meta.get("sentence_count") or getattr(result, "total_sentences", None))
+    words = (meta.get("total_word_count") or meta.get("total_words") or meta.get("word_count")
+            or getattr(result, "total_words", None))
+    syllables = (meta.get("total_syllable_count") or meta.get("total_syllables")
+                or meta.get("syllable_count") or getattr(result, "total_syllables", None))
+    if sentences is None:
+        avg_length = getattr(result, "avg_sentence_length", None)
+        if avg_length and words:
+            try:
+                sentences = round(words / avg_length)
+            except (TypeError, ZeroDivisionError):
+                sentences = None
+    return sentences, words, syllables
+
+
+def _canonical_pystylometry_text(analysis: DocumentAnalysis) -> str:
+    """Text rebuilt from TextGrader's own canonical sentences, for pystylometry.
+
+    One canonical sentence per "line" (joined with spaces; pystylometry's
+    splitter does not treat a newline specially), a single leading
+    quote/bracket character stripped, and a period appended if the sentence
+    had no terminal punctuation. Reproduced directly before this was written:
+    on Alice in Wonderland this gets pystylometry's own sentence count from
+    513 (over the raw text) to 1,404 of 1,459 canonical sentences (96.2%) --
+    close, not exact (a plain rebuild without the quote-strip only reaches
+    692/1,459); the residual gap is why every canonical-seg finding still
+    carries its own ``sentence_count_ratio_vs_canonical`` rather than
+    assuming this reconstruction is perfect. See the module docstring's
+    "Segmentation diagnostics".
+    """
+
+    lines = []
+    for sentence in analysis.sentences:
+        sentence = sentence.strip().lstrip(_CANONICAL_SEG_STRIP_CHARS)
+        if not sentence:
+            continue
+        if sentence[-1] not in ".!?":
+            sentence += "."
+        lines.append(sentence)
+    return " ".join(lines)
+
+
 class _Collector:
     """Every headline numeric value this run produced, for the disagreement
     and cross-formula-aggregate findings below.
@@ -324,21 +501,37 @@ class _Collector:
     (e.g. ``"textstat_fk"``, ``"pystylometry_dale_chall"``) regardless of
     scale, so any two implementations of the same formula can be compared.
     ``grades`` is the subset whose formula is on the shared US-grade scale
-    (see :data:`_GRADE_SCALE_FORMULAS`), used only by the cross-formula
-    aggregate.
+    (see :data:`_GRADE_SCALE_FORMULAS`); ``trusted_grades`` is the further
+    subset whose own sentence count was within ``tolerance`` of canonical on
+    this document (or which has no sentence-count dependency at all), which
+    is what the primary cross-formula aggregate pools -- see the module
+    docstring's "Segmentation diagnostics". ``exclusions`` names every
+    grade-scale entry left out of ``trusted_grades`` and why.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, tolerance: float = DEFAULT_SEGMENTATION_TOLERANCE) -> None:
+        self.tolerance = tolerance
         self.values: dict[str, float] = {}
         self.grades: dict[str, float] = {}
+        self.trusted_grades: dict[str, float] = {}
+        self.exclusions: dict[str, str] = {}
 
-    def record(self, library: str, formula: str, value: float | None) -> None:
+    def record(self, library: str, formula: str, value: float | None, *,
+              sentence_count_ratio: float | None = None) -> None:
         if value is None:
             return
         key = f"{library}_{formula}"
         self.values[key] = value
-        if formula in _GRADE_SCALE_FORMULAS:
-            self.grades[key] = value
+        if formula not in _GRADE_SCALE_FORMULAS:
+            return
+        self.grades[key] = value
+        if sentence_count_ratio is None or abs(sentence_count_ratio - 1.0) <= self.tolerance:
+            self.trusted_grades[key] = value
+        else:
+            self.exclusions[key] = (
+                f"this implementation's own sentence count is {sentence_count_ratio:.2f}x "
+                f"canonical on this document, outside the +/-{self.tolerance:.0%} tolerance "
+                f"(sentence_count_ratio_vs_canonical in its own finding's distribution)")
 
     def get(self, library: str, formula: str) -> float | None:
         return self.values.get(f"{library}_{formula}")
@@ -347,11 +540,12 @@ class _Collector:
 def _emit(out: list[dict[str, Any]], collector: _Collector, library: str, formula: str,
          mid: str, name: str, value: float | None, unit: str, word_count: int, *,
          distribution: Mapping[str, Any] | None = None,
-         evidence: list[Mapping[str, Any]] | None = None, warning: str | None = None) -> None:
+         evidence: list[Mapping[str, Any]] | None = None, warning: str | None = None,
+         sentence_count_ratio: float | None = None) -> None:
     out.append(finding(mid, name, value, unit, family=FAMILY, sample_size=word_count,
                        min_sample=MIN_SAMPLE, distribution=distribution, evidence=evidence,
                        warning=warning))
-    collector.record(library, formula, value)
+    collector.record(library, formula, value, sentence_count_ratio=sentence_count_ratio)
 
 
 def _disagreement(out: list[dict[str, Any]], collector: _Collector, formula: str, mid: str,
@@ -389,7 +583,7 @@ def _pkg_version(name: str) -> str | None:
 
 # ------------------------------------------------------------------ textstat
 
-def _textstat_formulas(text: str, word_count: int, collector: _Collector
+def _textstat_formulas(text: str, word_count: int, sentence_count: int, collector: _Collector
                        ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     module, reason = require("textstat")
@@ -407,11 +601,27 @@ def _textstat_formulas(text: str, word_count: int, collector: _Collector
         ("lix", "lix", "LIX (textstat)", "score"),
         ("rix", "rix", "RIX (textstat)", "score"),
     )
+    if module is None:
+        for formula, _fn_name, name, unit in plan:
+            out.append(unavailable(f"{PREFIX}{formula}_textstat", name, reason, family=FAMILY,
+                                   unit=unit))
+        return out
+    # One shared sentence/word count for every formula below: they all call
+    # the same textstat.backend.counts.count_sentences internally (verified
+    # by reading its source), so one pair of calls, not eleven, answers
+    # whether textstat's own splitter agrees with TextGrader's canonical one
+    # on this document -- see the module docstring's "Segmentation
+    # diagnostics".
+    try:
+        library_sentences = module.sentence_count(text)
+        library_words = module.lexicon_count(text)
+    except Exception:  # pragma: no cover - third-party failure mode
+        library_sentences = library_words = None
+    segmentation, ratio = _segmentation_info(library_sentences, library_words, sentence_count,
+                                             word_count)
+    version = _pkg_version("textstat")
     for formula, fn_name, name, unit in plan:
         mid = f"{PREFIX}{formula}_textstat"
-        if module is None:
-            out.append(unavailable(mid, name, reason, family=FAMILY, unit=unit))
-            continue
         try:
             value = float(getattr(module, fn_name)(text))
         except Exception as exc:  # pragma: no cover - third-party failure mode
@@ -419,7 +629,8 @@ def _textstat_formulas(text: str, word_count: int, collector: _Collector
                                    family=FAMILY, unit=unit))
             continue
         _emit(out, collector, "textstat", formula, mid, name, value, unit, word_count,
-             distribution={"library": "textstat", "library_version": _pkg_version("textstat")})
+             distribution={"library": "textstat", "library_version": version, **segmentation},
+             sentence_count_ratio=ratio)
     return out
 
 
@@ -509,9 +720,23 @@ def _rl_call(reader, method: str, **kwargs):
 
 
 def _readability_metrics_formulas(reader, reader_reason: str | None, word_count: int,
-                                  collector: _Collector) -> list[dict[str, Any]]:
+                                  sentence_count: int, collector: _Collector
+                                  ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     version = _pkg_version("py-readability-metrics")
+    # One shared sentence/word count for every formula below (all reuse the
+    # same Analyzer pass the reader was constructed with) -- see the module
+    # docstring's "Segmentation diagnostics".
+    segmentation: dict[str, Any] = {}
+    ratio = None
+    if reader is not None:
+        try:
+            stats = reader.statistics()
+            segmentation, ratio = _segmentation_info(stats.get("num_sentences"),
+                                                     stats.get("num_words"), sentence_count,
+                                                     word_count)
+        except Exception:  # pragma: no cover - third-party failure mode
+            segmentation, ratio = {}, None
     # (formula key, reader method, display name, unit, grade attr or None)
     plan = (
         ("ari", "ari", "Automated Readability Index (py-readability-metrics)", "grade",
@@ -540,11 +765,12 @@ def _readability_metrics_formulas(reader, reader_reason: str | None, word_count:
             out.append(unavailable(mid, name, reason, family=FAMILY, unit=unit))
             continue
         value = float(result.score)
-        distribution = {"library": "py-readability-metrics", "library_version": version}
+        distribution = {"library": "py-readability-metrics", "library_version": version,
+                        **segmentation}
         if grade_attr:
             distribution["library_grade_level"] = getattr(result, grade_attr, None)
         _emit(out, collector, "readability_metrics", formula, mid, name, value, unit, word_count,
-             distribution=distribution)
+             distribution=distribution, sentence_count_ratio=ratio)
     # SMOG needs its own call (extra all_sentences kwarg, a different -- 30
     # sentence, not 100 word -- minimum enforced inside the library itself).
     mid, name = f"{PREFIX}smog_readability_metrics", "SMOG index (py-readability-metrics)"
@@ -559,14 +785,46 @@ def _readability_metrics_formulas(reader, reader_reason: str | None, word_count:
             _emit(out, collector, "readability_metrics", "smog", mid, name, value, "grade",
                  word_count, distribution={"library": "py-readability-metrics",
                                           "library_version": version,
-                                          "library_grade_level": result.grade_level})
+                                          "library_grade_level": result.grade_level,
+                                          **segmentation},
+                 sentence_count_ratio=ratio)
     return out
 
 
 # ----------------------------------------------------------------- pystylometry
 
-def _pystylometry_formulas(text: str, word_count: int, collector: _Collector,
-                           features: Mapping[str, bool]) -> list[dict[str, Any]]:
+#: (formula key, compute function, display name, unit, value attr, grade attr or None).
+#: Shared between the raw (pystylometry's own segmentation) and
+#: canonical-segmentation passes below -- see the module docstring's
+#: "Segmentation diagnostics". ``forcast`` is deliberately absent from this
+#: list where the canonical-seg pass reuses it: its formula never touches
+#: sentence length (verified: no sentence-count field exists anywhere on
+#: ``FORCASTResult``), so a second run over re-punctuated text cannot change
+#: its answer, and generating one would only pretend to add information.
+_PYSTYLOMETRY_SENTENCE_LENGTH_PLAN = (
+    ("ari", "compute_ari", "Automated Readability Index (pystylometry)", "grade",
+     "ari_score", "grade_level"),
+    ("coleman_liau", "compute_coleman_liau", "Coleman-Liau index (pystylometry)", "grade",
+     "cli_index", "grade_level"),
+    ("dale_chall", "compute_dale_chall", "Dale-Chall score (pystylometry)", "score",
+     "dale_chall_score", "grade_level"),
+    ("linsear_write", "compute_linsear_write", "Linsear Write (pystylometry)", "grade",
+     "linsear_score", "grade_level"),
+    ("smog", "compute_smog", "SMOG index (pystylometry)", "grade", "smog_index",
+     "grade_level"),
+    ("psk", "compute_powers_sumner_kearl", "Powers-Sumner-Kearl grade (pystylometry)", "grade",
+     "psk_score", "grade_level"),
+)
+#: FORCAST has no sentence-length dependency (see above) so it runs once,
+#: outside the sentence-length plan, with no canonical-seg counterpart.
+_PYSTYLOMETRY_FORCAST = ("forcast", "compute_forcast", "FORCAST grade (pystylometry)", "grade",
+                        "forcast_score", "grade_level")
+
+
+def _pystylometry_formulas(analysis: DocumentAnalysis, word_count: int, sentence_count: int,
+                           collector: _Collector, features: Mapping[str, bool]
+                           ) -> list[dict[str, Any]]:
+    text = analysis.text
     out: list[dict[str, Any]] = []
     module, reason = require("pystylometry")
     readability_mod = None
@@ -577,91 +835,145 @@ def _pystylometry_formulas(text: str, word_count: int, collector: _Collector,
             module, reason = None, f"pystylometry.readability raised {type(exc).__name__}: {exc}"
     version = _pkg_version("pystylometry")
 
-    def _call(fn_name: str):
-        if readability_mod is None:
-            return None, reason
-        try:
-            return getattr(readability_mod, fn_name)(text), None
-        except Exception as exc:  # pragma: no cover - third-party failure mode
-            return None, f"pystylometry raised {type(exc).__name__}: {exc}"
+    def _caller(source_text: str):
+        def _call(fn_name: str):
+            if readability_mod is None:
+                return None, reason
+            try:
+                return getattr(readability_mod, fn_name)(source_text), None
+            except Exception as exc:  # pragma: no cover - third-party failure mode
+                return None, f"pystylometry raised {type(exc).__name__}: {exc}"
+        return _call
 
-    # (formula key, compute function, display name, unit, value attr, grade attr or None)
-    plan = (
-        ("ari", "compute_ari", "Automated Readability Index (pystylometry)", "grade",
-         "ari_score", "grade_level"),
-        ("coleman_liau", "compute_coleman_liau", "Coleman-Liau index (pystylometry)", "grade",
-         "cli_index", "grade_level"),
-        ("dale_chall", "compute_dale_chall", "Dale-Chall score (pystylometry)", "score",
-         "dale_chall_score", "grade_level"),
-        ("linsear_write", "compute_linsear_write", "Linsear Write (pystylometry)", "grade",
-         "linsear_score", "grade_level"),
-        ("smog", "compute_smog", "SMOG index (pystylometry)", "grade", "smog_index",
-         "grade_level"),
-        ("forcast", "compute_forcast", "FORCAST grade (pystylometry)", "grade", "forcast_score",
-         "grade_level"),
-        ("psk", "compute_powers_sumner_kearl", "Powers-Sumner-Kearl grade (pystylometry)", "grade",
-         "psk_score", "grade_level"),
-    )
-    for formula, fn_name, name, unit, value_attr, grade_attr in plan:
-        mid = f"{PREFIX}{formula}_pystylometry"
-        result, call_reason = _call(fn_name)
+    def _run_plan(call, plan, id_suffix: str, label_suffix: str, library: str):
+        for formula, fn_name, name, unit, value_attr, grade_attr in plan:
+            mid = f"{PREFIX}{formula}_pystylometry{id_suffix}"
+            result, call_reason = call(fn_name)
+            if result is None:
+                out.append(unavailable(mid, f"{name}{label_suffix}", call_reason, family=FAMILY,
+                                       unit=unit))
+                continue
+            value = _finite(getattr(result, value_attr))
+            lib_sentences, lib_words, lib_syllables = _pystylometry_segmentation(result)
+            segmentation, ratio = _segmentation_info(lib_sentences, lib_words, sentence_count,
+                                                     word_count, lib_syllables)
+            _emit(out, collector, library, formula, mid, f"{name}{label_suffix}", value, unit,
+                 word_count,
+                 distribution={"library": "pystylometry", "library_version": version,
+                              "library_grade_level": _finite(getattr(result, grade_attr, None)),
+                              **segmentation},
+                 sentence_count_ratio=ratio)
+
+    def _run_flesch(call, id_suffix: str, label_suffix: str, library: str, extra_note: str = ""):
+        result, flesch_reason = call("compute_flesch")
+        ease_mid = f"{PREFIX}flesch_reading_ease_pystylometry{id_suffix}"
+        fk_mid = f"{PREFIX}fk_pystylometry{id_suffix}"
+        ease_name = f"Flesch Reading Ease (pystylometry){label_suffix}"
+        fk_name = f"Flesch-Kincaid grade (pystylometry){label_suffix}"
         if result is None:
-            out.append(unavailable(mid, name, call_reason, family=FAMILY, unit=unit))
-            continue
-        value = _finite(getattr(result, value_attr))
-        _emit(out, collector, "pystylometry", formula, mid, name, value, unit, word_count,
+            out.append(unavailable(ease_mid, ease_name, flesch_reason, family=FAMILY, unit="score"))
+            out.append(unavailable(fk_mid, fk_name, flesch_reason, family=FAMILY, unit="grade"))
+            return
+        lib_sentences, lib_words, lib_syllables = _pystylometry_segmentation(result)
+        segmentation, ratio = _segmentation_info(lib_sentences, lib_words, sentence_count,
+                                                 word_count, lib_syllables)
+        note = "same pass as the pystylometry Flesch-Kincaid grade below"
+        _emit(out, collector, library, "flesch_reading_ease", ease_mid, ease_name,
+             _finite(result.reading_ease), "score", word_count,
              distribution={"library": "pystylometry", "library_version": version,
-                          "library_grade_level": _finite(getattr(result, grade_attr, None))})
+                          "note": (extra_note + "; " + note) if extra_note else note,
+                          **segmentation},
+             sentence_count_ratio=ratio)
+        _emit(out, collector, library, "fk", fk_mid, fk_name, _finite(result.grade_level), "grade",
+             word_count,
+             distribution={"library": "pystylometry", "library_version": version,
+                          **({"note": extra_note} if extra_note else {}), **segmentation},
+             sentence_count_ratio=ratio)
 
-    # Flesch: one call gives BOTH the reading-ease score and the FK grade.
-    flesch_result, flesch_reason = _call("compute_flesch")
-    ease_mid = f"{PREFIX}flesch_reading_ease_pystylometry"
-    fk_mid = f"{PREFIX}fk_pystylometry"
-    if flesch_result is None:
-        out.append(unavailable(ease_mid, "Flesch Reading Ease (pystylometry)", flesch_reason,
-                               family=FAMILY, unit="score"))
-        out.append(unavailable(fk_mid, "Flesch-Kincaid grade (pystylometry)", flesch_reason,
-                               family=FAMILY, unit="grade"))
-    else:
-        _emit(out, collector, "pystylometry", "flesch_reading_ease", ease_mid,
-             "Flesch Reading Ease (pystylometry)", _finite(flesch_result.reading_ease), "score",
-             word_count, distribution={"library": "pystylometry", "library_version": version,
-                                       "note": "same pass as the pystylometry Flesch-Kincaid "
-                                               "grade below"})
-        _emit(out, collector, "pystylometry", "fk", fk_mid, "Flesch-Kincaid grade (pystylometry)",
-             _finite(flesch_result.grade_level), "grade", word_count,
-             distribution={"library": "pystylometry", "library_version": version})
-
-    # Fry: no single canonical score -- report the numeric grade estimate as
-    # the headline, sentence length/syllable-per-100/graph zone as distribution.
-    mid, name = f"{PREFIX}fry_pystylometry", "Fry readability graph grade (pystylometry)"
-    result, call_reason = _call("compute_fry")
-    if result is None:
-        out.append(unavailable(mid, name, call_reason, family=FAMILY, unit="grade"))
-    else:
+    def _run_fry(call, id_suffix: str, label_suffix: str, library: str, extra_note: str = ""):
+        mid = f"{PREFIX}fry_pystylometry{id_suffix}"
+        name = f"Fry readability graph grade (pystylometry){label_suffix}"
+        result, call_reason = call("compute_fry")
+        if result is None:
+            out.append(unavailable(mid, name, call_reason, family=FAMILY, unit="grade"))
+            return
         grade_value = _grade_number(result.grade_level)
-        _emit(out, collector, "pystylometry", "fry", mid, name, grade_value, "grade", word_count,
-             distribution={"library": "pystylometry", "library_version": version,
-                          "avg_sentence_length": _finite(result.avg_sentence_length),
-                          "avg_syllables_per_100_words": _finite(result.avg_syllables_per_100),
-                          "graph_zone": result.graph_zone})
+        lib_sentences, lib_words, lib_syllables = _pystylometry_segmentation(result)
+        segmentation, ratio = _segmentation_info(lib_sentences, lib_words, sentence_count,
+                                                 word_count, lib_syllables)
+        distribution = {"library": "pystylometry", "library_version": version,
+                        "avg_sentence_length": _finite(result.avg_sentence_length),
+                        "avg_syllables_per_100_words": _finite(result.avg_syllables_per_100),
+                        "graph_zone": result.graph_zone, **segmentation}
+        if extra_note:
+            distribution["note"] = extra_note
+        _emit(out, collector, library, "fry", mid, name, grade_value, "grade", word_count,
+             distribution=distribution, sentence_count_ratio=ratio)
+
+    # -------------------------------------------------- raw (library-native segmentation)
+    raw_call = _caller(text)
+    _run_plan(raw_call, _PYSTYLOMETRY_SENTENCE_LENGTH_PLAN, "", "", "pystylometry")
+    _run_flesch(raw_call, "", "", "pystylometry")
+    _run_fry(raw_call, "", "", "pystylometry")
+    # FORCAST: no sentence-length dependency, so it runs once, only here.
+    _run_plan(raw_call, (_PYSTYLOMETRY_FORCAST,), "", "", "pystylometry")
 
     if features.get("pystylometry_gunning_fog"):
         mid, name = f"{PREFIX}gunning_fog_pystylometry", "Gunning Fog (pystylometry)"
-        result, call_reason = _call("compute_gunning_fog")
+        result, call_reason = raw_call("compute_gunning_fog")
         if result is None:
             out.append(unavailable(mid, name, call_reason, family=FAMILY, unit="grade"))
         else:
             raw = getattr(result, "fog_index", None) if hasattr(result, "fog_index") \
                 else getattr(result, "score", None)
             value = _finite(raw)
+            lib_sentences, lib_words, lib_syllables = _pystylometry_segmentation(result)
+            segmentation, ratio = _segmentation_info(lib_sentences, lib_words, sentence_count,
+                                                     word_count, lib_syllables)
             _emit(out, collector, "pystylometry", "gunning_fog", mid, name, value, "grade",
                  word_count, distribution={"library": "pystylometry", "library_version": version,
                                           "note": "loads its own spaCy pipeline, independent of "
                                                   "the shared cost=\"parse\" pipeline",
                                           "library_grade_level": _finite(getattr(result,
                                                                                 "grade_level",
-                                                                                None))})
+                                                                                None)),
+                                          **segmentation},
+                 sentence_count_ratio=ratio)
+
+    # ---------------------------------------------- canonical-segmentation cross-check
+    # Verified in this module's own docstring section "Segmentation
+    # diagnostics": pystylometry's regex sentence splitter merges most
+    # dialogue sentences on real prose. Re-running every sentence-length-
+    # sensitive formula over text rebuilt from TextGrader's own canonical
+    # sentence boundaries turns that tokenization failure into a directly
+    # visible, separate finding instead of a silent inflation of the raw one.
+    if features.get("pystylometry_canonical_segmentation", True) and readability_mod is not None:
+        canonical_text = _canonical_pystylometry_text(analysis)
+        canonical_call = _caller(canonical_text)
+        suffix, label = "_canonical_seg", " (canonical segmentation)"
+        note = ("computed over text rebuilt from TextGrader's own canonical sentence boundaries, "
+               "not pystylometry's own regex sentence splitter -- see the module docstring's "
+               "Segmentation diagnostics section")
+        _run_plan(canonical_call, _PYSTYLOMETRY_SENTENCE_LENGTH_PLAN, suffix, label,
+                 "pystylometry_canonical_seg")
+        _run_flesch(canonical_call, suffix, label, "pystylometry_canonical_seg", extra_note=note)
+        _run_fry(canonical_call, suffix, label, "pystylometry_canonical_seg", extra_note=note)
+    elif features.get("pystylometry_canonical_segmentation", True):
+        # readability_mod unavailable: name every canonical-seg id explicitly
+        # rather than silently omitting them, so their absence is visible.
+        for formula, _fn, name, unit, _va, _ga in (*_PYSTYLOMETRY_SENTENCE_LENGTH_PLAN,):
+            out.append(unavailable(f"{PREFIX}{formula}_pystylometry_canonical_seg",
+                                   f"{name} (canonical segmentation)", reason, family=FAMILY,
+                                   unit=unit))
+        out.append(unavailable(f"{PREFIX}flesch_reading_ease_pystylometry_canonical_seg",
+                               "Flesch Reading Ease (pystylometry) (canonical segmentation)",
+                               reason, family=FAMILY, unit="score"))
+        out.append(unavailable(f"{PREFIX}fk_pystylometry_canonical_seg",
+                               "Flesch-Kincaid grade (pystylometry) (canonical segmentation)",
+                               reason, family=FAMILY, unit="grade"))
+        out.append(unavailable(f"{PREFIX}fry_pystylometry_canonical_seg",
+                               "Fry readability graph grade (pystylometry) (canonical segmentation)",
+                               reason, family=FAMILY, unit="grade"))
     return out
 
 
@@ -799,8 +1111,10 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
     features = _features(config)
     text = analysis.text
     word_count = analysis.word_count
+    sentence_count = analysis.sentence_count
+    tolerance = float(option(config, "segmentation_tolerance", DEFAULT_SEGMENTATION_TOLERANCE))
     out: list[dict[str, Any]] = []
-    collector = _Collector()
+    collector = _Collector(tolerance)
 
     versions = {
         "textstat": _pkg_version("textstat"),
@@ -813,11 +1127,14 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
 
     core = core_metrics.measure(analysis, floor=1)
     if core:
-        collector.record("core", "fk", core.get("fk"))
-        collector.record("core", "ari", core.get("ari"))
+        # The canonical value by construction -- its own sentence count IS
+        # the canonical one, so it is always trusted (ratio 1.0), never
+        # excluded from the aggregate below.
+        collector.record("core", "fk", core.get("fk"), sentence_count_ratio=1.0)
+        collector.record("core", "ari", core.get("ari"), sentence_count_ratio=1.0)
 
     if features.get("textstat_formulas", True):
-        out.extend(_textstat_formulas(text, word_count, collector))
+        out.extend(_textstat_formulas(text, word_count, sentence_count, collector))
     if features.get("textstat_mcalpine_eflaw", True):
         out.extend(_textstat_mcalpine(text, word_count))
     if features.get("textstat_locale_formulas"):
@@ -825,10 +1142,12 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
 
     if features.get("readability_metrics_formulas", True):
         reader, reader_reason = _build_reader(text, word_count)
-        out.extend(_readability_metrics_formulas(reader, reader_reason, word_count, collector))
+        out.extend(_readability_metrics_formulas(reader, reader_reason, word_count, sentence_count,
+                                                 collector))
 
     if features.get("pystylometry_formulas", True):
-        out.extend(_pystylometry_formulas(text, word_count, collector, features))
+        out.extend(_pystylometry_formulas(analysis, word_count, sentence_count, collector,
+                                          features))
 
     if features.get("syllable_crosscheck", True):
         out.extend(_syllable_crosscheck(analysis, config, word_count))
@@ -865,33 +1184,67 @@ def measure(analysis: DocumentAnalysis, config: Mapping[str, Any] | None = None,
                  libraries=("textstat", "readability_metrics"))
 
     # ------------------------------------------------------ cross-formula aggregate
+    #
+    # Pools only implementations whose own sentence count is within
+    # ``tolerance`` of canonical on this document (or which have no
+    # sentence-count dependency at all -- see the module docstring's
+    # "Segmentation diagnostics"). A raw, unfiltered version is emitted
+    # separately below so the full disagreement -- tokenization failures
+    # included -- is never hidden, only kept apart from the number meant to
+    # answer "how much do the FORMULAS disagree".
     if features.get("formula_aggregate", True) and word_count >= MIN_SAMPLE \
-            and len(collector.grades) >= 2:
-        values = sorted(collector.grades.values())
+            and len(collector.trusted_grades) >= 2:
+        values = sorted(collector.trusted_grades.values())
         spread = values[-1] - values[0]
-        base = {"n_formulas": len(values), "formula_ids": sorted(collector.grades.keys()),
-               "min": values[0], "max": values[-1]}
+        base = {"n_formulas": len(values), "formula_ids": sorted(collector.trusted_grades.keys()),
+               "min": values[0], "max": values[-1],
+               "segmentation_tolerance": tolerance,
+               "excluded_formula_ids": dict(collector.exclusions)}
         out.append(finding(f"{PREFIX}formula_grade_mean",
                            "Mean formula-implied grade level, across every readability formula "
-                           "computed this run", statistics.fmean(values), "grade", family=FAMILY,
-                           sample_size=word_count, min_sample=MIN_SAMPLE,
+                           "computed this run whose own sentence count is not a tokenization "
+                           "outlier on this document", statistics.fmean(values), "grade",
+                           family=FAMILY, sample_size=word_count, min_sample=MIN_SAMPLE,
                            distribution=dict(base, aggregation="mean")))
-        out.append(finding(f"{PREFIX}formula_grade_median", "Median formula-implied grade level",
+        out.append(finding(f"{PREFIX}formula_grade_median", "Median formula-implied grade level "
+                           "(segmentation-trust-filtered; see formula_grade_mean)",
                            statistics.median(values), "grade", family=FAMILY,
                            sample_size=word_count, min_sample=MIN_SAMPLE,
                            distribution=dict(base, aggregation="median")))
-        out.append(finding(f"{PREFIX}formula_grade_max", "Highest formula-implied grade level",
+        out.append(finding(f"{PREFIX}formula_grade_max", "Highest formula-implied grade level "
+                           "(segmentation-trust-filtered; see formula_grade_mean)",
                            values[-1], "grade", family=FAMILY, sample_size=word_count,
                            min_sample=MIN_SAMPLE, distribution=dict(base, aggregation="max")))
         out.append(finding(f"{PREFIX}formula_grade_spread",
                            "Spread (range) across every formula-implied grade level computed "
-                           "this run", spread, "grade", family=FAMILY, sample_size=word_count,
+                           "this run whose own sentence count is not a tokenization outlier on "
+                           "this document (see formula_grade_spread_raw for the unfiltered "
+                           "version)", spread, "grade", family=FAMILY, sample_size=word_count,
                            min_sample=MIN_SAMPLE,
                            distribution=dict(base, aggregation="range (max - min)")))
         if len(values) > 1:
             out.append(finding(f"{PREFIX}formula_grade_sd",
                                "Standard deviation across every formula-implied grade level "
-                               "computed this run", statistics.stdev(values), "grade",
-                               family=FAMILY, sample_size=word_count, min_sample=MIN_SAMPLE,
+                               "computed this run whose own sentence count is not a "
+                               "tokenization outlier on this document",
+                               statistics.stdev(values), "grade", family=FAMILY,
+                               sample_size=word_count, min_sample=MIN_SAMPLE,
                                distribution=dict(base, aggregation="sample standard deviation")))
+
+    if features.get("formula_aggregate", True) and word_count >= MIN_SAMPLE \
+            and len(collector.grades) >= 2:
+        raw_values = sorted(collector.grades.values())
+        out.append(finding(
+            f"{PREFIX}formula_grade_spread_raw",
+            "Spread (range) across every formula-implied grade level computed this run, "
+            "including implementations whose own sentence count diverges from canonical (a "
+            "tokenizer failure, not a formula difference -- see formula_grade_spread for the "
+            "segmentation-trust-filtered version and the module docstring's Segmentation "
+            "diagnostics section)",
+            raw_values[-1] - raw_values[0], "grade", family=FAMILY, sample_size=word_count,
+            min_sample=MIN_SAMPLE,
+            distribution={"n_formulas": len(raw_values), "formula_ids": sorted(collector.grades),
+                         "min": raw_values[0], "max": raw_values[-1],
+                         "segmentation_tolerance": tolerance,
+                         "excluded_from_trusted_spread": dict(collector.exclusions)}))
     return out

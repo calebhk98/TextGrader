@@ -1054,6 +1054,7 @@
         "syllable_crosscheck": true,
         "difficult_word_crosscheck": true,
         "formula_aggregate": true,
+        "pystylometry_canonical_segmentation": true,
         "textstat_locale_formulas": false,
         "pystylometry_gunning_fog": false
       },
@@ -1066,8 +1067,10 @@
       "_requires_syllable_crosscheck": "needs the 'pronouncing' package (pip install pronouncing; pulls in cmudict) for real CMU Pronouncing Dictionary syllable counts. Without it, both nlp.readability_syllable_disagreement_rate_* findings report 'unavailable'. The textstat side of the comparison additionally needs 'textstat' (see above); without it only the textstat-vs-cmudict finding is unavailable, not the core-heuristic-vs-cmudict one.",
       "_requires_difficult_word_crosscheck": "needs BOTH 'textstat' and 'pystylometry' (see above) for their two independently bundled difficult/familiar-word lists. Without either, nlp.readability_difficult_word_list_overlap reports 'unavailable'.",
       "_requires_formula_aggregate": "needs at least two of this run's same-US-grade-scale formula findings to have actually produced a number (word count at or above 100, and at least one of textstat_formulas/readability_metrics_formulas/pystylometry_formulas enabled). Below that, the four nlp.readability_formula_grade_* summary findings are simply not emitted -- there is nothing to summarize -- rather than reporting a misleading single-formula \"aggregate\".",
+      "_requires_pystylometry_canonical_segmentation": "needs the 'pystylometry' package (see _requires_pystylometry_formulas above). On by default: pystylometry's own regex sentence splitter merges most dialogue sentences on real prose (verified on Alice in Wonderland: 513 sentences against a canonical 1,459), silently inflating every sentence-length-based formula it computes; this re-runs those formulas over text rebuilt from TextGrader's own canonical sentence boundaries as a directly comparable cross-check, reported under separate nlp.readability_*_pystylometry_canonical_seg ids (the raw, library-native-segmentation ids are unchanged). Without the package, every canonical-seg finding reports 'unavailable' the same way its raw counterpart does.",
       "syllable_max_unique_words": 20000,
-      "max_evidence": 20
+      "max_evidence": 20,
+      "segmentation_tolerance": 0.1
     }
   },
   "allow_external_metric_commands": false,

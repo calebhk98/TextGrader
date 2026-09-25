@@ -67,6 +67,29 @@ LIX_EXPECTED = 9 / 1 + 100 * 1 / 9
 
 TINY_TEXT = "A small dog ran across the quiet yard and barked twice."  # 11 words
 
+# Reproduces, on a small fixture, the real bug found on Alice in Wonderland
+# (26,539 canonical words, 1,459 canonical sentences): pystylometry's regex
+# sentence splitter (pystylometry._utils.split_sentences) requires an
+# immediate capital Latin letter after each sentence-final [.!?]+, so a
+# sentence that opens on a curly quotation mark defeats it, and the
+# splitter silently merges it with the sentence before. A fixture of ONLY
+# dialogue does not reproduce this: pystylometry's own fallback path
+# ("if len(result) <= 1: use a simpler split") fires instead and happens to
+# get it right by coincidence. Narration sentences (which split correctly,
+# since a capital letter does follow) have to be mixed in, exactly as in
+# real prose, so the primary (flawed) regex is the one actually used, and
+# only the dialogue-adjacent boundaries are lost. Verified directly before
+# writing this fixture: pystylometry counts 24 sentences here against a
+# canonical 40 (a 0.6x ratio, outside any reasonable tolerance) -- close in
+# kind, if not in exact magnitude, to Alice's own 513-vs-1,459 (0.35x).
+DIALOGUE_TEXT = (
+    "Alice sat by the river. She was very bored indeed. "
+    "“Come here,” she said. “Now!” cried the White Rabbit. "
+    "The day was warm and bright. Alice looked around slowly. "
+    "“Where are you going?” asked the boy. “Nowhere special,” she answered softly. "
+    "The garden was full of flowers. Everyone seemed happy today. "
+) * 4
+
 # Every readability-formula number this suite produces comes from an optional
 # package (textstat, py-readability-metrics, pronouncing, pystylometry).
 # ``TEXTGRADER_DISABLE_OPTIONAL=all`` (the project's documented way to
@@ -252,6 +275,105 @@ def test_syllable_disagreement_rate_is_a_bounded_percent():
     textstat_item = _findings(ACADEMIC_TEXT)[
         f"{m.PREFIX}syllable_disagreement_rate_textstat_vs_cmudict"]
     assert 0.0 <= textstat_item["value"] <= 100.0
+
+
+# ------------------------------------------------------- segmentation diagnostics
+
+@requires_libraries
+def test_pystylometry_sentence_merging_is_caught_on_dialogue_prose():
+    """Reproduces the real bug found on Alice in Wonderland (see the fixture
+    docstring above) on a small, hand-checked example: pystylometry's own
+    (raw) sentence count diverges sharply from canonical, its
+    canonical-segmentation counterpart matches it, and every one of these
+    numbers is visible in the finding's own distribution rather than only
+    showing up as an unexplained outlier in the grade value.
+    """
+
+    found = _findings(DIALOGUE_TEXT)
+    canonical_sentences = DocumentAnalysis.from_text(DIALOGUE_TEXT).sentence_count
+
+    raw = found[f"{m.PREFIX}ari_pystylometry"]
+    raw_ratio = raw["distribution"]["sentence_count_ratio_vs_canonical"]
+    assert raw["distribution"]["canonical_sentence_count"] == canonical_sentences
+    assert raw["distribution"]["library_sentence_count"] < canonical_sentences
+    assert raw_ratio < 0.9, "the raw pystylometry sentence count should diverge sharply here"
+
+    canonical_seg = found[f"{m.PREFIX}ari_pystylometry_canonical_seg"]
+    canonical_ratio = canonical_seg["distribution"]["sentence_count_ratio_vs_canonical"]
+    assert canonical_seg["distribution"]["library_sentence_count"] == canonical_sentences
+    assert canonical_ratio == pytest.approx(1.0)
+
+    # The formula VALUES must actually differ too -- the merged-sentence
+    # version is not merely flagged, it is a materially different number.
+    assert raw["value"] != canonical_seg["value"]
+
+
+@requires_libraries
+def test_pystylometry_sentence_merging_excludes_it_from_the_trusted_aggregate():
+    found = _findings(DIALOGUE_TEXT)
+    mean_item = found[f"{m.PREFIX}formula_grade_mean"]
+    excluded = mean_item["distribution"]["excluded_formula_ids"]
+    assert "pystylometry_ari" in excluded
+    # The canonical-segmentation counterpart, having matched canonical
+    # sentence-for-sentence, must be trusted and therefore included.
+    assert "pystylometry_canonical_seg_ari" in mean_item["distribution"]["formula_ids"]
+    assert "pystylometry_canonical_seg_ari" not in excluded
+
+
+@requires_libraries
+def test_formula_grade_spread_raw_keeps_the_full_disagreement_visible():
+    found = _findings(DIALOGUE_TEXT)
+    trusted_spread = found[f"{m.PREFIX}formula_grade_spread"]["value"]
+    raw_spread = found[f"{m.PREFIX}formula_grade_spread_raw"]["value"]
+    # The unfiltered spread must be at least as large as the trust-filtered
+    # one, since the trusted set is always a subset of every grade-scale
+    # value produced this run.
+    assert raw_spread >= trusted_spread
+    assert raw_spread > 0 and trusted_spread >= 0
+
+
+@requires_libraries
+def test_textstat_and_readability_metrics_segmentation_is_recorded_even_when_close():
+    # textstat/py-readability-metrics do not have pystylometry's bug, but
+    # every finding -- theirs included -- must still carry the same
+    # segmentation diagnostics, per the fix: a reader should never have to
+    # guess whether a library's sentence count was even checked.
+    found = _findings(ACADEMIC_TEXT)
+    canonical_sentences = DocumentAnalysis.from_text(ACADEMIC_TEXT).sentence_count
+    canonical_words = DocumentAnalysis.from_text(ACADEMIC_TEXT).word_count
+    for mid in (f"{m.PREFIX}fk_textstat", f"{m.PREFIX}fk_readability_metrics"):
+        dist = found[mid]["distribution"]
+        assert dist["canonical_sentence_count"] == canonical_sentences
+        assert dist["canonical_word_count"] == canonical_words
+        assert dist["library_sentence_count"] is not None
+        assert dist["library_word_count"] is not None
+        assert "sentence_count_ratio_vs_canonical" in dist
+        assert "words_per_sentence_ratio_vs_canonical" in dist
+
+
+@requires_libraries
+def test_forcast_has_no_sentence_count_and_is_never_excluded():
+    # FORCAST's formula never touches sentence length, so it has nothing to
+    # distrust regardless of how badly a document's dialogue confuses a
+    # sentence splitter, and must always be pooled into the trusted aggregate.
+    found = _findings(DIALOGUE_TEXT)
+    forcast = found[f"{m.PREFIX}forcast_pystylometry"]
+    assert forcast["distribution"].get("library_sentence_count") is None
+    mean_item = found[f"{m.PREFIX}formula_grade_mean"]
+    assert "pystylometry_forcast" in mean_item["distribution"]["formula_ids"]
+    assert "pystylometry_forcast" not in mean_item["distribution"]["excluded_formula_ids"]
+
+
+@requires_libraries
+def test_canonical_segmentation_toggle_removes_its_own_ids_only():
+    with_canonical = _findings(ACADEMIC_TEXT)
+    assert f"{m.PREFIX}ari_pystylometry_canonical_seg" in with_canonical
+    assert f"{m.PREFIX}ari_pystylometry" in with_canonical
+
+    without_canonical = _findings(
+        ACADEMIC_TEXT, config={"features": {"pystylometry_canonical_segmentation": False}})
+    assert f"{m.PREFIX}ari_pystylometry_canonical_seg" not in without_canonical
+    assert f"{m.PREFIX}ari_pystylometry" in without_canonical
 
 
 # ------------------------------------------------------------ minimum-size floor
