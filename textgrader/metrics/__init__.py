@@ -1245,6 +1245,59 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "max_findings cap with a deterministic (sorted-name) selection rule bound the "
                   "output; a crashing or NaN-producing extractor degrades only its own findings. "
                   "Off by default; experimental."),
+    _spec("nonlinear_dynamics_suite", "nonlinear_dynamics_suite", "book_drift", "moderate",
+          defaults={
+              "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
+              "feature_groups": [
+                  "rqa_recurrence_rate", "rqa_threshold", "rqa_determinism",
+                  "rqa_avg_diagonal_length", "rqa_longest_diagonal_line", "rqa_diagonal_entropy",
+                  "rqa_laminarity", "rqa_trapping_time", "rqa_longest_vertical_line",
+                  "rqa_recurrence_time", "rqa_trend",
+              ],
+              "embedding_dimension": 2,
+              "time_delay": 1,
+              "theiler_window": 1,
+              "min_diagonal_length": 2,
+              "min_vertical_length": 2,
+              "threshold_mode": "target_rr",
+              "target_recurrence_rate": 0.05,
+              "threshold_std_fraction": 0.1,
+              "max_series_points": 1500,
+              "sampling_seed": 42,
+              "rqa_min_embedded_points": 30,
+              "trend_edge_margin_fraction": 0.1,
+              "lyapunov_min_length": 200,
+              "higuchi_kmax": 10,
+              "permutation_order": 3,
+              "fuzzy_entropy_m": 2,
+              "dispersion_entropy_c": 4,
+              "window_words": 2000,
+              "language": "en",
+              "embedding_model": "all-MiniLM-L6-v2",
+              "topic_n_topics": 4,
+              "topic_model": "nmf",
+              "topic_random_state": 42,
+              "topic_max_features": 2000,
+              "min_lengths": {},
+              "max_findings": 200,
+          },
+          summary="Experimental recurrence-quantification and nonlinear-dynamics suite over the "
+                  "same named sequences as timeseries_suite: a numpy-only recurrence "
+                  "quantification analysis core (recurrence rate, the chosen recurrence "
+                  "threshold in units of the series' own SD -- the real cross-book measurement "
+                  "under the default target-recurrence-rate threshold mode, where recurrence "
+                  "rate itself is fixed by construction --, determinism, average/longest "
+                  "diagonal line, diagonal-line entropy, laminarity, trapping time, longest "
+                  "vertical line, recurrence time and TREND nonstationarity), each sharing one "
+                  "capped, deterministically-sampled recurrence matrix; an off-by-default PyRQA/"
+                  "OpenCL cross-check (unavailable in a container with no OpenCL platform, "
+                  "reporting the exact error); and independent nolds/antropy/EntropyHub/ordpy "
+                  "estimators (Hurst, DFA, Lyapunov, correlation and fractal dimension, sample/"
+                  "approximate/fuzzy/dispersion entropy, Lempel-Ziv complexity, permutation "
+                  "entropy and ordinal statistical complexity), each naming the existing metric "
+                  "id it cross-checks where one exists. Embedding dimension, delay, threshold "
+                  "and the sampling strategy are explicit, reported settings. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

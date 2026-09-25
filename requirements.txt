@@ -424,3 +424,29 @@ poesy>=0.4
 # `pip install --dry-run datasets` showed no downgrade to numpy/scipy/
 # scikit-learn/torch/transformers/spacy in this project's environment.
 datasets>=2.14
+# Recurrence-plot/RQA computation for nonlinear_dynamics_suite's off-by-default
+# "pyrqa_crosscheck" feature. Pure-Python sdist (no C extension anywhere in
+# its source tree; pip builds a py3-none-any wheel locally with no compiler
+# invoked) pulling in pyopencl/Mako/pytools/siphash24, every one a manylinux
+# or pure-Python wheel -- confirmed with `pip download --no-deps
+# --only-binary=:all:` for each. Needs a real OpenCL platform to actually run
+# a computation, which this project's own container does not have (see
+# config.json's _requires_pyrqa_crosscheck note); RQA's own core measures are
+# implemented directly in numpy as the default backend instead.
+pyrqa>=8.1
+# Hurst/DFA/Lyapunov/correlation-dimension nonlinear-dynamics estimators for
+# nonlinear_dynamics_suite's off-by-default "*_nolds" features, independent
+# of this codebase's own timeseries_suite hurst/dfa implementations. Needs
+# textgrader.optional.shim_nolds_resources before import (see that function's
+# docstring for the real Python-3.11 packaging bug it works around).
+nolds>=0.6
+# Fractal-dimension/entropy/Lempel-Ziv cross-checks for
+# nonlinear_dynamics_suite's off-by-default "*_antropy" features.
+antropy>=0.2
+# Fuzzy/dispersion entropy estimators for nonlinear_dynamics_suite's
+# off-by-default "*_entropyhub" features. Imports as "EntropyHub"
+# (case-sensitive).
+EntropyHub>=2.0
+# Ordinal-pattern permutation entropy and statistical complexity for
+# nonlinear_dynamics_suite's off-by-default "*_ordpy" features.
+ordpy>=1.2
