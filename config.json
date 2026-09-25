@@ -1043,6 +1043,36 @@
       "topic_profile_paragraph_word_cap": 300,
       "topic_profile_max_terms": 250,
       "hdp_iterations": 200
+    },
+    "prosody_suite": {
+      "enabled": false,
+      "features": {
+        "line_stanza_structure": true,
+        "meter_stress": true,
+        "rhyme": true,
+        "near_rhyme_feature": true,
+        "phonological_patterning": true,
+        "g2p_fallback": false,
+        "phonemizer_backend": false,
+        "poesy_crosscheck": false
+      },
+      "_requires_meter_stress": "features.meter_stress (and rhyme/phonological_patterning below) need the 'pronouncing' package (pip install pronouncing; pulls in the 'cmudict' package, the actual CMU Pronouncing Dictionary), a plain dictionary lookup with no network call at grading time. Without it, rhythm.prosody_pronunciation_coverage falls back to whatever features.g2p_fallback can resolve (nothing, by default), and every meter/stress metric id reports 'unavailable' naming the missing package.",
+      "_requires_g2p_fallback": "features.g2p_fallback (off by default) needs the 'g2p_en' package for out-of-vocabulary grapheme-to-phoneme fallback. Its inference model is a small NumPy network loaded from a checkpoint bundled inside the wheel (no torch, no download at inference time), but importing g2p_en downloads two NLTK corpora on first use (averaged_perceptron_tagger, its own private cmudict copy) -- a real, unconditional network action, which is why this flag defaults to false rather than only gating a slow feature. Behind a proxy, set NLTK_ALLOW_PROXIED_URLOPEN=1 first. Without it, words outside CMUdict (proper nouns, invented names, archaic spellings) stay unresolved and are excluded from every stress/rhyme/phonological finding, which rhythm.prosody_pronunciation_coverage reports explicitly rather than silently.",
+      "_requires_near_rhyme_feature": "features.near_rhyme_feature (on by default) needs 'panphon' (pip install panphon) for feature-based near-rhyme similarity. Lightweight: bundled data tables, no model download, no network call. PanPhon works on IPA, not ARPABET, so textgrader/prosody.py bridges CMUdict/g2p ARPABET output through a standard ARPABET-to-IPA table before calling PanPhon's weighted feature-edit distance. Without panphon, rhythm.prosody_feature_rhyme_similarity reports 'unavailable' naming the missing package; the suite's other exact-rhyme and ARPABET-edit-distance near-rhyme findings are unaffected (they are dependency-free beyond the pronunciation lookup itself).",
+      "_requires_phonemizer_backend": "features.phonemizer_backend (off by default) needs the 'phonemizer' package PLUS the SYSTEM espeak/espeak-ng binary (e.g. apt-get install espeak-ng) as its actual grapheme-to-phoneme engine -- not a pip package, and not installable by this project. Without the binary, phonemizer's EspeakBackend raises 'RuntimeError: espeak not installed on your system' (reproduced verbatim in this environment), and rhythm.prosody_phonemizer_backend_agreement reports 'unavailable' quoting that error; every other channel in this suite is unaffected, since this is the ONLY channel that needs espeak directly.",
+      "_requires_poesy_crosscheck": "features.poesy_crosscheck (off by default) needs the 'poesy' package (pip install poesy), which as of poesy>=0.4 is, by its own module docstring, a thin compatibility layer over prosodic v3 -- so this single package covers both 'Poesy' and 'Prosodic' from the task's library table. Verified for real WITHOUT espeak installed: scanning a real sonnet (CMUdict-covered vocabulary) correctly returned meter_type_scheme='iambic', beat_scheme=(5,4,4,5) and rhyme scheme ('Alternating A','abab') at 0.5 accuracy -- espeak is needed only for prosodic's own out-of-vocabulary fallback, the same role g2p_fallback plays for this suite's primary engine. Bounded to poesy_max_lines lines and poesy_max_seconds of wall time because its per-line scan is combinatorial in stress ambiguity (measured: about 6 seconds for 60 lines in this environment); a scan that exceeds the time budget reports 'unavailable' naming that, rather than silently returning a partial result. Without the package, rhythm.prosody_poesy_meter_agreement and rhythm.prosody_poesy_rhyme_scheme_accuracy report 'unavailable' naming it; every other channel in this suite is a fully independent implementation and is unaffected.",
+      "_max_lines_analyzed_note": "Every line/stanza/meter/rhyme/phonological finding except the two raw counts (rhythm.prosody_line_count, rhythm.prosody_nonblank_line_count, which always report the TRUE whole-document total) is computed from an evenly spread sample bounded by BOTH max_lines_analyzed (line count) and max_words_analyzed (total words in the sampled lines), stride-sampled across the whole document rather than truncated to the opening so no distribution is biased toward chapter one. Both caps are needed: after textgrader/prosody.py's hard-wrap-rejoining fix (see that module's docstring), a 'line' can be a whole paragraph, so a line-count cap alone can still admit tens of thousands of words. A real poem is never affected (2,000 lines / 30,000 words are far above any real poem's size); a whole novel, whose 'lines' degenerate to one per paragraph, is. Measured on gutenberg-514-little-women.txt (186,000 words, about 6,400 nonblank paragraph-lines after hard-wrap rejoining): unbounded, this suite's default config took 49.6 seconds, driven mostly by PanPhon's feature-based near-rhyme channel re-computing the same common word-ending pairs tens of thousands of times; with the line cap, near_rhyme_feature_max_pairs and a process-wide PanPhon similarity cache alone it fell to 3.2 seconds, but the hard-wrap fix (a real correctness improvement, not a regression) pushed it back to about 13.7 seconds since 2,000 paragraphs is tens of thousands of words; adding the max_words_analyzed cap brings it back to about 3.0 seconds. rhythm.prosody_pronunciation_coverage's distribution reports lines_analyzed/lines_total/sampled so a reader can see exactly how much of the document each other finding actually covers.",
+      "rhyme_lookback_lines": 4,
+      "rhyme_scheme_group_size": 4,
+      "internal_rhyme_min_word_length": 3,
+      "near_rhyme_feature_max_pairs": 3000,
+      "sound_pattern_window_words": 3,
+      "content_min_word_length": 3,
+      "phonemizer_sample_words": 40,
+      "poesy_max_lines": 40,
+      "poesy_max_seconds": 20.0,
+      "max_lines_analyzed": 2000,
+      "max_words_analyzed": 30000
     }
   },
   "allow_external_metric_commands": false,

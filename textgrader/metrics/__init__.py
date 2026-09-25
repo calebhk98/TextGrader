@@ -920,6 +920,45 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "profile cache, never on the graded text; and explicit cross-representation "
                   "disagreement (rank correlation, single-representation and consensus "
                   "low-coherence flags). Off by default; experimental."),
+    _spec("prosody_suite", "prosody_suite", "prosody", "moderate",
+          requires=("pronouncing", "g2p_en", "panphon", "phonemizer", "poesy"),
+          defaults={
+              "features": {
+                  "line_stanza_structure": True, "meter_stress": True, "rhyme": True,
+                  "near_rhyme_feature": True, "phonological_patterning": True,
+                  "g2p_fallback": False, "phonemizer_backend": False,
+                  "poesy_crosscheck": False,
+              },
+              "rhyme_lookback_lines": 4,
+              "rhyme_scheme_group_size": 4,
+              "internal_rhyme_min_word_length": 3,
+              "near_rhyme_feature_max_pairs": 3000,
+              "sound_pattern_window_words": 3,
+              "content_min_word_length": 3,
+              "phonemizer_sample_words": 40,
+              "poesy_max_lines": 40,
+              "poesy_max_seconds": 20.0,
+              "max_lines_analyzed": 2000,
+              "max_words_analyzed": 30000,
+          },
+          summary="Experimental poetry/prosody suite: physical line and stanza structure read "
+                  "straight off the canonical (pre-paragraph-join) text -- words/syllables per "
+                  "line, line-length CV/entropy, stanza symmetry, repeated line-length patterns "
+                  "and an enjambment proxy; a hand-rolled meter/stress scan (dominant foot, "
+                  "conformity, deviation, feet/line, stress entropy and periodicity) over "
+                  "CMUdict pronunciation with an off-by-default g2p_en fallback for "
+                  "out-of-vocabulary words; three DELIBERATELY separate rhyme channels (exact "
+                  "rhyme/near-rhyme by ARPABET edit distance, and an on-by-default PanPhon "
+                  "articulatory-feature similarity), rhyme-scheme regularity, rhyme-class "
+                  "entropy, internal rhyme and rhyme-recurrence distance; phoneme entropy, "
+                  "vowel/consonant balance, alliteration/assonance/consonance density and "
+                  "phoneme-bigram repetition; plus two off-by-default cross-checks, a "
+                  "phonemizer/espeak second pronunciation backend and a bounded Poesy/Prosodic "
+                  "real meter+rhyme-scheme scan. Pronunciation coverage (CMUdict vs g2p vs "
+                  "unresolved) is always reported alongside every phonology-dependent finding. "
+                  "Runs on prose too, as an experimental cadence/sound-texture probe -- free "
+                  "verse and prose are never force-fit into a meter. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

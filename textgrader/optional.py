@@ -377,6 +377,59 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # cleanly (pip install --dry-run showed no downgrade of numpy/scipy) and
     # exercised for real (HDPModel.add_doc/.train/.infer) before use.
     "tomotopy": ("tomotopy", "pip install tomotopy"),
+    # CMU Pronouncing Dictionary lookup for textgrader.prosody's pronunciation
+    # cache (prosody_suite's meter/rhyme/phonological-pattern channels, and
+    # Task 20's stress_sequence). Verified for real: phones_for_word("rhyme")
+    # returns ['R AY1 M']. Depends on the "cmudict" package (its own
+    # ``Requires:`` line), which is therefore never imported separately by
+    # this codebase -- see textgrader/prosody.py's module docstring.
+    "pronouncing": ("pronouncing", "pip install pronouncing"),
+    # Grapheme-to-phoneme fallback for words CMUdict does not have, used by
+    # textgrader.prosody's "use_g2p_fallback" setting (off by default).
+    # Verified for real: G2p()("Zylnthar") returns syllabified, stress-marked
+    # ARPABET for an invented word. Its inference model is a small NumPy
+    # network loaded from a checkpoint BUNDLED inside the wheel -- no torch,
+    # no download at inference time -- but importing it unconditionally
+    # downloads two NLTK corpora on first use (averaged_perceptron_tagger,
+    # its own private cmudict copy); see textgrader/prosody.py's module
+    # docstring for why that keeps this fallback off by default rather than
+    # keeping it out of PACKAGES.
+    "g2p_en": ("g2p_en", "pip install g2p-en (also downloads NLTK's "
+                        "averaged_perceptron_tagger and cmudict corpora on first import; "
+                        "behind a proxy set NLTK_ALLOW_PROXIED_URLOPEN=1)"),
+    # Phonological feature vectors/distances for prosody_suite's feature-based
+    # near-rhyme channel, kept independent of exact-rhyme and ARPABET-edit-
+    # distance near-rhyme (see that module's docstring). Imports the
+    # ``panphon.distance`` submodule directly since that is the only part
+    # used. Verified for real: Distance().feature_edit_distance(...) runs
+    # against real IPA strings; see textgrader/prosody.py's module docstring
+    # for the ARPABET-to-IPA bridge this needs (PanPhon itself ships none).
+    "panphon": ("panphon.distance", "pip install panphon"),
+    # A second pronunciation/IPA backend for prosody_suite's off-by-default
+    # "phonemizer_backend" feature. Needs the SYSTEM espeak/espeak-ng binary
+    # (not a pip package) as its actual G2P engine; this sandbox has neither
+    # installed and has no permission to install system packages, so
+    # constructing EspeakBackend("en-us") raises the exact, quoted
+    # "RuntimeError: espeak not installed on your system" this codebase
+    # reports back verbatim -- see textgrader/prosody.py's module docstring
+    # and PHONEMIZER_MISSING_HINT.
+    "phonemizer": ("phonemizer", "pip install phonemizer (also needs the SYSTEM "
+                                 "espeak-ng package, e.g. apt-get install espeak-ng -- not "
+                                 "installable via pip)"),
+    # Real meter-scansion and rhyme-scheme classification for prosody_suite's
+    # off-by-default "poesy_crosscheck" feature, a second, independent
+    # implementation kept beside (never averaged with) this suite's own
+    # hand-rolled meter/rhyme channels. As of poesy>=0.4 this package is, by
+    # its own module docstring, "a thin compatibility layer over prosodic v3"
+    # -- so importing it also gives Prosodic's real engine, not a
+    # reimplementation; see textgrader/prosody.py's module docstring for why
+    # this codebase treats "Poesy" and "Prosodic" as the one optional
+    # package, and for the real, verified-working (CMUdict-only, no espeak
+    # needed) Sonnet 18 scan this environment reproduced. Bounded to a small
+    # sample of lines (poesy_max_lines/poesy_max_seconds) because its
+    # per-line scan is combinatorial in stress ambiguity -- measured at about
+    # 6 seconds for 60 lines in this environment.
+    "poesy": ("poesy", "pip install poesy"),
 }
 
 _lock = threading.Lock()

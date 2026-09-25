@@ -316,3 +316,33 @@ gensim>=4.3
 # project's task table names first for this role, is explicitly out of scope:
 # it is a Java program, and this project is Python-only. Torch-free.
 tomotopy>=0.12
+
+# Poetry/prosody suite (prosody_suite): pronunciation lookup, meter/stress,
+# rhyme and phonological-pattern analysis. All five packages below are
+# torch-free and confirmed installing cleanly against this project's pinned
+# numpy/scipy/scikit-learn (pip install --dry-run showed no downgrade); see
+# textgrader/prosody.py's module docstring for how each was verified for
+# real and textgrader/optional.py's PACKAGES entries for per-package detail.
+#
+# CMU Pronouncing Dictionary lookup (the suite's primary, always-tried
+# pronunciation backend). Depends on the "cmudict" package itself.
+pronouncing>=0.2
+# Out-of-vocabulary grapheme-to-phoneme fallback (features.g2p_fallback, off
+# by default -- importing it downloads two small NLTK corpora on first use;
+# see config.json's _requires_g2p_fallback note).
+g2p-en>=2.1
+# Phonological feature vectors/distances for feature-based near-rhyme
+# (features.near_rhyme_feature, on by default; bundled data tables, no
+# model download).
+panphon>=0.20
+# A second, independent pronunciation/IPA backend (features.phonemizer_backend,
+# off by default -- needs the SYSTEM espeak/espeak-ng binary, not installable
+# via pip; see config.json's _requires_phonemizer_backend note).
+phonemizer>=3.0
+# Real meter-scansion and rhyme-scheme classification (features.poesy_crosscheck,
+# off by default and bounded). As of poesy>=0.4 this package is itself "a thin
+# compatibility layer over prosodic v3" (its own module docstring), so it also
+# covers "Prosodic" from the task's library table; see textgrader/prosody.py's
+# module docstring for the real Sonnet-18 scan this environment reproduced
+# without espeak. Pulls in prosodic itself as a dependency.
+poesy>=0.4
