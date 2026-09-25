@@ -198,6 +198,24 @@ is the same 50 books. Rebuild both from a shelf that matches what you write:
 percentiles are only as relevant as the corpus they come from, and this one is
 general English-language fiction weighted to the 19th and early 20th century.
 
+### Several reference profiles
+
+`corpus_profile` stays the primary reference. A `reference_profiles` block in
+`config.json` adds more, each graded against separately with the same
+safeguards (text processing, metric definitions, Lexile source, comparison
+unit), so a text gets one percentile per profile instead of a forced genre:
+
+```json
+"reference_profiles": {
+  "news": {"path": "profiles/brown_news.json", "label": "Brown news", "genre": "news"}
+}
+```
+
+`corpus_builder/dataset_adapters.py` builds corpus folders from openly
+licensed sets pinned to a version (Brown by category, Reuters, Universal
+Dependencies EWT and GUM, LitBank, WikiText); `corpus_builder/README.md` has
+the commands and the recipes for licensed sets it never downloads.
+
 Ten of the twelve children's classics the Lexile coefficients in
 `core_metrics.lexile` were fitted against are in it, so the docstring's
 calibration claim can be checked against the shipped corpus rather than taken
@@ -361,6 +379,7 @@ of it, so a slow run always says what was slow.
 | --- | --- | --- | --- | --- |
 | `change_points` | moderate | ruptures | no | Where the style changes abruptly. |
 | `chapter_zscores` | moderate | - | no | Which section looks unlike the rest of this book, and on which measures. |
+| `nonlinear_dynamics_suite` | moderate | numpy (nolds, antropy, EntropyHub, ordpy, pyrqa optional) | no | Recurrence quantification (determinism, laminarity, diagonal and vertical lines, trapping time, trend, and the recurrence threshold that had to be chosen) over capped, seeded samples of any registered sequence, plus independent library estimators of fractal dimension, Lyapunov exponent and entropy. |
 | `rolling_drift` | moderate | - | no | Gradual style drift from the opening to the close. |
 
 ### authorial
@@ -387,8 +406,11 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `anomaly_suite` | moderate | scikit-learn, pyod, hdbscan | no | Fifteen multivariate anomaly detectors over the document's core-metric vector against the corpus, each reported on its own, plus a consensus count and a cross-detector disagreement score. |
+| `automatic_feature_generation` | moderate | tsfresh, pycatch22 | no | Bulk features from every registered sequence in three modes: minimal (ten summary statistics, the default), standard (plus catch22 and a small tsfresh set) and comprehensive (tsfresh's full set, capped), under stable ids. |
 | `distribution_distance_suite` | moderate | scipy | no | A two-sample distance battery (Wasserstein, energy, KS, Cramer-von Mises, Anderson-Darling, Jensen-Shannon, KL, Hellinger, MMD, tail mismatch and more) against the corpus's pooled sentence, paragraph, word and turn distributions, each distance kept apart from any p-value. |
+| `metric_relationships` | moderate | - | no | Where normally related metrics disagree: residuals and standardized disagreement for pairs discovered in the reference corpus (leaving the graded book out) or configured, including when both values are individually ordinary. |
 | `distribution_shape` | fast | - | yes | The text's sentence, paragraph, word and turn distributions held against the corpus's pooled ones. |
+| `reference_fit` | moderate | - | no | One fit score per configured reference profile (see Several reference profiles), the nearest and second-nearest profile with their margin, and a leave-one-out check that says when a profile is too scattered to trust. |
 
 Every switch in the `*_suite` rows above is off by default, and each one
 takes a `features` map (or, for `timeseries_suite`, separate `sequences` and
