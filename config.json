@@ -1358,6 +1358,48 @@
       "_requires_fractal_entropy_lz_antropy": "feature_groups entries 'higuchi_fd_antropy'/'petrosian_fd_antropy'/'sample_entropy_antropy'/'approximate_entropy_antropy'/'lz_complexity_antropy' (all off by default) need the 'antropy' package (pip install antropy). Without it, each of these five findings reports 'unavailable'.",
       "_requires_permutation_ordinal_ordpy": "feature_groups entries 'permutation_entropy_ordpy'/'ordinal_complexity_ordpy' (off by default) need the 'ordpy' package (pip install ordpy). Without it, both findings report 'unavailable'.",
       "_requires_fuzzy_dispersion_entropyhub": "feature_groups entries 'fuzzy_entropy_entropyhub'/'dispersion_entropy_entropyhub' (off by default) need the 'EntropyHub' package (pip install EntropyHub; imports as 'EntropyHub', case-sensitive). Without it, both findings report 'unavailable'."
+    },
+    "metric_relationships": {
+      "enabled": false,
+      "features": {
+        "disagreement": true,
+        "residual": true,
+        "symmetric": true,
+        "multivariate": true,
+        "percentile_counts": true,
+        "max_severity": true,
+        "topk_severity": true,
+        "pca_diagnostic": true,
+        "bootstrap_stability": true,
+        "loo_stability": true,
+        "mutual_information": true,
+        "partial_correlation": true,
+        "distance_correlation": true
+      },
+      "_requires_none": "This suite needs no optional package at all: correlation, regression, distance correlation, mutual information and PCA are all implemented in pure Python in textgrader/relationships.py (see that module's docstring for why dcor/pingouin/hyppo/statsmodels were not added). Every feature flag above only turns a channel on or off; none of them gate on package availability.",
+      "discover_min_abs_spearman": 0.7,
+      "identity_abs_spearman": 0.99,
+      "_identity_abs_spearman_note": "A DISCOVERED pair (never a configured one) at or above this Spearman correlation is treated as two measurements of the same underlying thing -- a rate and its complement, the same count reported under two metric ids -- rather than a genuine relationship: its residual is about zero forever and would otherwise spend one of max_pairs's slots on a finding with nothing to say. Such a pair is never hidden -- it is listed in style.relationship_pca_diagnostic's distribution.near_identities instead of becoming its own residual/disagreement finding.",
+      "pairs": [
+        ["subord", "sttr"],
+        ["fk", "lexical.word_zipf"],
+        ["semantic.structure_bm25_centroid_relatedness", "top100"],
+        ["slcv", "rhythm.paragraph_words_cv"]
+      ],
+      "_pairs_note": "[target, predictor] pairs kept regardless of their corpus correlation strength, so the task spec's own named cross-family examples are always evaluated when the corpus profile has both columns: syntax complexity given vocabulary sophistication, readability given lexical rarity, semantic coherence given lexical overlap, and sentence-length variation given paragraph variation. A pair whose corpus source metric is missing (an optional suite that was not enabled when the corpus profile was built, or that this document simply did not measure) reports 'unavailable' for that pair only; every other configured/discovered pair is unaffected. Unlike auto-discovery, a configured pair is attempted even if this document never measured one of its two sides.",
+      "_discovery_note": "Auto-discovery (never configured pairs) is restricted to metric ids THIS document itself has a measured value for. A corpus profile carries every suite that was ever profiled, including ones off by default on an ordinary grading run; without this restriction, discovery would spend max_pairs's slots on pairs that can only ever come out 'unavailable' on a typical run.",
+      "groups": {
+        "wpp": ["wps", "spp"]
+      },
+      "_groups_note": "target metric id -> list of predictor metric ids, for a multivariate residual. The default is the task spec's own required example: words-per-paragraph given BOTH words-per-sentence AND sentences-per-paragraph.",
+      "max_pairs": 12,
+      "min_joint_coverage": 0.7,
+      "bootstrap_samples": 200,
+      "seed": 0,
+      "top_k": 3,
+      "max_candidate_metrics": 120,
+      "min_corpus_documents": 12,
+      "distance_sample_cap": 200
     }
   },
   "allow_external_metric_commands": false,
