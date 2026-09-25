@@ -920,6 +920,59 @@ REGISTRY: dict[str, MetricSpec] = dict([
                   "profile cache, never on the graded text; and explicit cross-representation "
                   "disagreement (rank correlation, single-representation and consensus "
                   "low-coherence flags). Off by default; experimental."),
+
+    _spec("reuse_suite", "reuse_suite", "repetition", "moderate",
+          requires=("datasketch", "rapidfuzz", "levenshtein", "jellyfish", "textdistance",
+                   "simhash", "tlsh", "ppdeep", "ahocorasick"),
+          defaults={
+              "features": {
+                  "sentence_level": True, "paragraph_level": True, "simhash": True,
+                  "edit_distance_family": True, "textdistance_crosscheck": True, "tlsh": True,
+                  "ssdeep": True, "longest_repeated_run": True, "longest_approximate_run": True,
+                  "template_motifs": True, "view_normalized": True, "view_function_words": True,
+                  "view_stopwords": True, "view_punctuation": True, "view_word_shape": True,
+                  "view_content_words": True, "view_lemma": False, "view_pos": False,
+                  "view_dependency": False,
+              },
+              "shingle_size": 3,
+              "minhash_num_perm": 32,
+              "minhash_seed": 1,
+              "candidate_threshold": 0.3,
+              "near_duplicate_threshold": 0.7,
+              "near_duplicate_thresholds": [0.6, 0.7, 0.8, 0.9],
+              "max_candidates_per_item": 20,
+              "max_sentences": 20000,
+              "max_paragraphs": 8000,
+              "min_tlsh_chars": 300,
+              "min_ssdeep_chars": 200,
+              "approx_window_tokens": 8,
+              "approx_stride_tokens": 4,
+              "approx_similarity_threshold": 80.0,
+              "approx_max_windows": 20000,
+              "approx_extend_step": 4,
+              "template_motif_window": 5,
+              "template_motif_min_count": 3,
+              "simhash_shingle_size": 4,
+              "simhash_index_k": 3,
+          },
+          summary="Experimental approximate-duplication, fuzzy-reuse, structural-reuse and "
+                  "motif-detection suite: exact/near-duplicate sentence and paragraph rates via "
+                  "candidate-bounded MinHash/LSH (never all-pairs), SimHash Hamming-distance "
+                  "nearest neighbors, TLSH/ssdeep(ppdeep) fuzzy-hash similarity for longer "
+                  "blocks, normalized Levenshtein/Jaro-Winkler/token-set/token-sort fuzzy "
+                  "similarity and a Sorensen-Dice cross-check over the same candidate pairs, "
+                  "reuse distance (local refrain vs. book-wide template), longest exact and "
+                  "longest approximately-repeated token runs, sliding-window template-motif "
+                  "detection, and exact-duplicate-share channels over six always-on transformed "
+                  "views (lowercase/normalized, function-words-only, stopwords-only, "
+                  "punctuation-only, word-shape, content-words-only) plus three off-by-default "
+                  "parsed views (lemma, POS-tag sequence, dependency-label sequence) that share "
+                  "this document's spaCy parse. Complements, and never duplicates, "
+                  "repeated_ngrams/local_repetition/lexical_repetition_distance/"
+                  "lexical_lemma_repetition/discourse_constructions/punctuation_patterns/"
+                  "semantic_clusters -- overlapping channels name the existing metric id in "
+                  "their distribution's overlaps_existing_metric_id. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.

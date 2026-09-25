@@ -377,6 +377,90 @@ PACKAGES: dict[str, tuple[str, str]] = {
     # cleanly (pip install --dry-run showed no downgrade of numpy/scipy) and
     # exercised for real (HDPModel.add_doc/.train/.infer) before use.
     "tomotopy": ("tomotopy", "pip install tomotopy"),
+    # MinHash/LSH approximate-Jaccard candidate generation for
+    # reuse_suite's sentence/paragraph near-duplicate channels (on by
+    # default). Confirmed for real: MinHash(...).jaccard() against a shared
+    # four-word/three-word overlap estimated 0.6875 (true Jaccard 0.6), and
+    # MinHashLSH(threshold=0.5).query() returned the inserted near-duplicate
+    # key -- see reuse_suite.py's module docstring for the full verification
+    # and the measured per-item cost that bounds book-scale use. Without it,
+    # every reuse.*-candidate channel falls back to a dependency-free capped
+    # inverted-shingle index (the same blocking technique semantic_clusters.py
+    # already uses), never to all-pairs comparison.
+    "datasketch": ("datasketch", "pip install datasketch"),
+    # A real, independent 64-bit SimHash implementation (bit-sampled random
+    # hyperplane fingerprinting over Unicode-aware shingles) plus its own
+    # SimhashIndex bucketing/candidate-generation structure, for
+    # reuse_suite's SimHash Hamming-distance channel. Verified for real: this
+    # is the `simhash` PyPI package (iceb0y/simhash-py), not a same-named
+    # decoy -- Simhash.__init__ documents `f` (fingerprint bits, default 64)
+    # and a configurable shingle regex/hash function, and SimhashIndex is a
+    # genuine near-duplicate-detection index (deletion/permutation buckets),
+    # not a plain dict.
+    "simhash": ("simhash", "pip install simhash"),
+    # TLSH (Trend Micro Locality Sensitive Hash) fuzzy hashing for
+    # reuse_suite's longer-block similarity channel, restricted to blocks at
+    # or above its own minimum-length floor. Verified for real: tlsh.hash()
+    # on two paragraph-length blocks differing by one word gave a small
+    # tlsh.diff() score while unrelated text gave a much larger one, and
+    # tlsh.hash() on a short string ('too short') returned the literal
+    # sentinel 'TNULL' rather than a usable hash -- reuse_suite treats that
+    # sentinel exactly like "below the minimum block length" so a short
+    # sentence can never reach this channel even if a caller mis-configures
+    # the length floor. The PyPI name is `py-tlsh`; it imports as `tlsh`.
+    "tlsh": ("tlsh", "pip install py-tlsh"),
+    # Context-triggered piecewise ("fuzzy") hashing for reuse_suite's
+    # ssdeep-style longer-block channel. The real `ssdeep` PyPI package needs
+    # a C compiler toolchain against libfuzzy and fails to build in this
+    # environment: `pip install ssdeep` raised
+    # "cffi.VerificationError: CompileError: command
+    # '/usr/bin/x86_64-linux-gnu-gcc' failed with exit code 1" during its
+    # cffi metadata build. `ppdeep` is the pure-Python, ssdeep-compatible
+    # alternative the task spec names; verified for real: its docstring says
+    # "Pure-Python library for computing fuzzy hashes (ssdeep)... Based on
+    # SpamSum by Dr. Andrew Tridgell", and ppdeep.compare() of two
+    # near-identical blocks returned 100 (bounded 0-100, higher = more
+    # similar) while two unrelated blocks scored far lower.
+    "ppdeep": ("ppdeep", "pip install ppdeep (the real 'ssdeep' package fails to build here: "
+                        "'cffi.VerificationError: CompileError: command "
+                        "/usr/bin/x86_64-linux-gnu-gcc failed with exit code 1', "
+                        "since it needs a system libfuzzy toolchain this container lacks)"),
+    # Fast token/string fuzzy similarity (Ratcliff/Obershelp-style ratio,
+    # token-sort and token-set ratios) for reuse_suite's fuzzy-similarity
+    # channels. Verified for real: fuzz.ratio of a one-word edit scored
+    # ~95.7, and fuzz.token_sort_ratio/token_set_ratio of two reordered
+    # copies of the same words both scored 100.0, matching their documented
+    # behavior (docstring: "rapid string matching library").
+    "rapidfuzz": ("rapidfuzz", "pip install rapidfuzz"),
+    # Fast, real Levenshtein (edit) distance and ratio for reuse_suite's
+    # normalized-edit-distance channel, independent of RapidFuzz's own
+    # Levenshtein implementation (kept as a second implementation
+    # deliberately -- see this project's rule to preserve library
+    # disagreement). Verified for real: Levenshtein.distance('kitten',
+    # 'sitting') == 3 and .ratio(...) == 0.615..., the textbook values.
+    "levenshtein": ("Levenshtein", "pip install python-Levenshtein"),
+    # Jaro/Jaro-Winkler string similarity for reuse_suite's nearest-neighbor
+    # channel. Verified for real: jaro_winkler_similarity('martha',
+    # 'marhta') == 0.9611... and jaro_similarity(...) == 0.9444..., the
+    # textbook Winkler-paper values.
+    "jellyfish": ("jellyfish", "pip install jellyfish"),
+    # 30+ independent string/token/sequence distance and similarity
+    # algorithms for reuse_suite's cross-check channel (kept alongside, never
+    # instead of, RapidFuzz/Levenshtein/Jellyfish above -- independent
+    # implementations disagreeing is data, not redundancy). Verified for
+    # real: its docstring says "Compute distance between sequences. 30+
+    # algorithms, pure python implementation", and
+    # textdistance.sorensen.normalized_similarity('night', 'nacht') == 0.6,
+    # the textbook Sorensen-Dice value for that pair.
+    "textdistance": ("textdistance", "pip install textdistance"),
+    # Fast exact multi-pattern (Aho-Corasick) matching for reuse_suite's
+    # evidence step: once a longest-repeated-run candidate is found, this
+    # locates every occurrence of it in one linear pass instead of a second
+    # search per candidate. Verified for real: an automaton built from
+    # {'he','she','his','hers'} correctly found all four (including
+    # overlapping) matches in 'ushers', matching its documented purpose
+    # ("fast ... exact or approximate multi-pattern string search").
+    "ahocorasick": ("ahocorasick", "pip install pyahocorasick"),
 }
 
 _lock = threading.Lock()
