@@ -42,18 +42,411 @@ regex>=2023.0
 # Change-point detection for book-level style drift.
 ruptures>=1.1.9
 
-# Multivariate style distance and robust covariance.
+# Multivariate style distance and robust covariance. Also fits the seeded
+# NMF/LDA topic model behind textgrader.sequences' optional, off-by-default
+# "window_topic_id" sequence (timeseries_suite's "topic_transition_rate"/
+# "topic_transition_entropy"/"topic_dwell_time" feature groups draw on it).
 scikit-learn>=1.3
+
+# Entity co-occurrence graphs (density, components, clustering) for the
+# experimental discourse-coherence suite. Everything else that suite measures
+# is either dependency-free or already covered above; this is the one graph
+# statistic no other metric needed.
+networkx>=3.0
+
+# A second, independent graph library for the experimental graph_suite metric's
+# disagreement channel (density/transitivity/components/modularity recomputed
+# separately from networkx and reported side by side, never averaged with it --
+# see textgrader/graphs.py's module docstring). Torch-free; confirmed to
+# install cleanly alongside this project's pinned numpy/scipy/scikit-learn
+# with no version changes to any of them.
+igraph>=0.11
+
+# A third, fast graph implementation, installed for graph_suite but not
+# currently wired into a second cross-check (one independent disagreement
+# channel, igraph, already answers "do two implementations agree" -- see
+# textgrader/graphs.py's module docstring). Torch-free.
+rustworkx>=0.15
+
+# WordNet synonymy/hypernymy for the experimental discourse-coherence suite's
+# optional "lexical_wordnet" feature (off by default). The package alone is
+# not the corpus: run `python -m nltk.downloader wordnet` once, or the
+# feature reports itself unavailable rather than silently falling back to
+# identity matching.
+nltk>=3.8
+
+# Neural coreference for coherence_suite's optional "coreference" feature is
+# NOT here: fastcoref pulls in torch, so it lives in
+# requirements-embeddings.txt.  Without it, entity continuity stays on the
+# honestly-labelled surface/noun-chunk-lemma channel, which is kept as its own
+# finding even once fastcoref is installed, because the two disagreeing is data
+# the suite reports rather than a problem to hide.
 
 # Tabular convenience for corpus work.
 pandas>=2.0
 
 # Descriptive statistics, readability, dependency distance and coherence on top
-# of spaCy.  TextGrader computes these directly from the shared parse, so this
-# is here for users who want its extra features in their own code rather than
-# because a metric needs it.
+# of spaCy.  Two experimental suites use it as a deliberate cross-check and
+# keep the disagreement rather than reconciling it: randomness_suite's
+# `textdescriptives_cross_check` (against its own wordfreq rarity channel,
+# via textdescriptives' own information_theory pipeline) and
+# timeseries_suite's `textdescriptives_check` (against its own
+# sentence_dependency_distance sequence).  Both are off by default.
 textdescriptives>=2.8
 
 # Test runner.  The suite is pytest-based; `unittest discover` silently skipped
 # the pytest-style tests in tests/test_build_corpus.py.
 pytest>=7.0
+
+# Extra compression channels for the randomness/compression/entropy suite
+# (textgrader.metrics.randomness_suite).  zlib, gzip, bz2 and lzma need none of
+# these; each package below backs exactly one additional compressor and
+# degrades to a visible "unavailable" finding, never a crash, on an install
+# that genuinely lacks it. pyppmd additionally backs a real PPM
+# predictive-model channel (ppm_cross_entropy), not only a compression
+# ratio. python-snappy also needs the system libsnappy-dev package (apt/brew,
+# not something pip can install) to build against; without it, that one
+# compressor degrades visibly, same as any of the others here would without
+# their own native dependency.
+zstandard>=0.21
+brotli>=1.1
+lz4>=4.3
+python-snappy>=0.6
+pyppmd>=1.1
+
+# Query-time bindings for randomness_suite's optional "kenlm_language_model"
+# feature (off by default). This wheel provides kenlm.Model for scoring but
+# NOT the trainer: lmplz is a separate C++ program built from KenLM's own
+# source tree (a C++ compiler and Boost, at minimum -- see
+# https://github.com/kpu/kenlm#compiling), which pip cannot build. Put the
+# resulting `lmplz` on PATH, or point
+# metrics.randomness_suite.kenlm_lmplz_path at it directly; without either,
+# this one channel reports "unavailable" naming that exact build step, and
+# every other measurement in this suite is unaffected.
+kenlm>=0.2
+
+# A tiny, dependency-free character-bigram gibberish classifier, used by
+# randomness_suite's optional "gibberish_detector_package" feature (off by
+# default -- see that module's gating note). Trained fresh on each document's
+# own held-out split at grading time, never on its own bundled reference
+# file; without it, gibberish_detector_score reports "unavailable" and
+# consonant_cluster_rate, this suite's other independent gibberish sensor, is
+# unaffected either way.
+gibberish-detector>=0.1.1
+
+# Augmented Dickey-Fuller stationarity test, used by the experimental
+# timeseries_suite metric's "stationarity" feature.  Everything else in that
+# suite (ACF, trend, spectral, Hurst, DFA, permutation entropy, change points,
+# Page-Hinkley) is dependency-free or already covered by numpy/scipy/ruptures
+# above; without this one it falls back to a labelled, weaker half-split proxy.
+statsmodels>=0.14
+
+# catch22: 22 canonical time-series features (Lubba et al. 2019), plus the
+# catch24 raw mean/variance extras, used by timeseries_suite's optional,
+# off-by-default "catch22_*"/"catch24_raw_mean"/"catch24_raw_variance"
+# feature groups.
+pycatch22>=0.4
+
+# Discrete wavelet transform, used by timeseries_suite's optional,
+# off-by-default "wavelet_energy"/"wavelet_entropy" feature group.
+PyWavelets>=1.4
+
+# Configurable time-series feature extraction (minimal/efficient/comprehensive
+# presets), used by timeseries_suite's optional, off-by-default "tsfresh"
+# feature group. Heavy -- pulls in a large dependency tree -- but stays
+# torch-free, so it lives here rather than in requirements-embeddings.txt.
+tsfresh>=0.20
+
+# Streaming ADWIN drift detector, used by timeseries_suite's optional,
+# off-by-default "adwin" feature group -- run beside, not instead of, that
+# suite's own dependency-free Page-Hinkley detector. Pure Python/C wheel, no
+# model download, torch-free.
+river>=0.21
+
+# Rule-based VADER sentiment scoring, used by textgrader.sequences' optional
+# "sentence_sentiment_compound" sequence (timeseries_suite draws on it, off
+# by default). Bundles its own lexicon in the wheel, unlike nltk's VADER
+# integration, so it needs no separate download or network call.
+vaderSentiment>=3.3
+
+# NRC emotion-lexicon scoring, used by textgrader.sequences' optional
+# "sentence_emotion_valence" sequence (timeseries_suite draws on it, off by
+# default). Also bundles its own lexicon (a JSON file read via
+# importlib.resources), so -- like vaderSentiment above -- no download or
+# network call happens at runtime, even though it declares nltk/textblob as
+# install-time dependencies for an optional convenience method this codebase
+# never calls.
+NRCLex>=4.0
+
+# Date parsing for logic_suite's "temporal_ordering" feature (which of two
+# differing dates on the same subject+predicate is earlier).  Lightweight and
+# torch-free, unlike the neural backends, which is why it lives here.
+python-dateutil>=2.8
+
+# Real, independent Burrows'/Cosine/Argamon-quadratic/weighted Delta, Zeta and
+# Kilgarriff's chi-squared implementations for stylometry_suite's optional,
+# off-by-default "pystylometry_reference" feature.  Lightweight (only "rich"
+# as its own dependency).  Note for anyone tempted to add a package literally
+# named "pydelta": don't -- that PyPI name is an unrelated biological-taxonomy
+# package, and the real PyDelta project isn't on PyPI and fails to build here
+# (see stylometry_suite's module docstring, section P, for the quoted errors).
+pystylometry>=1.4
+
+# The neural backends several experimental suites can use -- an NLI
+# cross-encoder, a coreference resolver and a causal language model -- are NOT
+# here: they pull in torch, so they live in requirements-embeddings.txt beside
+# sentence-transformers for the same reason.  Every channel that wants one is
+# off by default and reports "unavailable" with an install hint without it.
+
+# A real, independent anomaly/outlier-detection library for
+# anomaly_suite's HBOS/ECOD/COPOD/ABOD/KDE/SOS channels, which scikit-learn
+# does not implement.  Lightweight (numba/scikit-learn/scipy, already
+# installed above); confirmed to be the genuine "Python Outlier Detection"
+# project (not a same-named unrelated package) before use.
+pyod>=2.0
+
+# Density-based clustering for anomaly_suite's GLOSH outlier-score channel.
+# Off by default, torch-free, and degrades to "unavailable" (naming either
+# the missing package or a reference corpus with no real cluster structure to
+# score against) without it.
+hdbscan>=0.8
+# Independent, frequency-based dictionary spell checking for the experimental
+# mechanical_quality_suite metric.  Bundles its own dictionary; no network
+# call at runtime.  LanguageTool (a Java server) is explicitly NOT used --
+# see that module's docstring for why, and for what replaces its role.
+pyspellchecker>=0.8
+
+# A second, independent edit-distance dictionary (SymSpell) for the same
+# suite, plus real word segmentation used for fused-token ("helloworld" ->
+# "hello world") detection.  Bundles its own English frequency dictionary.
+symspellpy>=6.7
+
+# Mixed-script homoglyph ("confusable") detection for the same suite's
+# encoding/typography channel -- flags a Cyrillic а hiding inside a Latin
+# word, while leaving plain ASCII and single-script non-English text alone.
+confusable-homoglyphs>=3.2
+
+# Mojibake/Unicode repair detection for the same suite, used diagnostically
+# only: it reports what fix_text() would change and never rewrites the
+# analyzed text (see mechanical_quality_suite's module docstring).
+ftfy>=6.1
+
+# An independent, pure-Python rule-based sentence/token segmenter for the
+# experimental parser_consensus suite's default segmentation/tokenization
+# comparison (no other dependency beyond 'regex', already installed above).
+# Torch-free, unlike stanza/benepar below, so it lives here.
+syntok>=1.4
+
+# .xlsx reader for textgrader.lexicons: three of the experimental
+# lexical_norms_suite's cached norm tables (Brysbaert concreteness, Kuperman
+# AoA, the Glasgow Norms) are distributed as Excel workbooks by their
+# original authors. Lightweight, torch-free; without it those three
+# resources report "unavailable" and every csv/tsv/fixed-width resource in
+# that suite (Warriner/NRC VAD, Lancaster sensorimotor, SUBTLEX-US, MRC) is
+# unaffected.
+openpyxl>=3.1
+
+# A real, independent lexical-diversity implementation (Kristopher Kyle's own
+# lightweight package: MTLD/HD-D/MATTR/MSTTR/TTR/root-TTR/Maas) for
+# lexical_norms_suite's "lexdiv_crosscheck" feature, alongside -- never
+# replacing -- mattr.py/lexical_mtld.py/lexical_hdd.py and
+# stylometry_suite's own lexicalrichness cross-check. Verified for real: it
+# imports as lexical_diversity.lex_div and exposes exactly those functions
+# (see lexical_norms_suite's module docstring).
+lexical-diversity>=0.1
+
+# TAALED (second generation) itself -- the actual tool the task spec names,
+# confirmed by its own docstring ("Underlying code for TAALED (second
+# generation)", author kristopherkyle, the same researcher behind
+# lexical-diversity above) -- for the same suite's "taaled_crosscheck"
+# feature. Pulls in "pylats" as its own dependency and prints a harmless
+# "plotnine has not been installed" notice on import for a plotting extra
+# this codebase never triggers. Its own MATTR implementation is
+# O(tokens*window) and impractically slow at book length, so this suite
+# calls only its MTLD/HD-D/MSTTR/RTTR/Maas methods directly -- see
+# lexical_norms_suite's module docstring for the measured cost.
+taaled>=0.32
+
+# LFTK: a broad handcrafted lexical/surface/syntax/discourse feature
+# extractor over a spaCy Doc, for lexical_norms_suite's off-by-default
+# "lftk_crosscheck" feature (needs the shared spaCy parse, which this
+# suite's "moderate" cost class does not otherwise pay for). Verified for
+# real: lftk.Extractor takes spaCy docs and lftk.search_features lists
+# genuine linguistic feature keys, including its own bundled copies of
+# Kuperman AoA, a Brysbaert-sourced AoA and SUBTLEX-US Zipf -- kept beside,
+# never replacing, this suite's own independently-downloaded numbers for the
+# same concepts.
+lftk>=1.0
+# Four more independent lexicon/rule-based sentiment-and-emotion engines for
+# the experimental affect_suite metric, each kept as its own disagreeing
+# channel rather than reconciled with vaderSentiment/NRCLex above:
+#   afinn    - AFINN-165 wordlist sentiment; bundles its own wordlist, no
+#              download.
+#   textblob - pattern-based polarity/subjectivity; already an install-time
+#              dependency of NRCLex above, listed here because affect_suite
+#              calls it directly; no nltk corpus needed for .sentiment.
+#   empath   - about 200 broad lexical/topical/psychological categories;
+#              bundles its own category table, and affect_suite only ever
+#              calls the local .analyze() method, never .create_category()
+#              (the one method that talks to a network backend).
+#   liwc     - a pure local parser for the LIWC .dic FORMAT, not the LIWC
+#              dictionary itself (commercially licensed, never bundled);
+#              inert until a user points affect_suite's
+#              liwc_dictionary_path option at their own licensed file.
+afinn>=0.1
+textblob>=0.15
+empath>=0.89
+liwc>=0.5
+# Lexical retrieval-style BM25 scoring for the experimental
+# semantic_structure_suite metric's "bm25" representation (on by default).
+# Pure Python, no model download, torch-free.
+rank_bm25>=0.2
+
+# Used by semantic_structure_suite ONLY as the loader for pretrained static
+# word-vector sets (GloVe via gensim's downloader API, "static_embedding_glove"
+# feature, off by default) -- not for its own LDA/LSI/HDP implementations,
+# which that suite gets from scikit-learn (LDA/NMF/LSA, already a project
+# dependency above) and tomotopy (HDP) instead. Torch-free; confirmed
+# installing cleanly against this project's pinned numpy/scipy before use.
+gensim>=4.3
+
+# An efficient, Python-native (C++-backed, no JVM) topic-model library used by
+# semantic_structure_suite for its corpus-trained HDP channel, since neither
+# scikit-learn nor gensim ships an HDP implementation. MALLET, the tool this
+# project's task table names first for this role, is explicitly out of scope:
+# it is a Java program, and this project is Python-only. Torch-free.
+tomotopy>=0.12
+
+# Five independent packages for the experimental malformed_text_suite metric's
+# word-segmentation and language-identification channels (each kept as its
+# own disagreeing channel, never reconciled -- see that module's docstring):
+#   wordninja   - statistical word segmentation; bundles its own word list.
+#   wordsegment - a second, independent word segmentation implementation;
+#                 bundles its own unigram/bigram frequency tables.
+#   langid      - an independent statistical language-ID channel; bundles its
+#                 own pretrained model, no download.
+#   langdetect  - a second independent statistical language-ID channel
+#                 (nondeterministic by default; malformed_text_suite seeds it
+#                 once per process before first use).
+#   lingua-language-detector - a high-accuracy language-ID channel (imports
+#                 as `lingua`), the task brief's own pick for short-text
+#                 accuracy; malformed_text_suite restricts its default
+#                 candidate language set for memory (~215MB vs ~900MB for
+#                 every language it ships -- see that module's docstring).
+wordninja>=2.0
+wordsegment>=1.3
+langid>=1.1
+langdetect>=1.0
+lingua-language-detector>=2.1
+# Approximate-duplication / fuzzy-reuse / structural-reuse / motif-detection
+# metrics for the experimental reuse_suite (off by default). Every package
+# below is pure Python or ships a binary wheel, with no system dependency
+# and no model download (py-tlsh, which compiles, is in requirements-native.txt); each is confirmed for real against a
+# small fixture in textgrader/optional.py's PACKAGES comments before use.
+# MinHash/LSH approximate-Jaccard candidate generation (never all-pairs).
+datasketch>=1.6
+# A real 64-bit SimHash implementation plus its own candidate-bucketing index.
+simhash>=2.1
+# Pure-Python, ssdeep-compatible context-triggered piecewise fuzzy hashing.
+# The real `ssdeep` package needs a system libfuzzy/C toolchain this
+# container does not have (`pip install ssdeep` fails to build here); ppdeep
+# is the pure-Python alternative the task spec names.
+ppdeep>=20200505
+# Fast token/string fuzzy similarity (ratio, token-sort, token-set ratios).
+rapidfuzz>=3.0
+# Fast, real Levenshtein (edit) distance, independent of RapidFuzz's own.
+python-Levenshtein>=0.25
+# Jaro/Jaro-Winkler string similarity.
+jellyfish>=1.0
+# 30+ independent string/token/sequence distance algorithms, kept alongside
+# (not instead of) the libraries above -- see this project's rule to
+# preserve library disagreement rather than reconcile it.
+textdistance>=4.6
+# Fast exact multi-pattern (Aho-Corasick) matching, used to locate every
+# occurrence of a detected repeated run in one linear pass.
+pyahocorasick>=2.0
+# Broad classical-readability-formula coverage for the experimental
+# readability_suite metric (Flesch, Flesch-Kincaid, Gunning Fog, SMOG,
+# Coleman-Liau, ARI, Dale-Chall, Linsear Write, Spache, LIX, RIX, McAlpine
+# EFLAW, plus several formulas calibrated for other languages, off by
+# default). Pure Python; pulls in nltk (already a dependency) and pyphen (a
+# small hyphenation-dictionary package).
+textstat>=0.7
+# A second, independent readability-formula implementation for the same
+# suite. PyPI name is py-readability-metrics; it imports as `readability`.
+# Confirmed for real: every formula except SMOG raises
+# readability.exceptions.ReadabilityException below 100 words (SMOG below 30
+# sentences) rather than silently returning a meaningless number --
+# readability_suite catches that and reports it, never lets it crash.
+py-readability-metrics>=1.4
+# CMU Pronouncing Dictionary access for readability_suite's independent
+# syllable-counter cross-check (TextGrader's own vowel-cluster heuristic vs
+# textstat's pyphen-based counter vs real CMUdict phonetic transcriptions).
+# Also the syllable-counting backend pystylometry's own readability formulas
+# use internally (see the "pystylometry" entry above) -- installed once,
+# used by both. Pure Python; pulls in cmudict.
+pronouncing>=0.2
+# Poetry/prosody suite (prosody_suite): pronunciation lookup, meter/stress,
+# rhyme and phonological-pattern analysis. All five packages below are
+# torch-free and confirmed installing cleanly against this project's pinned
+# numpy/scipy/scikit-learn (pip install --dry-run showed no downgrade); see
+# textgrader/prosody.py's module docstring for how each was verified for
+# real and textgrader/optional.py's PACKAGES entries for per-package detail.
+#
+# CMU Pronouncing Dictionary lookup (the suite's primary, always-tried
+# pronunciation backend). Depends on the "cmudict" package itself.
+# Out-of-vocabulary grapheme-to-phoneme fallback (features.g2p_fallback, off
+# by default -- importing it downloads two small NLTK corpora on first use;
+# see config.json's _requires_g2p_fallback note).
+g2p-en>=2.1
+# Phonological feature vectors/distances for feature-based near-rhyme
+# (features.near_rhyme_feature, on by default; bundled data tables, no
+# model download).
+panphon>=0.20
+# A second, independent pronunciation/IPA backend (features.phonemizer_backend,
+# off by default -- needs the SYSTEM espeak/espeak-ng binary, not installable
+# via pip; see config.json's _requires_phonemizer_backend note).
+phonemizer>=3.0
+# Real meter-scansion and rhyme-scheme classification (features.poesy_crosscheck,
+# off by default and bounded). As of poesy>=0.4 this package is itself "a thin
+# compatibility layer over prosodic v3" (its own module docstring), so it also
+# covers "Prosodic" from the task's library table; see textgrader/prosody.py's
+# module docstring for the real Sonnet-18 scan this environment reproduced
+# without espeak. Pulls in prosodic itself as a dependency.
+poesy>=0.4
+
+# Optional: corpus_builder/dataset_adapters.py's build_wikitext_corpus, a
+# Task 24 dataset adapter that reads one pinned Hugging Face `datasets`
+# revision to build an (unshipped) WikiText reference profile. Nothing in
+# textgrader/ imports this; corpus_builder deliberately keeps its own
+# lazy-import/actionable-error pattern rather than routing through
+# textgrader.optional.require (see dataset_adapters.py's module docstring).
+# `pip install --dry-run datasets` showed no downgrade to numpy/scipy/
+# scikit-learn/torch/transformers/spacy in this project's environment.
+datasets>=2.14
+# Recurrence-plot/RQA computation for nonlinear_dynamics_suite's off-by-default
+# "pyrqa_crosscheck" feature. Pure-Python sdist (no C extension anywhere in
+# its source tree; pip builds a py3-none-any wheel locally with no compiler
+# invoked) pulling in pyopencl/Mako/pytools/siphash24, every one a manylinux
+# or pure-Python wheel -- confirmed with `pip download --no-deps
+# --only-binary=:all:` for each. Needs a real OpenCL platform to actually run
+# a computation, which this project's own container does not have (see
+# config.json's _requires_pyrqa_crosscheck note); RQA's own core measures are
+# implemented directly in numpy as the default backend instead.
+pyrqa>=8.1
+# Hurst/DFA/Lyapunov/correlation-dimension nonlinear-dynamics estimators for
+# nonlinear_dynamics_suite's off-by-default "*_nolds" features, independent
+# of this codebase's own timeseries_suite hurst/dfa implementations. Needs
+# textgrader.optional.shim_nolds_resources before import (see that function's
+# docstring for the real Python-3.11 packaging bug it works around).
+nolds>=0.6
+# Fractal-dimension/entropy/Lempel-Ziv cross-checks for
+# nonlinear_dynamics_suite's off-by-default "*_antropy" features.
+antropy>=0.2
+# Fuzzy/dispersion entropy estimators for nonlinear_dynamics_suite's
+# off-by-default "*_entropyhub" features. Imports as "EntropyHub"
+# (case-sensitive).
+EntropyHub>=2.0
+# Ordinal-pattern permutation entropy and statistical complexity for
+# nonlinear_dynamics_suite's off-by-default "*_ordpy" features.
+ordpy>=1.2

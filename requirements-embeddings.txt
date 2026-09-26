@@ -7,3 +7,85 @@
 # the finding's warning and its evidence say which backend produced the number.
 -r requirements.txt
 sentence-transformers>=2.2
+
+# NLI cross-encoder, real semantic-role-labelling, closed-schema relation
+# extraction and real argument-relation classification (logic_suite's
+# `nli_entailment`, `semantic_role_labeling`, `relation_extraction` and
+# `argument_mining`), coreference resolution (logic_suite and coherence_suite),
+# a causal language model (randomness_suite's `neural_language_model`), and a
+# pretrained sentiment classifier (affect_suite's `transformer_sentiment`
+# feature, off by default and versioned by model name + revision in every
+# finding it produces). All of these share the torch install above and every
+# one is off by default;
+# without them each channel reports "unavailable" with an install hint and its
+# suite's other measurements are unaffected. None of the four logic_suite
+# model channels needs a package beyond `transformers` itself -- each is just
+# a different Hugging Face hub checkpoint, fetched on first use the same way
+# `nli_entailment`'s already is.
+#
+# fastcoref as shipped does not do the tied-weight bookkeeping transformers 5.x
+# expects; textgrader.optional.shim_fastcoref_transformers supplies the missing
+# default, and both the coherence and logic suites load coreference through it,
+# so the two cannot disagree about whether it is available.  If that stops being
+# enough, coreference degrades to "unavailable" rather than crashing.
+transformers>=4.40
+torch>=2.0
+fastcoref>=2.1
+
+# Real RST (Rhetorical Structure Theory) discourse-tree parsing
+# (coherence_suite's `rst` feature, off by default). Shares the torch/
+# transformers install above; also needs its own non-PyPI `isanlp`
+# dependency, not installable from this file since it is not on PyPI:
+#     pip install git+https://github.com/iinemo/isanlp.git
+# Constructing the parser downloads ~5 GB of model checkpoints on first use
+# and holds ~6 GB of RAM resident while loaded -- see coherence_suite's
+# module docstring and config.json's `_requires_rst` note for the full cost
+# story and the sampling this feature uses to bound it. Without isanlp_rst
+# (or isanlp), every `discourse.coherence_rst_*` metric id reports
+# "unavailable" with an install hint and the rest of the suite is
+# unaffected.
+isanlp-rst>=3.2
+
+# Real constituency-tree parsing (syntax_complexity_suite's `constituency`
+# feature, off by default even when the suite is on). Shares the torch
+# install above; the pretrained checkpoint itself (~260 MB, `benepar_en3`)
+# is a separate one-time download, not part of the pip package:
+#     python -c "import benepar; benepar.download('benepar_en3')"
+# Without it, every `syntax.complexity_constituency_*` metric id reports
+# "unavailable" with an install hint; every other feature in the suite is
+# spaCy-only and unaffected. benepar calls a T5 tokenizer method that
+# transformers 5.x removed; textgrader.optional.shim_benepar_transformers
+# restores it. parser_consensus's "constituency_benepar" feature uses the same
+# package and the same shim.
+benepar>=0.2
+
+# A second, fully independent parser for the experimental parser_consensus
+# suite's off-by-default "stanza" feature (POS/dependency/constituency
+# consensus against spaCy). Shares the torch install above. Off by default;
+# even when the suite and this feature are both on, this suite never
+# downloads stanza's models itself (every stanza.Pipeline call passes
+# download_method=None) -- see textgrader/optional.py's note and
+# parser_consensus.py's module docstring for the exact download command and
+# measured size/cost.
+stanza>=1.8
+
+# Real character/entity/coreference/quote-speaker extraction (BookNLP) for
+# graph_suite's optional "booknlp" feature, off by default and very heavy --
+# see graph_suite.py's module docstring and config.json's `_requires_booknlp`
+# note for measured time/memory. Deliberately NOT a plain `pip install
+# booknlp` line: BookNLP's own declared dependencies include tensorflow (an
+# unused ~570MB download -- nothing in the installed package tree imports it)
+# and an unconstrained numpy bound that would upgrade this project's pinned
+# numpy 1.x to 2.x, which this project's pip-install rules refuse to do for a
+# dependency this project does not otherwise need upgraded:
+#     pip install --no-deps booknlp
+# spaCy/torch/transformers, which BookNLP does actually use, are already
+# satisfied by this file. BookNLP's checkpoints trip a real state-dict-loading
+# error against current transformers/torch (a legacy
+# `bert.embeddings.position_ids` buffer key); textgrader.optional.
+# shim_booknlp_transformers works around it, the same pattern
+# shim_fastcoref_transformers/shim_benepar_transformers already use. Without
+# the package, every `discourse.graph_booknlp_*` metric id reports
+# "unavailable" naming the exact error.
+#
+# booknlp>=1.0.8  (install separately with --no-deps; see above)

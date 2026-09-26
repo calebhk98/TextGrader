@@ -222,8 +222,1135 @@ REGISTRY: dict[str, MetricSpec] = dict([
           defaults={"window_words": 2500},
           summary="Gradual style drift from the opening to the close."),
     _spec("change_points", "drift_change_points", "book_drift", "moderate",
-          requires=("ruptures",), defaults={"window_words": 2500, "penalty": 3.0},
+          requires=("ruptures",), defaults={"window_words": 2500, "penalty": 2.0},
           summary="Where the style changes abruptly."),
+
+    # ---------------------------------------------------------- experimental
+    _spec("coherence_suite", "coherence_suite", "discourse", "parse",
+          requires=("spacy", "sentence_transformers", "networkx", "fastcoref", "nltk",
+                   "isanlp_rst"),
+          defaults={
+              "features": {"lexical": True, "lexical_wordnet": False,
+                          "lexical_wordnet_hypernym": False, "semantic": True,
+                          "entity": True, "coreference": False, "rst": False,
+                          "connectives": True, "order_permutation": True},
+              "min_word_len": 3,
+              "chain_gap": 3,
+              "chain_min_length": 2,
+              "chain_hypernym_max_distance": 3,
+              "semantic_model": "all-MiniLM-L6-v2",
+              "semantic_low_tail_threshold": 0.15,
+              "entity_lookback_sentences": 10,
+              "entity_max_tracked": 150,
+              "entity_graph_window_sentences": 3,
+              "entity_min_mentions_for_graph": 2,
+              "coreference_model": "biu-nlp/f-coref",
+              "coreference_max_words": 4000,
+              "rst_model": "tchewik/isanlp_rst_v3",
+              "rst_model_version": "rstdt",
+              "rst_passages": 8,
+              "rst_passage_sentences": 6,
+              "rst_max_sentences": 60,
+              "rst_max_seconds": 420.0,
+              "rst_seed": 0,
+              "connective_max_reported": 25,
+              "permutations": 50,
+              "seed": 0,
+              "order_min_sentences_per_paragraph": 4,
+              "order_max_sentences_per_paragraph": 40,
+              "order_max_paragraphs_sampled": 30,
+              "order_max_paragraphs_for_doc": 60,
+          },
+          summary="Experimental discourse coherence/cohesion: lexical, WordNet-synonym and "
+                  "WordNet-hypernym-proximity lexical chains, embedding-based semantic "
+                  "adjacency, a surface-based entity grid and graph (with narration/dialogue "
+                  "channel splits) and a corpus-referenced transition-frequency delta, plus an "
+                  "optional real-coreference (fastcoref) backend reported side by side with the "
+                  "surface grid, a sampled real-RST-parse (isanlp_rst) channel (tree depth, "
+                  "segment length, nuclearity balance, relation-family entropy), "
+                  "connective-family rates, and sentence/paragraph order-permutation baselines. "
+                  "Off by default; each group toggles independently under 'features', and the "
+                  "coreference/WordNet/RST groups stay off even when the rest of the suite is "
+                  "enabled."),
+    _spec("logic_suite", "logic_suite", "discourse", "parse",
+          ("spacy", "transformers", "fastcoref", "nltk", "dateutil"),
+          defaults={
+              "features": {
+                  "negation_and_quantifiers": True,
+                  "connective_relations": True,
+                  "propositions": True,
+                  "modal_argument_position": True,
+                  # Off by default -- see the module docstring's "Gating" note:
+                  # this suite's cost class ("parse") means MetricSpec.needs_model
+                  # (which only checks for "sentence_transformers") does NOT
+                  # exclude this from corpus profiling, so these flags are the
+                  # only thing standing between a transformer model and a book
+                  # nobody asked to run one against.
+                  "nli_entailment": False,
+                  "coreference_resolution": False,
+                  "lexical_opposition": False,
+                  "temporal_ordering": False,
+                  "semantic_role_labeling": False,
+                  "relation_extraction": False,
+                  "argument_mining": False,
+                  "propbank_argument_structure": False,
+                  "verbnet_class_consistency": False,
+                  "framenet_frame_consistency": False,
+              },
+              "window_sentences": 6,
+              "max_pairs": 200,
+              "max_comparisons": 50_000,
+              "max_evidence": 20,
+              "proposition_cap": 20_000,
+              "connective_min_words": 4,
+              "repeated_assertion_min_words": 5,
+              "coreference_max_chars": 20_000,
+              "nli_model": "cross-encoder/nli-deberta-v3-small",
+              "nli_max_pairs": 60,
+              "nli_batch_size": 16,
+              "srl_model": "cu-kairos/propbank_srl_seq2seq_t5_small",
+              "srl_max_predicates": 40,
+              "relation_extraction_model": "Babelscape/rebel-large",
+              "relation_extraction_max_sentences": 40,
+              "argument_mining_model": "raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L",
+              "argument_mining_max_pairs": 40,
+          },
+          summary="Candidate contradictions, connective-relation overlap and proposition "
+                  "structure from surface heuristics (on by default), plus seven off-by-default "
+                  "channels that need an installed model or resource: real NLI entailment/"
+                  "contradiction scoring over the same candidate pairs with a heuristic-vs-model "
+                  "agreement readout, fastcoref coreference resolution so pronoun subjects can "
+                  "enter the candidate pool, WordNet antonym/hypernym lexical relations, "
+                  "dateutil-based temporal ordering, PropBank-style semantic role labelling (role-"
+                  "pattern consistency and argument-omission rate), closed-schema relation "
+                  "extraction (REBEL) kept beside the dependency-parse proxy, and a real argument-"
+                  "relation (claim/premise support/attack) classifier over connective-linked clause "
+                  "pairs, kept beside the honestly-named connective_chain_length proxy. Every "
+                  "heuristic value stays a candidate, never a truth claim; every model value is a "
+                  "labelled model score, never a fact about the text -- see the module docstring."),
+    _spec("randomness_suite", "randomness_suite", "lexical", "moderate",
+          requires=("wordfreq",),
+          defaults={
+              "features": {
+                  "char_entropy": True, "compression": True, "complexity_measures": True,
+                  "language_model": True, "punctuation_sequence": True,
+                  "pos_dependency": False, "corruption_baselines": True,
+                  "lexical_gibberish": True, "ppm_language_model": True,
+                  "letter_bigram_divergence": True, "kenlm_language_model": False,
+                  "neural_language_model": False, "textdescriptives_cross_check": False,
+                  "gibberish_detector_package": False, "ncd_against_corpus": False,
+              },
+              "language": "en",
+              "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_order": 3,
+              "word_ngram_orders": [1, 2, 3, 4], "punct_ngram_order": 3,
+              "pos_ngram_order": 3, "dependency_ngram_order": 2,
+              "lm_train_fraction": 0.7, "lm_smoothing_alpha": 0.5,
+              "lm_max_chars": 150000, "lm_max_tokens": 60000, "entropy_token_cap": 100000,
+              "renyi_orders": [0.5, 2.0], "tsallis_orders": [0.5, 2.0],
+              "excess_entropy_max_order": 4, "mi_lags": [1, 2, 3], "mi_max_tokens": 20000,
+              "complexity_quadratic_cap": 1500, "permutation_order": 3, "lz_max_chars": 20000,
+              "compression_algorithms": ["zlib", "gzip", "bz2", "lzma", "zstd", "brotli",
+                                         "lz4", "snappy", "ppmd"],
+              "compression_level": 6, "compression_block_chars": 20000, "ncd_algorithm": "zlib",
+              "corruption_seed": 1337, "corruption_permutations": 3,
+              "corruption_sentence_fraction": 0.3, "corruption_char_order": 4,
+              "corruption_word_order": 2, "corruption_max_chars": 20000,
+              "consonant_cluster_min": 4, "ppm_max_order": 6,
+              "kenlm_lmplz_path": "", "kenlm_order": 3, "kenlm_memory": "50M",
+              "kenlm_max_train_chars": 200000, "kenlm_timeout_seconds": 30,
+              "neural_lm_model": "distilgpt2", "neural_lm_max_chars": 6000,
+              "textdescriptives_max_chars": 50000,
+              "gibberish_detector_charset": "abcdefghijklmnopqrstuvwxyz",
+              "ncd_corpus_dirs": [], "ncd_corpus_max_reference_documents": 10,
+              "ncd_corpus_max_bytes": 100000, "ncd_corpus_algorithm": "lzma",
+          },
+          summary="Character/word/POS/punctuation language-likeness, multi-algorithm "
+                  "compression ratios (zlib/gzip/bz2/lzma/zstd/brotli/lz4/snappy/pyppmd) and "
+                  "self-corruption NCD, a real PPM predictive-model cross-entropy, "
+                  "entropy/complexity families (Shannon, Renyi, Tsallis, permutation, spectral, "
+                  "SVD, ApEn/SampEn, LZ), single-letter and corpus-derived letter-bigram "
+                  "divergence from English, seeded shuffle-corruption baselines, and five opt-in "
+                  "external cross-checks (a real KenLM Kneser-Ney n-gram model, a pretrained "
+                  "causal-LM perplexity, textdescriptives, a gibberish-detector package model "
+                  "trained on the document's own held-out split, and true NCD against real "
+                  "reference documents read from disk at grading time). Off by default; "
+                  "experimental."),
+    _spec("timeseries_suite", "timeseries_suite", "sentence_rhythm", "moderate",
+          defaults={
+              "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
+              "feature_groups": ["dispersion", "acf", "trend", "turning_points", "runs"],
+              "lags": [1, 2, 3],
+              "pacf_max_lag": 5,
+              "window_words": 2000,
+              "rolling_window": 10,
+              "change_point_penalty": 2.0,
+              "page_hinkley_delta": 0.005,
+              "page_hinkley_lambda": 3.0,
+              "permutation_entropy_order": 3,
+              "permutation_entropy_delay": 1,
+              "dfa_min_box": 4,
+              "piecewise_segments": 2,
+              "detrend": False,
+              "embedding_model": "all-MiniLM-L6-v2",
+              "language": "en",
+              "wavelet_name": "db4",
+              "wavelet_max_level": 5,
+              "tsfresh_feature_set": "minimal",
+              "tsfresh_max_features": 25,
+              "adwin_delta": 0.002,
+              "topic_n_topics": 4,
+              "topic_model": "nmf",
+              "topic_random_state": 42,
+              "topic_max_features": 2000,
+              "min_lengths": {},
+              "max_findings": 200,
+          },
+          summary="Autocorrelation/trend/spectral/nonlinear features over named linguistic "
+                  "sequences (sentence length, punctuation, parse depth, embedding-based "
+                  "sentence similarity, VADER sentiment, NRC emotion valence, NMF/LDA topic "
+                  "id, ...), plus optional catch22/catch24 (24 canonical features), wavelet "
+                  "energy/entropy, a river ADWIN drift detector beside the suite's own "
+                  "Page-Hinkley detector, topic-transition rate/entropy/dwell-time, a "
+                  "configurable/capped tsfresh feature set and a textdescriptives "
+                  "dependency-distance cross-check; each sequence and feature group is "
+                  "independently selectable and off by default."),
+    _spec("stylometry_suite", "stylometry_suite", "authorial", "moderate",
+          # Deliberately NOT ("lexicalrichness", "sentence_transformers"): the
+          # latter would flip needs_model for this WHOLE suite and drop it out
+          # of the corpus builder's default profiling pass (see the module
+          # docstring's "The critical gating rule"). lexicalrichness alone is
+          # safe -- it affects neither needs_parse nor needs_model -- and is
+          # used opportunistically by lexicalrichness_crosscheck (default on).
+          requires=("lexicalrichness",),
+          defaults={
+              "features": {
+                  "character_ngrams": True, "byte_ngrams": True, "word_ngrams": True,
+                  "function_word_ngrams": True, "punctuation_shape": True, "word_shape": True,
+                  "affixes": True, "sentence_openings": True, "contractions_capitalization": True,
+                  "lexical_richness": True, "vocabulary_growth": True, "section_stability": True,
+                  "compression": True, "corpus_language_model": True, "corpus_reference": True,
+                  # Off by default: forces the shared spaCy parse (tens of seconds on a novel).
+                  "pos_dependency": False,
+                  "author_language_model": True, "word_frequency_distance": True,
+                  "lexicalrichness_crosscheck": True,
+                  # Off by default: loads a sentence-transformers model; the ONLY
+                  # feature in this suite that can (see "The critical gating rule").
+                  "embedding_style": False,
+                  # Off by default: a heavier, more specialized analysis, only
+                  # meaningful with author-labelled corpus data.
+                  "impostors": False,
+                  # Off by default: fits a REAL classifier (scikit-learn) per
+                  # iteration, unlike "impostors" above (a distance
+                  # comparison). Never during corpus profiling -- see the
+                  # module docstring's section K2.
+                  "impostors_classifier": False,
+                  # On by default: cheap, hand-implemented arithmetic over the
+                  # already-cached function-word profile -- see the module
+                  # docstring's section P (the "PyDelta" gap).
+                  "delta_family": True,
+                  # Off by default: like ncd_against_corpus, reads real
+                  # reference documents from disk at grading time and needs
+                  # the pystylometry package -- see the module docstring's
+                  # section Q.
+                  "pystylometry_reference": False,
+                  # Off by default: needs a corpus profile built with
+                  # embedding_style ALSO enabled at profiling time (so
+                  # feature_profiles['stylometry_suite'] holds per-book
+                  # embedding vectors) plus sentence-transformers at grading
+                  # time. See the module docstring's "How to get embedding
+                  # vectors into a profile".
+                  "embedding_reference": False,
+                  # Off by default: the one measurement in this suite that
+                  # reads the corpus FOLDER (not the cached profile) at
+                  # grading time; needs ncd_corpus_dirs configured.
+                  "ncd_against_corpus": False,
+              },
+              "char_ngram_orders": [2, 3, 4, 5, 6], "byte_ngram_orders": [2],
+              "word_ngram_orders": [1, 2, 3], "pos_ngram_orders": [1, 2, 3, 4],
+              "dependency_ngram_order": 2, "punctuation_ngram_order": 2,
+              "affix_length": 3, "min_affix_word_length": 5, "max_reported": 25,
+              "max_chars_for_ngrams": 500000, "section_window_words": 3000,
+              "section_shift_threshold": 2.5, "k_neighbors": 5,
+              "distance_metrics": ["cosine", "euclidean", "manhattan", "jensen_shannon"],
+              # lzma, not zlib: zlib's fixed 32 KiB window cannot reliably
+              # compute NCD once either side is much bigger than half that
+              # (ordinary for this suite's book-length inputs) -- see
+              # stylometry_suite's COMPRESSOR_DICTIONARY_BYTES/
+              # _ncd_window_guard for the measured evidence.
+              "primary_distance": "cosine", "compression_algorithm": "lzma",
+              "min_corpus_documents": 4, "min_documents_per_author": 2,
+              "outlier_threshold": 3.5, "seed": 42,
+              "word_frequency_vocab_cap": 3000,
+              "embedding_model": "all-MiniLM-L6-v2", "embedding_primary_distance": "cosine",
+              "impostors_k": 10, "impostors_iterations": 25,
+              "impostors_feature_fraction": 0.5, "impostors_min_authors": 2,
+              "impostors_target_author": None,
+              # "function_words" (default) or "embedding" -- see the module
+              # docstring's "Impostors-style verification".
+              "impostors_representation": "function_words",
+              # impostors_classifier: iteration count kept lower than
+              # impostors_iterations because each one fits a real classifier.
+              "impostors_classifier_iterations": 15,
+              "impostors_classifier_type": "logistic_regression",
+              # ncd_against_corpus: directories of reference .txt/.md files,
+              # read fresh from disk at grading time (see the module
+              # docstring's "True NCD against reference documents"), plus how
+              # many of them and how many bytes of each to bound the cost.
+              "ncd_corpus_dirs": [], "ncd_max_reference_documents": 10,
+              "ncd_max_bytes": 100000,
+              # pystylometry_reference: reuses ncd_corpus_dirs (same real
+              # reference text, read the same way) with its own document/byte
+              # caps and most-frequent-word count.
+              "pystylometry_max_reference_documents": 5,
+              "pystylometry_max_bytes": 200000, "pystylometry_mfw": 200,
+          },
+          summary="Stylometry/authorship suite: character/word/POS/punctuation n-gram entropy, "
+                  "lexical-richness statistics (plus a lexicalrichness cross-check), Heaps/Zipf "
+                  "fits, section-to-section style stability, compression-based measures, "
+                  "nearest/centroid/OOD distances against a reference corpus (both function-word "
+                  "and, once a profile caches per-book embedding vectors, sentence-embedding), a "
+                  "word-frequency distance family, per-author unigram cross-entropy, a bounded "
+                  "distance-based impostors approximation AND (off by default) a real "
+                  "classifier-refit-per-iteration general-impostors score (function-word or "
+                  "embedding representation), a hand-implemented Delta family (Burrows/Argamon "
+                  "quadratic/Eder's/cosine, on by default) plus an off-by-default pystylometry "
+                  "cross-check of the same family against real reference text (also giving Zeta "
+                  "and Kilgarriff's chi-squared, which nothing else in this suite computes), an "
+                  "off-by-default sentence-embedding section-drift representation, and an "
+                  "off-by-default true NCD against real reference documents read from disk at "
+                  "grading time. Every measurement group is independently switchable; see the "
+                  "module docstring for what remains deferred."),
+    _spec("anomaly_suite", "anomaly_suite", "distribution_shape", "moderate",
+          requires=("sklearn",),
+          defaults={
+              "features": {
+                  "isolation_forest": True, "lof": True, "one_class_svm": True,
+                  "elliptic_envelope": True, "mahalanobis": True, "knn": True, "pca": True,
+                  "gmm": True,
+                  # Off only when PyOD/hdbscan are absent -- these three flags default to
+                  # True the same as every other detector; see config.json's
+                  # "_features_requires" note for exactly what each needs installed.
+                  "hbos": True, "ecod": True, "copod": True, "abod": True, "kde": True,
+                  "sos": True, "hdbscan": True,
+                  "consensus_count": True, "disagreement": True,
+              },
+              "columns": None, "min_coverage": 0.7, "max_features": 20,
+              "min_corpus_documents": 20, "seed": 42, "loo_reference_size": 15,
+              "consensus_percentile": 90.0, "evidence_features": 5,
+              "isolation_forest_n_estimators": 50, "one_class_svm_nu": 0.1,
+              "pca_components": None, "gmm_components": 2, "hdbscan_min_cluster_size": 5,
+          },
+          summary="Fifteen independent multivariate anomaly detectors (Isolation Forest, LOF, "
+                  "One-Class SVM, Elliptic Envelope, Mahalanobis, kNN distance, PCA "
+                  "reconstruction error and Gaussian-mixture likelihood via scikit-learn; HBOS, "
+                  "ECOD, COPOD, ABOD, KDE and SOS via PyOD; a GLOSH density score via hdbscan) "
+                  "over each document's core-prose-metric feature vector against the reference "
+                  "corpus, fit fresh at grading time with leave-one-out corpus validation, plus "
+                  "a consensus count and a cross-detector disagreement score. Off by default; "
+                  "experimental."),
+    _spec("distribution_distance_suite", "distribution_distance_suite", "distribution_shape",
+          "moderate", requires=("scipy",),
+          defaults={
+              # Mirrors textgrader.corpus.ITEM_SOURCES; not imported from there, to keep
+              # this module's own import free of anything beyond the standard library.
+              "sources": ["sentence_words", "paragraph_words", "paragraph_sentences",
+                          "word_characters", "sentence_commas", "turn_words"],
+              "features": {
+                  "wasserstein": True, "energy": True, "ks": True, "cramer_vonmises": True,
+                  "anderson_darling": True, "jensen_shannon": True, "kl_divergence": True,
+                  "hellinger": True, "bhattacharyya": True, "total_variation": True,
+                  "mmd": True, "quantile_vector": True, "tail": True,
+                  "optimal_transport": True, "distance_correlation": True,
+              },
+              "histogram_bins": 16, "histogram_smoothing": 0.5,
+              "quantile_vector_points": [0.10, 0.25, 0.50, 0.75, 0.90],
+              "tail_quantile": 0.10, "mmd_max_sample": 500,
+              "distance_correlation_max_sample": 300,
+              "distance_correlation_pairs": {
+                  "sentence": ["sentence_words", "sentence_commas"],
+                  "paragraph": ["paragraph_words", "paragraph_sentences"],
+              },
+              "min_distinct_values": 5,
+          },
+          summary="A full two-sample battery (Wasserstein, energy distance, Kolmogorov-Smirnov, "
+                  "Cramer-von Mises, Anderson-Darling, Jensen-Shannon, KL both ways and "
+                  "symmetrized, Hellinger, Bhattacharyya, total variation, MMD, a quantile-vector "
+                  "distance, lower/upper tail mismatch and a closed-form 1D optimal-transport "
+                  "cost) against the corpus's pooled sentence/paragraph/word/turn distributions, "
+                  "plus a within-document distance-correlation channel between naturally paired "
+                  "sequences. Every distance is its own finding, kept separate from any p-value; "
+                  "every family is independently switchable. Off by default; experimental."),
+    _spec("reference_fit", "reference_fit", "distribution_shape", "moderate",
+          defaults={
+              "min_corpus_documents": 8, "min_coverage": 0.6, "max_features": 20,
+              "central_band_z": 1.0, "loo_sample_size": 12, "loo_calibration_threshold": 1.5,
+          },
+          summary="Task 24: a reference-fit VECTOR, one independent overall-fit reading per "
+                  "configured reference profile (config.json's corpus_profile, aliased "
+                  "'primary', plus every profile under reference_profiles) -- never a forced "
+                  "genre label. Reuses the anomaly_suite feature space (core-prose rates/"
+                  "percentages/means, median/MAD-standardized) to report, per profile: two "
+                  "robust overall fit distances (mean and RMS absolute standardized deviation), "
+                  "the median absolute standardized distance, the share of metrics inside a "
+                  "central band, how many metrics could be validly compared, and a leave-one-"
+                  "out self-calibration reading that says so when a profile is not tightly "
+                  "self-consistent. Once two or more profiles are usable, also reports the "
+                  "nearest/second-nearest profile and their margin (descriptive only) and which "
+                  "profile finds which shared metric most/least typical. Off by default; "
+                  "experimental."),
+    _spec("mechanical_quality_suite", "mechanical_quality_suite", "lexical", "moderate",
+          requires=("pyspellchecker", "symspellpy", "ftfy", "confusable_homoglyphs"),
+          defaults={
+              "features": {
+                  "typography": True, "encoding": True, "encoding_ftfy": True,
+                  "confusables": True, "hyphenation": True,
+                  "spelling_pyspellchecker": True, "spelling_symspell": True,
+                  "spelling_disagreement": True, "likely_typos": True,
+                  "doubled_words": True, "fused_tokens": True, "ocr_substitution": True,
+                  "confusion_pairs": True, "sentence_summary": True,
+              },
+              "language": "en",
+              "recurring_min_count": 3,
+              "likely_typo_max_count": 2,
+              "likely_typo_max_candidates": 500,
+              "fused_min_length": 8,
+              "fused_max_candidates": 400,
+              "max_reported": 25,
+          },
+          summary="Experimental grammar/spelling/typography/encoding mechanical-quality "
+                  "diagnostics (LanguageTool replaced by Python-only checks -- see the module "
+                  "docstring): mixed quote/apostrophe/dash/ellipsis style, control/zero-width/"
+                  "replacement/private-use character rates, a diagnostic (non-mutating) ftfy "
+                  "repair estimate plus an independent mojibake pattern scan, mixed-script "
+                  "homoglyph detection, confirmed broken line-wrap hyphenation, two independent "
+                  "dictionary spell checkers (pyspellchecker, SymSpell) with a disagreement "
+                  "rate, likely-typo scoring that excludes a reported per-document 'recurring "
+                  "vocabulary' of invented names/places, fused- and split-token detection, "
+                  "OCR-substitution heuristics, and a small dialect-safe grammar rule set -- "
+                  "every mechanical rate that risks reading dialect as an error is reported "
+                  "separately for narration and dialogue. Off by default; experimental."),
+    _spec("syntax_complexity_suite", "syntax_complexity_suite", "syntax", "parse",
+          requires=("spacy", "benepar"),
+          defaults={
+              "features": {
+                  "tunit_clause": True, "phrasal_elaboration": True,
+                  "dependency_topology": True, "syntactic_surprisal": True,
+                  "constituency": False,
+              },
+              "long_dependency_threshold": 10,
+              "constituency_model": "benepar_en3",
+              "constituency_sample_sentences": 30,
+              "constituency_max_sentences": 60,
+              "constituency_max_seconds": 180.0,
+              "constituency_seed": 0,
+          },
+          summary="Experimental richer syntactic-complexity analysis beyond mean parse depth: "
+                  "an L2SCA-style T-unit/clause ratio family approximated from spaCy dependency "
+                  "labels (mean length of sentence/T-unit/clause, clauses and dependent clauses "
+                  "per T-unit/clause, coordinate phrases and complex nominals per T-unit/clause, "
+                  "verb phrases per T-unit, finite/nonfinite ratio -- every finding says it is an "
+                  "approximation, not real L2SCA/TAASSC, which used Tregex over constituency "
+                  "trees), phrasal elaboration (noun-phrase length/depth, pre/postmodifier "
+                  "counts and diversity, PP-attachment density, appositive and participial-"
+                  "modifier rates), dependency topology (branching factor, tree imbalance, head "
+                  "direction, long-dependency rate, non-projective sentence rate, root-POS and "
+                  "dependency-label/transition entropy, subtree-size distribution), and "
+                  "corpus-trained syntactic surprisal (POS-bigram and dependency-label-bigram "
+                  "cross-entropy plus a per-sentence surprisal distribution with top/bottom "
+                  "evidence sentences -- never fit on the document being scored; needs a corpus "
+                  "profile built with BOTH this suite enabled AND --parse-metrics, since this "
+                  "suite's cost is 'parse'). A fifth, off-by-default feature adds "
+                  "real constituency-tree measures (tree depth, phrase-type and production-rule "
+                  "entropy, distinct-subtree rate, sentence-template diversity) from a real "
+                  "neural constituency parser (benepar), over a bounded, seeded, deterministic "
+                  "sample of sentences -- never a whole-book parse. Off by default; "
+                  "experimental."),
+    _spec("parser_consensus", "parser_consensus", "syntax", "parse",
+          requires=("spacy", "pysbd", "nltk", "syntok", "stanza", "benepar"),
+          defaults={
+              "features": {
+                  "segmentation": True, "tokenization": True, "pos": True, "dependency": True,
+                  "chunks": True,
+                  # Off even when the suite is on: each loads an extra model
+                  # beyond the en_core_web_sm pipeline every cost="parse"
+                  # metric already shares -- see the module docstring.
+                  "spacy_md": False, "spacy_lg": False, "stanza": False,
+                  "constituency_benepar": False,
+              },
+              "segmenters": ["builtin", "pysbd", "pysbd_quote_aware", "nltk_punkt",
+                            "spacy_sentencizer", "spacy_parser", "syntok"],
+              "long_sentence_words": 40,
+              "max_paragraphs": 200,
+              "max_words": 20000,
+              "max_sentences_for_parse": 300,
+              "max_seconds_parse": 180.0,
+              "max_reported": 10,
+              "seed": 0,
+              "spacy_md_model": "en_core_web_md",
+              "spacy_lg_model": "en_core_web_lg",
+              "stanza_processors": "tokenize,mwt,pos,lemma,depparse",
+              "benepar_model": "benepar_en3",
+          },
+          summary="Experimental parser/segmenter disagreement suite: up to seven independent "
+                  "sentence segmenters (built-in, plain pySBD, the pipeline's quote-aware pySBD, "
+                  "NLTK Punkt, spaCy's rule-based sentencizer, spaCy's parser-derived sentences, "
+                  "syntok) compared by long-sentence-share and max-sentence-length -- the tail, "
+                  "not the mean, so a plain-pySBD-style quote collapse is flagged even when it "
+                  "barely moves a book's average -- plus pairwise boundary precision/recall/F1 "
+                  "and all/majority/one-only boundary consensus; independent tokenizer "
+                  "comparison (token-count/boundary-F1/special-token disagreement); and, once a "
+                  "second parser is enabled (spaCy md/lg or stanza; a single parser alone "
+                  "correctly reports 'insufficient consensus' rather than comparing one thing to "
+                  "itself), POS/morphology agreement, UAS/LAS/root/label/depth/dependency-"
+                  "distance agreement between the first two available parsers with an explicit "
+                  "alignment-coverage figure, and a noun-phrase span F1 between spaCy's "
+                  "dependency-derived chunks and a real constituency parse (stanza, or benepar "
+                  "where it loads). Every comparison is over a deterministic, seeded, "
+                  "spread-across-the-book sample, never the whole book. Off by default; "
+                  "experimental."),
+    _spec("conversation_suite", "conversation_suite", "dialogue", "moderate",
+          requires=("networkx", "vaderSentiment", "nrclex"),
+          defaults={
+              "features": {
+                  "attribution": True, "dominance": True, "alternation": True,
+                  "length_accommodation": True, "function_word_coordination": True,
+                  "contraction_convergence": True, "punctuation_convergence": True,
+                  "lexical_entrainment": True, "turn_taking": True,
+                  "response_relevance": True, "politeness": True,
+                  "sentiment_coupling": True, "speaker_separability": True, "graph": True,
+                  # Off even when the suite is on: each needs a heavier optional
+                  # dependency (spaCy, a transformers model download, a
+                  # sentence-transformers model) or extra per-window cost --
+                  # see config.json's "_requires_*" notes.
+                  "pos_convergence": False, "dialogue_act": False,
+                  "response_relevance_embedding": False, "scene_drift": False,
+              },
+              "min_turns_per_speaker": 8,
+              "min_attribution_coverage": 25.0,
+              "min_coordination_pairs": 5,
+              "min_entrainment_pairs": 10,
+              "min_graph_edges": 3,
+              "min_coupling_pairs": 30,
+              "rare_word_zipf_threshold": 3.0,
+              "shuffle_seed": 0,
+              "separability_max_turns": 400,
+              "response_relevance_model": "all-MiniLM-L6-v2",
+              "dialogue_act_model": "WSHAPER/distilbert-multilingual-dialogue-act-classifier",
+              "dialogue_act_max_turns": 200,
+              "pos_convergence_max_pairs": 300,
+              "scene_window_words": 6000,
+          },
+          summary="Experimental conversational-dynamics suite built on the existing dialogue "
+                  "extraction/attribution: Danescu-Niculescu-Mizil-style directional "
+                  "coordination (turn-length, sentence-count, function-word category, "
+                  "contraction, question-mark, exclamation-mark -- does a responder's own rate "
+                  "rise right after the other speaker's did, above the responder's own "
+                  "reply-position baseline?); shuffled-partner-controlled lexical and rare-word "
+                  "entrainment and response relevance (lexical by default, a real "
+                  "sentence-transformers embedding backend as an off-by-default upgrade); "
+                  "speaker turn-count dominance (Gini) and alternation/run-length; "
+                  "question-response/unanswered-question/backchannel rates; a leave-one-out "
+                  "nearest-centroid speaker-separability accuracy beyond the existing "
+                  "function-word-distance metrics; a regex approximation of "
+                  "Danescu-Niculescu-Mizil & Lee's politeness strategies; VADER/NRC "
+                  "sentiment/emotion response coupling and per-speaker sentiment "
+                  "differentiation (reusing sequences.py's two scorers, never a new sentiment "
+                  "engine); a conversation graph (density, reciprocity, cross-checked against "
+                  "networkx where installed); and, off by default, POS-pattern convergence "
+                  "(needs spaCy), a versioned dialogue-act classifier's label distribution and "
+                  "transition entropy (needs transformers/torch), and scene-window style "
+                  "drift. Every genuinely per-speaker claim is suppressed below "
+                  "min_attribution_coverage/min_turns_per_speaker, mirroring "
+                  "dialogue_speaker_style's own gate. Off by default; experimental."),
+    _spec("graph_suite", "graph_suite", "discourse", "parse",
+          requires=("spacy", "networkx", "fastcoref", "booknlp"),
+          defaults={
+              "features": {
+                  "lexical_chain": True, "surface_name": True, "entity_cooccurrence": True,
+                  "character_cooccurrence": True, "paragraph_entity_overlap": True,
+                  "quote_speaker": True, "topic_transition": True, "temporal_drift": True,
+                  "sentence_semantic": False, "paragraph_semantic": False,
+                  "coreference_entity": False, "dependency_relation": False, "booknlp": False,
+              },
+              "min_word_len": 3,
+              "lexical_chain_gap": 3,
+              "lexical_chain_min_length": 2,
+              "surface_name_window_sentences": 3,
+              "entity_max_tracked": 150,
+              "entity_graph_window_sentences": 3,
+              "character_max_tracked": 150,
+              "character_graph_window_sentences": 3,
+              "min_mentions_for_graph": 2,
+              "paragraph_overlap_window": 5,
+              "topic_n_topics": 6,
+              "topic_max_paragraphs": 2000,
+              "semantic_model": "all-MiniLM-L6-v2",
+              "semantic_graph_k": 5,
+              "semantic_graph_min_similarity": 0.5,
+              "semantic_graph_max_units": 1500,
+              "coreference_model": "biu-nlp/f-coref",
+              "coreference_max_words": 4000,
+              "booknlp_model": "small",
+              "booknlp_pipeline": "entity,quote,supersense,event,coref",
+              "booknlp_max_words": 3000,
+              "seed": 0,
+          },
+          summary="Experimental network-science suite: named-entity/character/surface-name "
+                  "co-occurrence graphs, a paragraph entity-overlap graph, a quote-speaker "
+                  "interaction graph, a TF-IDF/k-means topic-transition graph, a lexical-chain "
+                  "graph, an early-vs-late-half temporal drift channel (edge-set change and "
+                  "community persistence), plus (off by default) sentence/paragraph "
+                  "embedding-similarity graphs, a real-coreference-resolved entity graph, a "
+                  "dependency-relation (POS-pair) aggregate graph, and real BookNLP "
+                  "character/quote extraction. Every graph reports the same battery: node/edge "
+                  "counts, density, degree shape, components, clustering, assortativity, bounded "
+                  "path statistics, seeded Louvain community structure, PageRank/betweenness/"
+                  "degree centralization, edge-weight entropy and node-reappearance distance, "
+                  "plus an independent igraph cross-check kept as a disagreement channel where "
+                  "igraph is installed. Off by default; experimental."),
+    _spec("lexical_norms_suite", "lexical_norms_suite", "lexical", "moderate",
+          requires=("wordfreq", "openpyxl", "lexical_diversity", "taaled", "lftk"),
+          defaults={
+              "features": {
+                  "concreteness": True, "age_of_acquisition": True, "warriner_vad": True,
+                  "nrc_vad": True, "sensorimotor": True, "subtlex": True, "glasgow": True,
+                  "mrc": True, "frequency_source_agreement": True, "lexdiv_crosscheck": True,
+                  "taaled_crosscheck": True,
+                  # Off by default: each forces the shared spaCy parse, which this suite's
+                  # "moderate" cost class does not otherwise pay for -- see the module
+                  # docstring's "Surface vs lemma" / "Cross-checks" sections.
+                  "lemma_lookup": False, "lftk_crosscheck": False,
+              },
+              "language": "en",
+              "resource_paths": {},
+              "diversity_crosscheck_max_tokens": 50_000,
+              "diversity_crosscheck_window": 50,
+              "lftk_max_chars": 200_000,
+          },
+          summary="Experimental lexical sophistication and psycholinguistic norm analysis: "
+                  "concreteness (Brysbaert), age of acquisition (Kuperman, surface and "
+                  "lemma-aggregated), Warriner and NRC valence/arousal/dominance (kept as "
+                  "independent resources), Lancaster sensorimotor perceptual/action strength, "
+                  "SUBTLEX-US Zipf frequency and contextual diversity, all nine Glasgow Norms "
+                  "scales and all six rated MRC Psycholinguistic Database dimensions -- each as "
+                  "a token-weighted and a type-weighted finding, both carrying coverage, "
+                  "quantiles, table-referenced low/high tail shares, sentence- and "
+                  "paragraph-level distributions, between-paragraph variance, early-vs-late "
+                  "drift and a dialogue-vs-narration difference. Plus a wordfreq-vs-SUBTLEX-US "
+                  "frequency agreement check, two independent lexical-diversity cross-checks "
+                  "(the lexical_diversity package and TAALED itself, alongside -- never "
+                  "replacing -- mattr.py/lexical_mtld.py/lexical_hdd.py), and two off-by-default, "
+                  "parse-requiring extras (a true lemma-normalized AoA lookup, and an LFTK "
+                  "cross-check against its own bundled Kuperman/Brysbaert/SUBTLEX-US tables). "
+                  "Every norm resource is downloaded, cached and versioned by "
+                  "textgrader.lexicons (see config.json's _requires_ notes and that module's "
+                  "docstring), never bundled in the repository; a resource that is not cached "
+                  "or not licensable (English Lexicon Project, CELEX) degrades only its own "
+                  "findings. Off by default; experimental."),
+    _spec("affect_suite", "affect_suite", "discourse", "moderate",
+          requires=("vaderSentiment", "nrclex", "afinn", "textblob", "empath", "liwc",
+                   "transformers", "torch"),
+          defaults={
+              "features": {
+                  "vader": True, "nrc_valence": True, "afinn": True,
+                  "textblob_polarity": True, "textblob_subjectivity": True,
+                  # Off by default: loads a Hugging Face transformer checkpoint.
+                  # This suite's cost is "moderate" (needs neither a spaCy parse
+                  # nor sentence_transformers), so MetricSpec.needs_model does
+                  # NOT exclude it from corpus profiling -- see that property's
+                  # own docstring above. This flag is the only thing standing
+                  # between a transformer model and a book nobody asked to run
+                  # one against, the same situation logic_suite's model flags
+                  # are in.
+                  "transformer_sentiment": False,
+                  "nrc_categories": True, "empath_categories": True,
+                  # On by default but inert without liwc_dictionary_path
+                  # configured: LIWC is commercially licensed and never
+                  # bundled, so leaving this on costs nothing unasked.
+                  "liwc_categories": True,
+                  "vad": True,
+                  "dialogue_narration_gap": True, "speaker_profiles": True,
+                  "sequence_correlations": True, "disagreement": True,
+              },
+              "neutral_band": 0.05,
+              "speaker_min_turns": 8,
+              "high_confidence_quantile": 0.75,
+              "empath_top_categories": 15,
+              "liwc_dictionary_path": None,
+              "afinn_language": "en",
+              "afinn_emoticons": False,
+              "transformer_model": "distilbert-base-uncased-finetuned-sst-2-english",
+              "transformer_max_chars": 512,
+          },
+          summary="Experimental sentiment/emotion/affect/tone-trajectory analysis: five "
+                  "independent per-sentence polarity/subjectivity engines (VADER, NRC EmoLex "
+                  "valence balance, AFINN, TextBlob/Pattern polarity and subjectivity, plus an "
+                  "off-by-default transformer classifier) each reporting level, volatility, "
+                  "positive/negative/neutral share, reversal rate and longest same-sign runs, an "
+                  "early/middle/late arc with linear/nonlinear trend, a dialogue-vs-narration "
+                  "gap, per-speaker affect spread and a length/rarity correlation; a cross-engine "
+                  "disagreement channel (sign disagreement, rank correlation, high-confidence "
+                  "disagreement); NRC EmoLex and Empath emotion/topic-category distributions "
+                  "(each keeping its own ontology); an optional user-supplied LIWC dictionary by "
+                  "path (never bundled); and forward-stable placeholder findings for NRC-VAD/"
+                  "Warriner-VAD valence/arousal/dominance trajectories, filled in automatically "
+                  "once Task 11's lexicon loader registers a VAD engine. Every engine and "
+                  "measurement family is independently switchable; every finding stays "
+                  "Polarity.NEUTRAL. Off by default; experimental."),
+    _spec("semantic_structure_suite", "semantic_structure_suite", "semantic", "moderate",
+          requires=("sklearn", "gensim", "rank_bm25", "tomotopy", "wordfreq"),
+          defaults={
+              "features": {
+                  "lexical_tfidf": True, "bm25": True, "lsa": True,
+                  "static_embedding_glove": False, "static_embedding_spacy": False,
+                  "sentence_transformer": False, "topic_models": True, "disagreement": True,
+              },
+              "seed": 0,
+              "structure_window": 5,
+              "centroid_reference_cap": 200,
+              "centroid_query_cap": 400,
+              "dispersion_pair_cap": 300,
+              "intro_conclusion_sentences": 3,
+              "lsa_components": 10,
+              "lsa_max_features": 1500,
+              "lsa_fit_sample_cap": 800,
+              "glove_model": "glove-wiki-gigaword-50",
+              "spacy_vector_model": "en_core_web_md",
+              "sentence_transformer_model": "all-MiniLM-L6-v2",
+              "disagreement_low_tail_quantile": 0.10,
+              "topic_vocab_size": 3000,
+              "topic_n_topics": 8,
+              "topic_active_threshold": 0.1,
+              "topic_profile_seed": 0,
+              "topic_profile_paragraph_sample": 30,
+              "topic_profile_paragraph_word_cap": 300,
+              "topic_profile_max_terms": 250,
+              "hdp_iterations": 200,
+          },
+          summary="Experimental multi-representation semantic-structure suite: TF-IDF-lexical, "
+                  "BM25, within-document LSA/SVD, and (off by default) GloVe/fastText-style "
+                  "static-embedding and sentence-transformer channels, each reporting adjacent-"
+                  "sentence/paragraph similarity, centroid relatedness, local-window drift, "
+                  "global dispersion and opening-to-closing similarity; a corpus-trained, "
+                  "leave-one-out LDA/NMF (scikit-learn) and HDP (tomotopy) topic-model channel "
+                  "(entropy, dominant-topic confidence, switch rate, recurrence interval, "
+                  "persistence, active-topic count, concentration) fit from a bounded per-book "
+                  "profile cache, never on the graded text; and explicit cross-representation "
+                  "disagreement (rank correlation, single-representation and consensus "
+                  "low-coherence flags). Off by default; experimental."),
+    _spec("signal_processing_suite", "signal_processing_suite", "sentence_rhythm", "moderate",
+          defaults={
+              "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
+              "features": {
+                  "welch_spectral": True, "spectral_centroid": True, "spectral_bandwidth": True,
+                  "spectral_flatness": True, "spectral_rolloff": True, "band_energy": True,
+                  "peaks": True, "zero_crossing_rate": True,
+                  "cepstral_peak": False, "multiscale_variance": False,
+                  "cross_correlation": True, "cross_spectrum": False, "coherence": True,
+              },
+              "pairs": [["sentence_words", "sentence_punctuation"]],
+              "welch_nperseg": 256,
+              "welch_noverlap": None,
+              "welch_window": "hann",
+              "welch_detrend": "constant",
+              "band_edges": [0.3333333333333333, 0.6666666666666666],
+              "rolloff_percent": 0.85,
+              "peak_prominence_sigma": 0.5,
+              "peak_min_distance": 1,
+              "cepstral_min_quefrency": 2,
+              "multiscale_min_blocks": 4,
+              "cross_correlation_max_lag": 10,
+              "window_words": 2000,
+              "language": "en",
+              "embedding_model": "all-MiniLM-L6-v2",
+              "topic_n_topics": 4,
+              "topic_model": "nmf",
+              "topic_random_state": 42,
+              "topic_max_features": 2000,
+              "min_lengths": {},
+              "max_findings": 200,
+          },
+          summary="Experimental generic signal-processing features over the same named sequences "
+                  "as timeseries_suite (sentence length, punctuation, parse depth, embedding-based "
+                  "sentence similarity, sentiment, emotion, topic id, ...): Welch periodograms, "
+                  "spectral centroid/bandwidth/flatness/roll-off, low/mid/high band energy shares, "
+                  "time-domain peak count/prominence/distance, a zero-crossing rate, a real-cepstrum "
+                  "peak-prominence summary, a multiscale (aggregated-variance) scaling exponent, "
+                  "and cross-sequence cross-correlation/cross-spectral-phase/coherence between two "
+                  "sequences that share a sample unit. Reuses textgrader.sequences' registry "
+                  "entirely -- adding a sequence there (a stress sequence, a POS-code channel) "
+                  "makes it usable here with no code change, once a caller names it. Several "
+                  "features are deliberate variants of an existing timeseries_suite/catch22 id "
+                  "(named in each finding's distribution['overlaps_existing_metric_id']) rather "
+                  "than replacements; every sequence, feature and pair is independently "
+                  "switchable and off by default."),
+    _spec("malformed_text_suite", "malformed_text_suite", "lexical", "moderate",
+          requires=("wordfreq", "symspellpy", "wordninja", "wordsegment", "langid",
+                   "langdetect", "lingua", "fasttext", "gcld3"),
+          defaults={
+              "features": {
+                  "token_shape": True, "script_distribution": True,
+                  "charclass_entropy": True, "suspicious_token_frequency": True,
+                  "word_segmentation": True, "dictionary_disagreement": True,
+                  "language_id_lingua": True, "language_id_langid": True,
+                  "language_id_langdetect": True, "language_id_fasttext": True,
+                  "language_id_cld3": True, "language_id": True,
+              },
+              "language": "en",
+              "long_token_min_length": 15,
+              "long_token_tail_quantile": 0.99,
+              "suspicious_min_length": 8,
+              "suspicious_zipf_threshold": 1.0,
+              "suspicious_max_candidates": 300,
+              "recognized_zipf_threshold": 2.0,
+              "segmentation_plausible_zipf": 3.0,
+              "split_word_fragment_zipf_max": 4.5,
+              "split_word_joined_zipf_min": 3.0,
+              "split_word_min_combined_length": 6,
+              "split_word_max_fragment_length": 6,
+              "max_reported": 25,
+              "lingua_languages": ["en", "fr", "es", "de", "it", "pt", "nl", "la",
+                                   "sv", "da", "pl", "ru", "tr", "id"],
+              "language_id_min_chars": 12,
+              "language_id_low_confidence_threshold": 0.5,
+              "language_id_run_length": 80,
+              "language_id_max_runs": 20,
+              "language_id_max_paragraphs": 400,
+              "language_id_min_paragraph_chars": 40,
+              "language_id_section_words": 3000,
+              "language_id_max_sections": 60,
+              "language_id_max_document_chars": 200000,
+              "cld3_max_bytes": 3000,
+              "fasttext_model_path": "",
+              "fasttext_model_url": "https://dl.fbaipublicfiles.com/fasttext/"
+                                    "supervised-models/lid.176.ftz",
+          },
+          summary="Experimental malformed-text/word-segmentation/language-ID/tokenization-"
+                  "anomaly suite: token-shape rates (long tokens, mixed alphanumerics, "
+                  "repeated symbols, character-class entropy, Unicode-script distribution "
+                  "entropy), wordfreq-based general-vocabulary recognition and "
+                  "very-low-frequency-token rates, bounded word-segmentation disagreement "
+                  "over suspicious no-space tokens (wordninja vs wordsegment vs SymSpell, "
+                  "with a fused-word-candidate rate requiring 2-of-3 agreement), a "
+                  "split-word-candidate rate (adjacent short tokens whose join is a common "
+                  "real word), a wordfreq-vs-SymSpell dictionary/frequency disagreement rate, "
+                  "and language identification at document/section/paragraph/sentence level "
+                  "from up to five independent detectors (Lingua, langid.py, seeded "
+                  "langdetect, fastText's lid.176, and CLD3 via gcld3) reporting confidence "
+                  "distributions, a low-confidence-sentence rate, a code-switch rate, "
+                  "paragraph/sentence off-majority-language rates, section-level language "
+                  "entropy, and both unanimous and mean-pairwise detector agreement. Every "
+                  "channel that overlaps mechanical_quality_suite's fused-token/dictionary/"
+                  "OCR/entropy findings says so in its own distribution. Off by default; "
+                  "experimental."),
+    _spec("reuse_suite", "reuse_suite", "repetition", "moderate",
+          requires=("datasketch", "rapidfuzz", "levenshtein", "jellyfish", "textdistance",
+                   "simhash", "tlsh", "ppdeep", "ahocorasick"),
+          defaults={
+              "features": {
+                  "sentence_level": True, "paragraph_level": True, "simhash": True,
+                  "edit_distance_family": True, "textdistance_crosscheck": True, "tlsh": True,
+                  "ssdeep": True, "longest_repeated_run": True, "longest_approximate_run": True,
+                  "template_motifs": True, "view_normalized": True, "view_function_words": True,
+                  "view_stopwords": True, "view_punctuation": True, "view_word_shape": True,
+                  "view_content_words": True, "view_lemma": False, "view_pos": False,
+                  "view_dependency": False,
+              },
+              "shingle_size": 3,
+              "minhash_num_perm": 32,
+              "minhash_seed": 1,
+              "candidate_threshold": 0.3,
+              "near_duplicate_threshold": 0.7,
+              "near_duplicate_thresholds": [0.6, 0.7, 0.8, 0.9],
+              "max_candidates_per_item": 20,
+              "max_sentences": 20000,
+              "max_paragraphs": 8000,
+              "min_tlsh_chars": 300,
+              "min_ssdeep_chars": 200,
+              "approx_window_tokens": 8,
+              "approx_stride_tokens": 4,
+              "approx_similarity_threshold": 80.0,
+              "approx_max_windows": 20000,
+              "approx_extend_step": 4,
+              "template_motif_window": 5,
+              "template_motif_min_count": 3,
+              "simhash_shingle_size": 4,
+              "simhash_index_k": 3,
+          },
+          summary="Experimental approximate-duplication, fuzzy-reuse, structural-reuse and "
+                  "motif-detection suite: exact/near-duplicate sentence and paragraph rates via "
+                  "candidate-bounded MinHash/LSH (never all-pairs), SimHash Hamming-distance "
+                  "nearest neighbors, TLSH/ssdeep(ppdeep) fuzzy-hash similarity for longer "
+                  "blocks, normalized Levenshtein/Jaro-Winkler/token-set/token-sort fuzzy "
+                  "similarity and a Sorensen-Dice cross-check over the same candidate pairs, "
+                  "reuse distance (local refrain vs. book-wide template), longest exact and "
+                  "longest approximately-repeated token runs, sliding-window template-motif "
+                  "detection, and exact-duplicate-share channels over six always-on transformed "
+                  "views (lowercase/normalized, function-words-only, stopwords-only, "
+                  "punctuation-only, word-shape, content-words-only) plus three off-by-default "
+                  "parsed views (lemma, POS-tag sequence, dependency-label sequence) that share "
+                  "this document's spaCy parse. Complements, and never duplicates, "
+                  "repeated_ngrams/local_repetition/lexical_repetition_distance/"
+                  "lexical_lemma_repetition/discourse_constructions/punctuation_patterns/"
+                  "semantic_clusters -- overlapping channels name the existing metric id in "
+                  "their distribution's overlaps_existing_metric_id. Off by default; "
+                  "experimental."),
+    _spec("readability_suite", "readability_suite", "readability", "moderate",
+          requires=("textstat", "py_readability_metrics", "pronouncing", "pystylometry"),
+          defaults={
+              "features": {
+                  "textstat_formulas": True, "textstat_mcalpine_eflaw": True,
+                  "readability_metrics_formulas": True, "pystylometry_formulas": True,
+                  "syllable_crosscheck": True, "difficult_word_crosscheck": True,
+                  "formula_aggregate": True,
+                  # On by default: pystylometry's own regex sentence splitter merges most
+                  # dialogue sentences on real prose (verified: 513 sentences on Alice in
+                  # Wonderland against a canonical 1,459), silently inflating every
+                  # sentence-length-based formula it computes -- this re-runs those
+                  # formulas over text rebuilt from TextGrader's own canonical sentence
+                  # boundaries as a directly comparable cross-check. See the module
+                  # docstring's "Segmentation diagnostics".
+                  "pystylometry_canonical_segmentation": True,
+                  # Off by default: seven formulas textstat exposes that were calibrated
+                  # for languages other than English -- see the module docstring.
+                  "textstat_locale_formulas": False,
+                  # Off by default: pystylometry's own compute_gunning_fog() loads its
+                  # OWN spaCy pipeline, independent of the shared cost="parse" pipeline
+                  # every other metric in this codebase shares -- see the module docstring.
+                  "pystylometry_gunning_fog": False,
+              },
+              "syllable_max_unique_words": 20000,
+              "max_evidence": 20,
+              # How far (as a fraction) a library's own sentence count may drift from
+              # TextGrader's canonical one before that implementation's grade-scale
+              # findings are excluded from the primary cross-formula aggregate (a
+              # formula_grade_spread_raw finding keeps the unfiltered version visible
+              # regardless). See the module docstring's "Segmentation diagnostics".
+              "segmentation_tolerance": 0.10,
+          },
+          summary="Experimental readability-formula cross-check suite: Flesch Reading Ease, "
+                  "Flesch-Kincaid grade, Gunning Fog, SMOG, Coleman-Liau, Automated Readability "
+                  "Index, Dale-Chall, Linsear Write and Spache from three independent libraries "
+                  "(textstat, py-readability-metrics, pystylometry) alongside TextGrader's own "
+                  "existing fk/ari core values (never changed by this suite), each formula's "
+                  "cross-implementation disagreement kept as its own finding rather than "
+                  "reconciled; FORCAST, the Fry readability graph and Powers-Sumner-Kearl "
+                  "(pystylometry only -- no other installed library implements them); LIX, RIX "
+                  "and McAlpine EFLAW, plus (off by default) seven formulas calibrated for "
+                  "languages other than English; a Jaccard difficult-word-list disagreement "
+                  "(textstat's Dale-Chall-derived list vs pystylometry's own bundled "
+                  "familiar-word list); a three-way syllable-counter disagreement rate over "
+                  "every unique word (TextGrader's own vowel-cluster heuristic vs textstat's "
+                  "pyphen-based counter vs real CMUdict phonetic transcriptions via the "
+                  "'pronouncing' package); every library finding's distribution carries its own "
+                  "sentence/word/syllable counts beside TextGrader's canonical ones plus a "
+                  "sentence_count_ratio_vs_canonical, so a real tokenization failure (found on "
+                  "real dialogue prose: pystylometry's own regex sentence splitter merges most "
+                  "quote-opening sentences) is visible rather than looking like a formula "
+                  "disagreement; a canonical-segmentation cross-check re-running every "
+                  "sentence-length-sensitive pystylometry formula over text rebuilt from "
+                  "TextGrader's own sentence boundaries; and mean/median/max/spread/SD across "
+                  "every same-scale formula-implied grade level whose own sentence count is not "
+                  "a tokenization outlier on this document, plus a separate, unfiltered "
+                  "formula_grade_spread_raw so the raw disagreement stays visible. Every finding "
+                  "is Polarity.NEUTRAL and none feed the maturity aggregate. Off by default; "
+                  "experimental."),
+    _spec("prosody_suite", "prosody_suite", "prosody", "moderate",
+          requires=("pronouncing", "g2p_en", "panphon", "phonemizer", "poesy"),
+          defaults={
+              "features": {
+                  "line_stanza_structure": True, "meter_stress": True, "rhyme": True,
+                  "near_rhyme_feature": True, "phonological_patterning": True,
+                  "g2p_fallback": False, "phonemizer_backend": False,
+                  "poesy_crosscheck": False,
+              },
+              "rhyme_lookback_lines": 4,
+              "rhyme_scheme_group_size": 4,
+              "internal_rhyme_min_word_length": 3,
+              "near_rhyme_feature_max_pairs": 3000,
+              "sound_pattern_window_words": 3,
+              "content_min_word_length": 3,
+              "phonemizer_sample_words": 40,
+              "poesy_max_lines": 40,
+              "poesy_max_seconds": 20.0,
+              "max_lines_analyzed": 2000,
+              "max_words_analyzed": 30000,
+          },
+          summary="Experimental poetry/prosody suite: physical line and stanza structure read "
+                  "straight off the canonical (pre-paragraph-join) text -- words/syllables per "
+                  "line, line-length CV/entropy, stanza symmetry, repeated line-length patterns "
+                  "and an enjambment proxy; a hand-rolled meter/stress scan (dominant foot, "
+                  "conformity, deviation, feet/line, stress entropy and periodicity) over "
+                  "CMUdict pronunciation with an off-by-default g2p_en fallback for "
+                  "out-of-vocabulary words; three DELIBERATELY separate rhyme channels (exact "
+                  "rhyme/near-rhyme by ARPABET edit distance, and an on-by-default PanPhon "
+                  "articulatory-feature similarity), rhyme-scheme regularity, rhyme-class "
+                  "entropy, internal rhyme and rhyme-recurrence distance; phoneme entropy, "
+                  "vowel/consonant balance, alliteration/assonance/consonance density and "
+                  "phoneme-bigram repetition; plus two off-by-default cross-checks, a "
+                  "phonemizer/espeak second pronunciation backend and a bounded Poesy/Prosodic "
+                  "real meter+rhyme-scheme scan. Pronunciation coverage (CMUdict vs g2p vs "
+                  "unresolved) is always reported alongside every phonology-dependent finding. "
+                  "Runs on prose too, as an experimental cadence/sound-texture probe -- free "
+                  "verse and prose are never force-fit into a meter. Off by default; "
+                  "experimental."),
+    _spec("automatic_feature_generation", "automatic_features", "distribution_shape", "moderate",
+          defaults={
+              "mode": "minimal",
+              "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
+              # null (rather than a fixed list/string/int) on these three
+              # means "derive it from mode" -- see _DEFAULT_EXTRACTORS_BY_MODE/
+              # _DEFAULT_MAX_FINDINGS in automatic_features.py. This matters
+              # because both grade.py and corpus.py build a metric's options
+              # by starting from THESE defaults and only overriding the keys
+              # a caller's config names; a caller who sets only "mode" must
+              # still get that mode's own extractors/preset/cap, not the
+              # ones written here. common.option() already treats an
+              # explicit null exactly like an absent key, which is what
+              # makes this work with no special-casing anywhere else.
+              "extractors": None,
+              "tsfresh_feature_set": None,
+              "allow_pattern": None,
+              "deny_pattern": None,
+              "max_findings": None,
+              "max_sequence_length": 3000,
+              "min_lengths": {},
+              "detrend": False,
+              "window_words": 2000,
+              "embedding_model": "all-MiniLM-L6-v2",
+              "language": "en",
+              "topic_n_topics": 4,
+              "topic_model": "nmf",
+              "topic_random_state": 42,
+              "topic_max_features": 2000,
+              "include_full_feature_vector": False,
+              "full_feature_vector_max_features": 2000,
+          },
+          summary="Bulk, per-catalogue-feature automatic expansion of every named "
+                  "textgrader.sequences channel into candidate document-level features, in three "
+                  "modes: 'minimal' (ten hand-picked, dependency-free robust statistics per "
+                  "sequence -- extra quantiles, IQR, MAD, skewness, kurtosis, coefficient of "
+                  "variation, range -- the default), 'standard' (minimal plus catch22's 22 "
+                  "canonical features and tsfresh's 10-feature minimal preset, each its own "
+                  "stable id, unlike timeseries_suite which folds tsfresh into one finding), and "
+                  "'comprehensive' (standard plus tsfresh's 750+-feature comprehensive preset, "
+                  "each exploded into its own sanitized id, deterministically capped). Ids are "
+                  "'style.autofeature_<sequence>_<extractor>_<feature>', with every tsfresh/"
+                  "catch22 raw name mapped through a deterministic, collision-free sanitizer; "
+                  "mode and library versions are recorded in every finding's distribution. "
+                  "Overlaps with timeseries_suite's own hand-curated catch22/tsfresh ids are kept "
+                  "(never silently duplicated) and named in distribution['overlaps_existing_"
+                  "metric_id']. Allowlist/denylist regexes, per-extractor minimum lengths, a "
+                  "deterministic evenly-strided downsample above max_sequence_length and a hard "
+                  "max_findings cap with a deterministic (sorted-name) selection rule bound the "
+                  "output; a crashing or NaN-producing extractor degrades only its own findings. "
+                  "Off by default; experimental."),
+    _spec("nonlinear_dynamics_suite", "nonlinear_dynamics_suite", "book_drift", "moderate",
+          defaults={
+              "sequences": ["sentence_words", "paragraph_words", "sentence_punctuation"],
+              "feature_groups": [
+                  "rqa_recurrence_rate", "rqa_threshold", "rqa_determinism",
+                  "rqa_avg_diagonal_length", "rqa_longest_diagonal_line", "rqa_diagonal_entropy",
+                  "rqa_laminarity", "rqa_trapping_time", "rqa_longest_vertical_line",
+                  "rqa_recurrence_time", "rqa_trend",
+              ],
+              "embedding_dimension": 2,
+              "time_delay": 1,
+              "theiler_window": 1,
+              "min_diagonal_length": 2,
+              "min_vertical_length": 2,
+              "threshold_mode": "target_rr",
+              "target_recurrence_rate": 0.05,
+              "threshold_std_fraction": 0.1,
+              "max_series_points": 1500,
+              "sampling_seed": 42,
+              "rqa_min_embedded_points": 30,
+              "trend_edge_margin_fraction": 0.1,
+              "lyapunov_min_length": 200,
+              "higuchi_kmax": 10,
+              "permutation_order": 3,
+              "fuzzy_entropy_m": 2,
+              "dispersion_entropy_c": 4,
+              "window_words": 2000,
+              "language": "en",
+              "embedding_model": "all-MiniLM-L6-v2",
+              "topic_n_topics": 4,
+              "topic_model": "nmf",
+              "topic_random_state": 42,
+              "topic_max_features": 2000,
+              "min_lengths": {},
+              "max_findings": 200,
+          },
+          summary="Experimental recurrence-quantification and nonlinear-dynamics suite over the "
+                  "same named sequences as timeseries_suite: a numpy-only recurrence "
+                  "quantification analysis core (recurrence rate, the chosen recurrence "
+                  "threshold in units of the series' own SD -- the real cross-book measurement "
+                  "under the default target-recurrence-rate threshold mode, where recurrence "
+                  "rate itself is fixed by construction --, determinism, average/longest "
+                  "diagonal line, diagonal-line entropy, laminarity, trapping time, longest "
+                  "vertical line, recurrence time and TREND nonstationarity), each sharing one "
+                  "capped, deterministically-sampled recurrence matrix; an off-by-default PyRQA/"
+                  "OpenCL cross-check (unavailable in a container with no OpenCL platform, "
+                  "reporting the exact error); and independent nolds/antropy/EntropyHub/ordpy "
+                  "estimators (Hurst, DFA, Lyapunov, correlation and fractal dimension, sample/"
+                  "approximate/fuzzy/dispersion entropy, Lempel-Ziv complexity, permutation "
+                  "entropy and ordinal statistical complexity), each naming the existing metric "
+                  "id it cross-checks where one exists. Embedding dimension, delay, threshold "
+                  "and the sampling strategy are explicit, reported settings. Off by default; "
+                  "experimental."),
+    _spec("metric_relationships", "metric_relationships", "distribution_shape", "moderate",
+          defaults={
+              "features": {
+                  "disagreement": True, "residual": True, "symmetric": True,
+                  "multivariate": True, "percentile_counts": True, "max_severity": True,
+                  "topk_severity": True, "pca_diagnostic": True, "bootstrap_stability": True,
+                  "loo_stability": True, "mutual_information": True,
+                  "partial_correlation": True, "distance_correlation": True,
+              },
+              "discover_min_abs_spearman": 0.7,
+              "identity_abs_spearman": 0.99,
+              "pairs": [
+                  ["subord", "sttr"],
+                  ["fk", "lexical.word_zipf"],
+                  ["semantic.structure_bm25_centroid_relatedness", "top100"],
+                  ["slcv", "rhythm.paragraph_words_cv"],
+              ],
+              "groups": {"wpp": ["wps", "spp"]},
+              "max_pairs": 12,
+              "min_joint_coverage": 0.7,
+              "bootstrap_samples": 200,
+              "seed": 0,
+              "top_k": 3,
+              "max_candidate_metrics": 120,
+              "min_corpus_documents": 12,
+              "distance_sample_cap": 200,
+          },
+          summary="Experimental meta-analysis layer over TextGrader's OWN metric values: fits, "
+                  "from the reference corpus's already-computed per-book metrics (no change to "
+                  "corpus.py), how strongly related pairs/groups normally move together -- "
+                  "Pearson/Spearman/Kendall tau-b/distance correlation/mutual information/"
+                  "bootstrap and leave-one-out correlation stability, plus a diagnostic-only PCA "
+                  "-- then reports, per document, pairwise standardized disagreement, a linear "
+                  "residual of one metric given another (kept as the interpretable baseline), an "
+                  "order-independent orthogonal ('symmetric') residual, a multivariate residual "
+                  "predicting one metric from a configured group (the words-per-paragraph given "
+                  "words-per-sentence AND sentences-per-paragraph relationship is a default), and "
+                  "document-level aggregates (counts above each relationship's own reference "
+                  "90th/95th/99th percentile, max and mean-top-k residual severity). Pairs are "
+                  "auto-discovered above discover_min_abs_spearman (default 0.7), restricted to "
+                  "metric ids this document itself has a value for, excludes near-identity pairs "
+                  "(>= identity_abs_spearman, default 0.99 -- reported instead in the PCA "
+                  "finding's near_identities) and is capped deterministically at max_pairs; every "
+                  "configured pair is kept regardless of its correlation strength. The fit runs "
+                  "after every ordinary metric (core and optional) in a dedicated, isolated "
+                  "post-metric phase in grade.py, since a residual needs this document's OWN "
+                  "already-measured metric values -- never by "
+                  "one metric module calling another. Leave-one-out: a graded document that is "
+                  "itself a corpus member is excluded from its own fit. Every implementation "
+                  "(correlation, regression, distance correlation, mutual information, PCA) is "
+                  "pure Python -- no optional package dependency at all. Correlated metrics are "
+                  "never deleted or hidden; every finding is Polarity.NEUTRAL. Off by default; "
+                  "experimental."),
 ])
 
 #: Config-name -> module-name, kept for older callers.
@@ -237,6 +1364,22 @@ MODEL_METRICS = {name for name, spec in REGISTRY.items() if spec.needs_model}
 
 #: Metrics whose value scales with how much text you supply.
 FAMILIES = sorted({spec.family for spec in REGISTRY.values()})
+
+
+
+def is_enabled(metric_config: Mapping[str, Any] | None, name: str) -> bool:
+    """Whether ``name`` is switched on in a ``metrics`` config mapping.
+
+    Lives here rather than in ``grade.py`` because the corpus builder needs the
+    same answer: a profile that precomputes a different set of metrics than the
+    run it is compared against is the kind of mismatch this project refuses
+    everywhere else.
+    """
+
+    setting = (metric_config or {}).get(name)
+    if setting is None:
+        return False
+    return setting is True or (isinstance(setting, dict) and bool(setting.get("enabled", False)))
 
 
 def specs_by_family() -> dict[str, list[MetricSpec]]:

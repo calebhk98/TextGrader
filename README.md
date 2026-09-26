@@ -17,6 +17,7 @@ git clone https://github.com/calebhk98/TextGrader && cd TextGrader
 pip install -r requirements.txt            # optional: nothing here is required
 python -m spacy download en_core_web_sm     # for the syntax metrics
 pip install -r requirements-embeddings.txt  # for the semantic metrics (pulls torch)
+pip install -r requirements-native.txt     # optional: packages that compile (a C++ compiler; protoc for gcld3)
 ```
 
 Python 3.9+. The core and 24 of the 57 metrics run on the standard library
@@ -197,6 +198,24 @@ is the same 50 books. Rebuild both from a shelf that matches what you write:
 percentiles are only as relevant as the corpus they come from, and this one is
 general English-language fiction weighted to the 19th and early 20th century.
 
+### Several reference profiles
+
+`corpus_profile` stays the primary reference. A `reference_profiles` block in
+`config.json` adds more, each graded against separately with the same
+safeguards (text processing, metric definitions, Lexile source, comparison
+unit), so a text gets one percentile per profile instead of a forced genre:
+
+```json
+"reference_profiles": {
+  "news": {"path": "profiles/brown_news.json", "label": "Brown news", "genre": "news"}
+}
+```
+
+`corpus_builder/dataset_adapters.py` builds corpus folders from openly
+licensed sets pinned to a version (Brown by category, Reuters, Universal
+Dependencies EWT and GUM, LitBank, WikiText); `corpus_builder/README.md` has
+the commands and the recipes for licensed sets it never downloads.
+
 Ten of the twelve children's classics the Lexile coefficients in
 `core_metrics.lexile` were fitted against are in it, so the docstring's
 calibration claim can be checked against the shipped corpus rather than taken
@@ -245,7 +264,9 @@ of it, so a slow run always says what was slow.
 | `sentence_length_deltas` | fast | - | no | Distribution of the change in length between adjacent sentences. |
 | `sentence_length_entropy` | fast | - | no | Entropy of the sentence-length distribution, normalized for range. |
 | `sentence_run_lengths` | fast | - | no | Run-length distribution of short/medium/long sentence bands. |
+| `signal_processing_suite` | moderate | scipy, PyWavelets | no | Welch spectra, spectral centroid, bandwidth, flatness and roll-off, band energies, peaks, zero crossings, cepstral peak and multiscale variance over any registered sequence (including syllable stress), plus cross-correlation and coherence between sequences of the same unit. Complements `timeseries_suite`. |
 | `sentence_segmentation` | fast | pysbd | no | Which segmenter was used, and how much it disagrees with the built-in one. |
+| `timeseries_suite` | moderate | statsmodels, ruptures, pycatch22, PyWavelets, tsfresh | no | Trend, autocorrelation, spectral, catch24 and wavelet features over named linguistic sequences; pick the sequences and the feature groups separately in config. |
 
 ### paragraph rhythm
 
@@ -265,7 +286,9 @@ of it, so a slow run always says what was slow.
 | `finite_clauses` | parse | spacy | no | Finite clauses per sentence. |
 | `opening_patterns` | parse | spacy | no | POS/dependency sentence-opening shapes, with no hard-coded vocabulary. |
 | `parse_depth` | parse | spacy | no | Per-sentence maximum dependency-tree depth. |
+| `parser_consensus` | parse | spacy, pysbd, nltk, syntok, stanza, benepar | no | Where independent sentence splitters, tokenizers and parsers disagree on the same sampled text: long-sentence share and maximum length per splitter (the tail, which is where a quote-collapse shows), boundary F1, and, once a second parser is enabled, POS, dependency and noun-phrase agreement. |
 | `passive_voice` | parse | spacy | no | Share of clauses in the passive voice. |
+| `syntax_complexity_suite` | parse | spacy, benepar | no | L2SCA-style T-unit and clause ratios pooled over the text (a labelled spaCy approximation, not L2SCA itself), phrasal elaboration, dependency-tree topology, corpus-trained syntactic surprisal (needs a profile built with `--parse-metrics`), and opt-in benepar constituency measures over a bounded sample. |
 | `pos_distribution` | parse | spacy | no | Share of each open-class part of speech. |
 | `tense_consistency` | parse | spacy | no | Rate of sentence-to-sentence tense changes in narration. |
 
@@ -274,9 +297,13 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `hdd` | moderate | lexicalrichness | no | HD-D, a hypergeometric length-resistant diversity measure. |
+| `lexical_norms_suite` | moderate | wordfreq, openpyxl, lexical-diversity, taaled, lftk | no | Age of acquisition, concreteness, imageability, familiarity, VAD, sensorimotor strength and subtitle frequency from published norm sets (downloaded once with `python -m textgrader.lexicons download all`), each with coverage, token- and type-weighted means, tails and drift. |
 | `mattr` | moderate | - | yes | Moving-average type-token ratio, length-resistant lexical diversity. |
 | `mtld` | moderate | lexicalrichness | no | Measure of Textual Lexical Diversity. |
 | `nominalizations` | parse | spacy | no | Suffix-matched nominalization density; a proxy, not a parse of derivation. |
+| `mechanical_quality_suite` | moderate | pyspellchecker, symspellpy, ftfy, confusable-homoglyphs | no | Typography, encoding, homoglyph, hyphenation and spelling checks with two independent spell checkers, invented names excluded as recurring vocabulary, and every dialect-sensitive rate split between narration and dialogue. |
+| `malformed_text_suite` | moderate | lingua, langid, langdetect, wordninja, wordsegment (fasttext, gcld3 from requirements-native.txt) | no | Language ID at document, paragraph and sentence level from up to five detectors, with code-switching and detector disagreement; word-segmentation disagreement on suspicious strings; token shape and script mix. Invented names are not treated as foreign. |
+| `randomness_suite` | moderate | wordfreq, zstandard, brotli, lz4, snappy, pyppmd, kenlm | no | Language-likeness, multi-codec compression and entropy channels, including a KenLM model trained on the text itself. |
 | `word_rarity` | moderate | wordfreq | no | Zipf word-rarity distribution from general-language frequencies. |
 
 ### repetition
@@ -285,6 +312,7 @@ of it, so a slow run always says what was slow.
 | --- | --- | --- | --- | --- |
 | `lemma_repetition` | parse | spacy | no | Repetition measured over lemmas, so walk/walked/walking cannot hide. |
 | `local_repetition` | moderate | - | yes | Content-word reuse inside sliding windows. |
+| `reuse_suite` | moderate | datasketch, rapidfuzz, levenshtein, jellyfish, textdistance, simhash, ppdeep (py-tlsh from requirements-native.txt) | no | Exact and near-duplicate sentences and paragraphs found by MinHash/LSH candidate generation (never all pairs), edit-distance and fuzzy-hash similarity, longest repeated runs, and the same reuse measured over function words, punctuation, word shapes and other structural views. |
 | `repeated_ngrams` | moderate | - | yes | Repeated word sequences, scored by excess occurrences rather than by type count. |
 | `repetition_distance` | moderate | - | no | How soon a content word is reused, in tokens. |
 | `sentence_openings` | fast | - | yes | How often a sentence starts with the same few words as another. |
@@ -297,12 +325,14 @@ of it, so a slow run always says what was slow.
 | `duplicate_sentence_clusters` | model | sentence_transformers | no | Clusters of sentences that restate one another. |
 | `local_similarity_window` | model | sentence_transformers | no | Similarity to the previous three and five sentences. |
 | `paragraph_similarity` | model | sentence_transformers | no | Paragraph-to-paragraph semantic similarity. |
+| `semantic_structure_suite` | moderate | scikit-learn, rank-bm25, gensim, tomotopy | no | Semantic structure under several independent representations (TF-IDF, BM25, LSA, opt-in GloVe, spaCy vectors and sentence embeddings), topic models fitted on the reference corpus with the graded book left out, and where the representations disagree. |
 
 ### dialogue
 
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `character_voice` | fast | - | no | Pairwise distance between transcript speakers' function-word profiles. |
+| `conversation_suite` | moderate | networkx, vaderSentiment, nrclex | no | Conversational dynamics on the existing turns and speaker attribution: turn-taking, accommodation and entrainment against a shuffled baseline, question-response, politeness, speaker separability and the reply graph. Speaker claims are withheld below the attribution-coverage bar. |
 | `dialogue_attribution` | fast | - | no | Speech tag against action beat against untagged turn. |
 | `dialogue_channels` | moderate | - | no | Every core shape measured separately for dialogue and for narration. |
 | `dialogue_contractions` | fast | - | yes | Contraction rate inside spoken text, excluding possessives. |
@@ -316,8 +346,12 @@ of it, so a slow run always says what was slow.
 
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
+| `affect_suite` | moderate | vaderSentiment, nrclex, afinn, textblob, empath, liwc, transformers | no | Sentiment, emotion and VAD per sentence from several independent engines (VADER, NRC, AFINN, TextBlob, NRC and Warriner VAD, optional Empath, a LIWC dictionary you supply, and a transformer classifier), each with its own level, volatility, arc, runs and dialogue/narration gap, plus where the engines disagree. Never a quality judgement. |
 | `causal_connectives` | fast | - | no | Causal and explanatory connective rates. |
+| `coherence_suite` | parse | spacy, networkx, nltk, sentence-transformers, fastcoref, isanlp-rst | no | Lexical, WordNet and semantic adjacency, surface *and* coreference-resolved entity grids kept side by side, a corpus-referenced entity-grid transition table, and a sampled real RST parse (tree depth, segment length, nuclearity balance, relation-family entropy). |
+| `graph_suite` | parse | spacy, networkx, igraph, fastcoref, booknlp | no | Entity, character, speaker, paragraph, topic-transition and lexical-chain graphs, each with a documented edge rule and the same network statistics (density, centralization, communities, paths), with igraph recomputing them as a cross-check. BookNLP and embedding graphs are opt-in. |
 | `hedges_boosters` | fast | - | no | Hedge, booster and modal rates. |
+| `logic_suite` | parse | spacy, transformers, fastcoref, nltk, python-dateutil | no | Surface contradiction candidates and proposition triples, cross-checked against an NLI model and coreference when installed, plus opt-in semantic role labelling, REBEL relation extraction, an argument-relation classifier and WordNet/PropBank/VerbNet/FrameNet lexical checks. The REBEL and argument-mining models are CC BY-NC-SA 4.0 (non-commercial). |
 | `rhetorical_constructions` | moderate | - | no | Repeated rhetorical templates, discovered rather than listed. |
 | `sentence_initial_connectives` | fast | - | no | Rate of sentences opening on However, Indeed, Moreover and the like. |
 
@@ -345,6 +379,7 @@ of it, so a slow run always says what was slow.
 | --- | --- | --- | --- | --- |
 | `change_points` | moderate | ruptures | no | Where the style changes abruptly. |
 | `chapter_zscores` | moderate | - | no | Which section looks unlike the rest of this book, and on which measures. |
+| `nonlinear_dynamics_suite` | moderate | numpy (nolds, antropy, EntropyHub, ordpy, pyrqa optional) | no | Recurrence quantification (determinism, laminarity, diagonal and vertical lines, trapping time, trend, and the recurrence threshold that had to be chosen) over capped, seeded samples of any registered sequence, plus independent library estimators of fractal dimension, Lyapunov exponent and entropy. |
 | `rolling_drift` | moderate | - | no | Gradual style drift from the opening to the close. |
 
 ### authorial
@@ -352,6 +387,50 @@ of it, so a slow run always says what was slow.
 | switch | cost | needs | on by default | what it measures |
 | --- | --- | --- | --- | --- |
 | `function_words` | fast | - | no | Burrows's Delta against the corpus function-word profiles. |
+| `stylometry_suite` | moderate | lexicalrichness, sentence-transformers | no | Authorship channels kept separate on purpose: n-gram profiles, lexical richness, section stability, impostors, and nearest-reference distances over cached per-book embeddings. |
+
+### prosody
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `prosody_suite` | moderate | pronouncing, panphon (g2p-en, phonemizer, poesy optional) | no | Physical lines and stanzas (hard-wrapped prose is rejoined, not read as verse), stress, meter fit, end, internal and near rhyme kept as separate channels, and alliteration, assonance and consonance, with pronunciation coverage always reported. Runs on prose too. |
+
+### readability
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `readability_suite` | moderate | textstat, py-readability-metrics, pystylometry, pronouncing | no | About twenty classical readability formulas from three libraries side by side with the core values, each library's own sentence and word counts, per-formula disagreement, syllable-counter disagreement, and across-formula summaries over implementations whose sentence splitting agrees with TextGrader's. The core `fk`, `ari` and `lexile` are unchanged. |
+
+### distribution shape
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `anomaly_suite` | moderate | scikit-learn, pyod, hdbscan | no | Fifteen multivariate anomaly detectors over the document's core-metric vector against the corpus, each reported on its own, plus a consensus count and a cross-detector disagreement score. |
+| `automatic_feature_generation` | moderate | tsfresh, pycatch22 | no | Bulk features from every registered sequence in three modes: minimal (ten summary statistics, the default), standard (plus catch22 and a small tsfresh set) and comprehensive (tsfresh's full set, capped), under stable ids. |
+| `distribution_distance_suite` | moderate | scipy | no | A two-sample distance battery (Wasserstein, energy, KS, Cramer-von Mises, Anderson-Darling, Jensen-Shannon, KL, Hellinger, MMD, tail mismatch and more) against the corpus's pooled sentence, paragraph, word and turn distributions, each distance kept apart from any p-value. |
+| `metric_relationships` | moderate | - | no | Where normally related metrics disagree: residuals and standardized disagreement for pairs discovered in the reference corpus (leaving the graded book out) or configured, including when both values are individually ordinary. |
+| `distribution_shape` | fast | - | yes | The text's sentence, paragraph, word and turn distributions held against the corpus's pooled ones. |
+| `reference_fit` | moderate | - | no | One fit score per configured reference profile (see Several reference profiles), the nearest and second-nearest profile with their margin, and a leave-one-out check that says when a profile is too scattered to trust. |
+
+Every switch in the `*_suite` rows above is off by default, and each one
+takes a `features` map (or, for `timeseries_suite`, separate `sequences` and
+`feature_groups` lists) so individual measurement groups can be turned on and
+off without the others.  `config.json` carries a `_..._requires` note beside
+each group saying what it needs installed and what it does without it: some
+degrade to a labelled weaker backend, some report `unavailable`.
+
+Their `needs` column lists what a suite *can* use, not what it declares in the
+registry.  The neural channels (an NLI model, coreference, a causal language
+model, sentence embeddings) are off by default and deliberately kept out of
+each suite's `requires`, because `needs_model` is what decides whether the
+corpus builder profiles a metric at all, and widening it to gate one expensive
+channel would drop dozens of cheap ones out of corpus profiling.  Turning a
+neural channel on is always an explicit act in `config.json`.
+
+Two channels need something pip cannot install: `randomness_suite`'s KenLM
+channel needs the `lmplz` binary built from source (the wheel only queries a
+model), and any WordNet channel needs the nltk corpus downloaded, not just the
+package.  Both say so when they cannot run.
 
 ## What these measurements do not claim
 
@@ -379,6 +458,39 @@ the metric's own `name`, docstring and `warning` as well:
 - single-quote dialogue is not parsed: an apostrophe and a closing single quote
   are the same character. The parser reports the limitation rather than
   guessing.
+- syllables (and so the core `fk`) come from **spelling rules**, not a
+  pronunciation dictionary, so the core metrics need no optional package.
+  Against CMUdict on held-out corpus vocabulary they match 99.2% of running
+  words; what they miss is irregular spelling such as "colonel", "business"
+  and "evening". `readability_suite` reports the disagreement with CMUdict.
+
+### Known gaps
+
+Work that is not done yet, kept here so it is not mistaken for finished:
+
+- **Topic-model metrics have no corpus comparison.** The 21
+  `semantic.structure_topic_*` findings need a model fitted on the whole
+  corpus, which does not exist while the profile is being built, so the
+  profile holds their inputs but no per-book values. A second pass over the
+  corpus after the first would fix it.
+- **Change points miss even an author splice.** `change_points` finds none in
+  47 of the 50 reference books, and none in 20,000 words of *Alice* followed
+  by 20,000 of *The Secret Agent*, at any window size or penalty tried. Its
+  eight section features vary about as much within one book as between those
+  two authors; it needs stronger features (function-word profiles, say), not
+  a lower penalty, which only adds false positives.
+- **Several reference profiles: no period fit, and a looser sample gate.**
+  A profile's `period` is recorded and shown but not scored, and percentiles
+  against the extra `reference_profiles` skip each metric's own minimum
+  sample size (the primary profile still applies it).
+- **Some packages compile.** `fasttext`, `gcld3` and `py-tlsh` build native
+  code, so they live in `requirements-native.txt` and need a C++ compiler
+  (and `protoc` for `gcld3`). Without them only their own channels report
+  `unavailable`.
+- **Some channels need system tools pip cannot install.** `prosody_suite`'s
+  `phonemizer` backend and parts of its `poesy` cross-check need the `espeak`
+  binary, and `nonlinear_dynamics_suite`'s PyRQA cross-check needs an OpenCL
+  device. Each says so in its `unavailable` warning.
 
 ## Project reports
 

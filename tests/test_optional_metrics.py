@@ -1,6 +1,7 @@
 """Every optional metric must be off by default, independent, and honest."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -80,7 +81,11 @@ def test_profile_records_the_options_it_used(tmp_path):
 def test_mismatched_metric_options_are_not_compared(tmp_path, base_config):
     source = tmp_path / "book.txt"
     source.write_text("one two three one two three. " * 60, encoding="utf-8")
-    profile = build_profile([source], metrics={"mattr": {"window": 100}})
+    # The profile must actually profile mattr: a metrics mapping without
+    # "enabled" means off, and build_profile now follows that rather than
+    # precomputing every registered metric regardless of the config.
+    profile = build_profile([source],
+                            metrics={"mattr": {"enabled": True, "window": 100}})
     (tmp_path / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
     report = grade.analyze(source, {**base_config, "corpus_profile": "profile.json",
                                     "metrics": {**base_config["metrics"],
@@ -90,16 +95,28 @@ def test_mismatched_metric_options_are_not_compared(tmp_path, base_config):
     assert "different" in item.warning
 
 
-def test_nlp_metric_without_a_model_is_a_visible_warning(tmp_path, base_config):
-    source = tmp_path / "story.txt"
-    source.write_text("The door was opened.", encoding="utf-8")
-    report = grade.analyze(source, {**base_config,
-                                    "metrics": {**base_config["metrics"],
-                                                "passive_voice": {"enabled": True}},
-                                    "nlp": {"model": "certainly_missing_model"}})
-    item = next(item for item in report.results if item.metric_id == "nlp.passive_voice")
-    assert item.value is None
-    assert item.warning and "certainly_missing_model" in item.warning
+def test_nlp_metric_without_a_model_is_a_visible_warning(monkeypatch, tmp_path, base_config):
+    # The premise is "spaCy is installed but the configured model is not", so
+    # the test sets that up rather than inheriting it.  Under a global
+    # TEXTGRADER_DISABLE_OPTIONAL the package itself is disabled and the
+    # warning is, correctly, about the package; without spaCy installed at all
+    # there is no model to be missing, and the test says so instead of failing.
+    monkeypatch.delenv("TEXTGRADER_DISABLE_OPTIONAL", raising=False)
+    optional.reset_cache()
+    try:
+        if not optional.have("spacy"):
+            pytest.skip("spaCy is not installed, so there is no model to be missing")
+        source = tmp_path / "story.txt"
+        source.write_text("The door was opened.", encoding="utf-8")
+        report = grade.analyze(source, {**base_config,
+                                        "metrics": {**base_config["metrics"],
+                                                    "passive_voice": {"enabled": True}},
+                                        "nlp": {"model": "certainly_missing_model"}})
+        item = next(item for item in report.results if item.metric_id == "nlp.passive_voice")
+        assert item.value is None
+        assert item.warning and "certainly_missing_model" in item.warning
+    finally:
+        optional.reset_cache()
 
 
 def test_a_missing_optional_package_degrades_one_metric(monkeypatch, manuscript, base_config):
@@ -175,3 +192,39 @@ def test_speaker_metrics_work_when_attribution_is_dense():
     found = _speaker_findings(dense)
     assert found["dialogue.identified_speaker_count"]["value"] == 2
     assert found["dialogue.speaker_question_rate"]["value"] is not None
+
+
+def test_no_optional_package_is_registered_twice():
+    # A repeated key in a dict literal silently replaces the earlier entry.
+    # Merging suites that each add packages did exactly that once, leaving a
+    # hint that said benepar could not load in place of the one that worked.
+    import ast
+    import collections
+    import textgrader.optional as optional_module
+
+    tree = ast.parse(Path(optional_module.__file__).read_text(encoding="utf-8"))
+    for node in tree.body:
+        target = node.targets[0] if isinstance(node, ast.Assign) else getattr(node, "target", None)
+        if getattr(target, "id", None) == "PACKAGES" and isinstance(node.value, ast.Dict):
+            keys = [key.value for key in node.value.keys if isinstance(key, ast.Constant)]
+            assert [k for k, n in collections.Counter(keys).items() if n > 1] == []
+            return
+    raise AssertionError("PACKAGES dict literal not found")
+
+
+def test_an_optional_import_that_prints_cannot_corrupt_stdout(monkeypatch, capsys, tmp_path):
+    # Stdout carries the report under grade.py --json; a package that prints
+    # when imported (taaled does) must not put text ahead of the JSON.
+    (tmp_path / "noisy_optional_pkg.py").write_text("print('noisy import banner')\nVALUE = 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    # The fake package is stdlib-only, so it is importable even in the
+    # degraded run that disables every real optional package.
+    monkeypatch.delenv("TEXTGRADER_DISABLE_OPTIONAL", raising=False)
+    monkeypatch.setitem(optional.PACKAGES, "noisy_optional_pkg",
+                        ("noisy_optional_pkg", "pip install nothing"))
+    optional.reset_cache()
+    module, reason = optional.require("noisy_optional_pkg")
+    captured = capsys.readouterr()
+    assert module is not None and reason is None
+    assert "noisy import banner" not in captured.out
+    assert "noisy import banner" in captured.err

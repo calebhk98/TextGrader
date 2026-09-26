@@ -35,10 +35,23 @@ def test_the_shipped_profile_has_pooled_item_distributions():
 def test_the_shipped_profile_records_how_its_texts_were_prepared():
     # Without this the corpus and the manuscript cannot be shown to have been
     # prepared the same way, and the check that says so fires on every run.
-    recorded = PROFILE.get("text_processing")
+    recorded = dict(PROFILE.get("text_processing") or {})
     assert recorded
+    # "auto" names a preference, not a splitter: it resolves to whatever is
+    # installed. The profile has to say which one actually ran, or a corpus
+    # split one way and a manuscript split another both record "auto" and
+    # look comparable when they are not.
+    assert recorded.pop("segmenter_resolved", None)
     config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
     assert recorded == config["text_processing"]
+
+
+def test_the_shipped_profile_was_split_with_the_quote_aware_segmenter():
+    # Plain pysbd merged whole runs of dialogue into one sentence, so a
+    # profile built with it describes longer sentences than the books have.
+    from textgrader.document import QUOTE_AWARE_PYSBD
+
+    assert PROFILE["text_processing"]["segmenter_resolved"] == QUOTE_AWARE_PYSBD
 
 
 def test_the_shipped_profile_is_large_enough_to_take_a_percentile_from():
@@ -124,3 +137,11 @@ def test_the_shipped_profile_carries_lexile_so_the_metric_is_comparable():
     assert source != "none"
     assert "lexile" in PROFILE["distributions"]
     assert any("lexile" in row for row in PROFILE["books"])
+
+
+def test_the_shipped_profile_uses_the_current_metric_definitions():
+    # Some ids change what their headline measures without changing name;
+    # the version records that, so a stale shipped profile is caught here.
+    from textgrader.corpus import METRIC_DEFINITION_VERSION
+
+    assert str(PROFILE.get("metric_definition_version")) == METRIC_DEFINITION_VERSION

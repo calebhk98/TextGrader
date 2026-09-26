@@ -95,7 +95,7 @@ def unavailable(metric_id: str, name: str, reason: str, *, family: str | None = 
 def shape(metric_id: str, name: str, values: Sequence[float], unit: str, *,
           family: str, prefix: str | None = None, channel: str = "full",
           evidence: Sequence[Mapping[str, Any]] | None = None,
-          min_sample: int | None = None) -> list[dict[str, Any]]:
+          min_sample: int | None = None, headline: str = "median") -> list[dict[str, Any]]:
     """Publish a sample as its median plus its full shape.
 
     The headline value is the median rather than the mean, because the mean of
@@ -103,11 +103,17 @@ def shape(metric_id: str, name: str, values: Sequence[float], unit: str, *,
     carries the quantiles, dispersion, entropy, lag-1 autocorrelation and
     two-group split, so a reader that cares about rhythm does not have to guess
     it from one number.
+
+    ``headline="mean"`` is for samples of small whole numbers (words or
+    syllables per line, lines per stanza), whose median lands on the same
+    value for nearly every document and so cannot tell two apart.  The choice
+    is per metric id and fixed, never made from the data.
     """
 
     summary = summarize(values)
-    return [finding(metric_id, name, summary.get("median"), unit, family=family,
-                    sample_size=summary.get("count"), distribution=summary,
+    distribution = summary if headline == "median" else {**summary, "headline": headline}
+    return [finding(metric_id, name, summary.get(headline), unit, family=family,
+                    sample_size=summary.get("count"), distribution=distribution,
                     evidence=evidence, channel=channel, min_sample=min_sample)]
 
 

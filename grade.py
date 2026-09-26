@@ -30,7 +30,7 @@ from textgrader.project import (CONFIG_ENV_VAR, near_miss, config_path,
 from textgrader.document import (COMPARISON_UNITS, DocumentAnalysis, NlpSettings,
                                  TextProcessing, resolve_unit, units_comparable)
 from textgrader.core_metrics import measure as core_measure
-from textgrader.metrics import REGISTRY
+from textgrader.metrics import REGISTRY, is_enabled
 from textgrader.reports import REPORTS, VIA_GRADE_ENV_VAR
 from textgrader.results import Action, MetricResult, Polarity, Report, StatusType
 from textgrader.rules import compile_rules
@@ -234,16 +234,18 @@ def _join(existing, addition):
 # --------------------------------------------------------------- metric running
 
 def metric_enabled(metric_config, name):
-    setting = metric_config.get(name)
-    if setting is None:
-        return False
-    return setting is True or (isinstance(setting, dict) and bool(setting.get("enabled", False)))
+    return is_enabled(metric_config, name)
 
 
 def metric_options(metric_config, name):
     setting = metric_config.get(name, {})
     options = dict(setting) if isinstance(setting, dict) else {}
     options.pop("enabled", None)
+    # Keys starting with "_" are notes for whoever reads config.json (what a
+    # feature needs installed, why it is off).  They are documentation, so they
+    # must not reach a metric or change whether a corpus profile is comparable.
+    for key in [key for key in options if key.startswith("_")]:
+        options.pop(key)
     spec = REGISTRY.get(name)
     if spec:
         merged = dict(spec.defaults)
@@ -263,6 +265,8 @@ def options_match_profile(profile, name, options):
         return False
     expected = dict(profile["metric_settings"].get(name, {}))
     expected.pop("enabled", None)
+    for key in [key for key in expected if key.startswith("_")]:
+        expected.pop(key)
     spec = REGISTRY.get(name)
     if spec:
         base = dict(spec.defaults)
@@ -421,7 +425,12 @@ def load_profile(config, report):
     header = profile.get("metadata") or {
         key: profile.get(key) for key in
         ("schema_version", "corpus_name", "build_timestamp", "parser_version",
-         "metric_definition_version", "comparison_unit", "text_processing")
+         "metric_definition_version", "comparison_unit", "text_processing",
+         # Task 24 build metadata: additive, so an older profile written before
+         # these existed simply reports them as absent (None), same as any
+         # other key here.
+         "source", "license_note", "language", "date_range", "genre", "domain",
+         "dataset_revision")
     }
     if not header.get("corpus_name"):
         header["corpus_name"] = candidate.stem
@@ -429,6 +438,29 @@ def load_profile(config, report):
     header["comparison_unit"] = profile_unit(profile)
     report.corpus_profile = header
     return profile
+
+
+def check_definition_version(profile, report):
+    """Warn when the profile's metric definitions predate this code's.
+
+    Some ids keep their name while their headline changes (a median becoming
+    a mean, say).  Most comparisons are unaffected, so nothing is withheld,
+    but a reader should know the corpus should be rebuilt.
+    """
+
+    if not profile:
+        return
+    from textgrader.corpus import METRIC_DEFINITION_VERSION
+
+    recorded = profile.get("metric_definition_version")
+    if recorded is not None and str(recorded) != METRIC_DEFINITION_VERSION:
+        report.results.append(MetricResult(
+            "corpus.metric_definition_version", "Corpus metric definitions",
+            status="unavailable", status_type=StatusType.UNAVAILABLE,
+            warning=f"this profile was built with metric definitions version {recorded} and "
+                    f"this code uses version {METRIC_DEFINITION_VERSION}; some metrics have "
+                    f"changed what they measure since, so rebuild the profile before trusting "
+                    f"their comparisons (see METRIC_DEFINITION_VERSION in textgrader/corpus.py)"))
 
 
 def check_preprocessing(profile, analysis, report):
@@ -486,6 +518,226 @@ def check_lexile_source(profile, config, report):
                     f"percentile is withheld"))
         return False
     return True
+
+
+# ------------------------------------------------------- Task 24: more profiles
+
+#: Reverse of the ``f"prose.{key.lstrip('_')}"`` transform ``_core_results``
+#: applies below, so ``apply_reference_profiles`` can recover the raw corpus
+#: distribution key (``"wps"``, ``"_words"``, ...) from a core metric's
+#: reported ``metric_id`` (``"prose.wps"``, ``"prose.words"``, ...). Every
+#: other metric's ``metric_id`` already IS its raw distribution key -- see
+#: ``textgrader.corpus.build_profile``'s ``book[finding["metric_id"]] = value``.
+_RAW_KEY_BY_METRIC_ID = {f"prose.{key.lstrip('_')}": key for key in METRIC_NAMES}
+
+
+def load_reference_profiles(config, analysis, report):
+    """Load every profile configured under ``reference_profiles``, in
+    addition to the primary ``corpus_profile`` :func:`load_profile` already
+    loaded. See the ``reference_profiles`` block in ``config.json`` for its
+    shape (alias -> {path, label, genre, domain, period, comparison_unit,
+    notes}).
+
+    Each alias gets the same family of safeguards ``corpus_profile`` gets --
+    a load error, a preprocessing-fingerprint mismatch, a stale metric
+    definition version, a Lexile frequency-source mismatch, and a
+    comparison-unit mismatch -- reported under
+    ``corpus.reference_profiles.<alias>.*`` so one bad profile never hides
+    another. Unlike the legacy ``corpus_profile`` checks (which only WARN on
+    a fingerprint or comparison-unit mismatch; see ``check_preprocessing``
+    above), an alias here is dropped from the returned mapping entirely when
+    its fingerprint or comparison unit does not match this document -- the
+    "withholding comparison for that profile only" the Task 24 test suite
+    requires. A stale metric-definition version or Lexile-source mismatch is
+    reported but does not by itself withhold the whole profile, matching the
+    legacy behaviour for those two specific checks.
+
+    With no ``reference_profiles`` configured (the default), this is a
+    silent no-op: nothing is appended to ``report.results`` and an empty
+    mapping is returned, so a report built without this feature is
+    byte-for-byte unaffected.
+    """
+
+    specs = config.get("reference_profiles") or {}
+    aliases = sorted(key for key in specs if not str(key).startswith("_"))
+    if not aliases:
+        return {}
+    from textgrader.corpus import METRIC_DEFINITION_VERSION
+
+    settings = config.get("analysis", {}) or {}
+    wanted_lexile = settings.get("lexile_frequency_source", "none")
+    out = {}
+    for alias in aliases:
+        spec = specs[alias]
+        prefix = f"corpus.reference_profiles.{alias}"
+        if not isinstance(spec, dict) or not spec.get("path"):
+            report.results.append(MetricResult(
+                prefix, f"Reference profile: {alias}", status="unavailable",
+                status_type=StatusType.UNAVAILABLE, family="corpus",
+                warning="reference_profiles entries need at least a 'path'"))
+            continue
+        candidate = Path(config.get("_config_dir", ROOT)) / spec["path"]
+        if not candidate.is_file():
+            report.results.append(MetricResult(
+                prefix, f"Reference profile: {alias}", status="unavailable",
+                status_type=StatusType.UNAVAILABLE, family="corpus",
+                warning=f"profile file not found: {candidate}"))
+            continue
+        try:
+            profile = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            report.results.append(MetricResult(
+                prefix, f"Reference profile: {alias}", status="unavailable",
+                status_type=StatusType.UNAVAILABLE, family="corpus", warning=str(exc)))
+            continue
+
+        label = spec.get("label") or profile.get("corpus_name") or alias
+        info = {
+            "alias": alias, "label": label, "genre": spec.get("genre"),
+            "domain": spec.get("domain"), "period": spec.get("period"),
+            "notes": spec.get("notes"), "comparison_unit": profile_unit(profile),
+            "source": profile.get("source"), "license_note": profile.get("license_note"),
+            "language": profile.get("language"), "date_range": profile.get("date_range"),
+            "dataset_revision": profile.get("dataset_revision"),
+            "build_timestamp": profile.get("build_timestamp"),
+        }
+        book_count = profile.get("book_count", len(profile.get("books", []) or []))
+        report.results.append(MetricResult(
+            prefix, f"Reference profile: {label}", book_count, "texts", family="corpus",
+            details=[info]))
+
+        withhold = False
+        recorded_processing = profile.get("text_processing")
+        if recorded_processing is None:
+            report.results.append(MetricResult(
+                f"{prefix}.text_processing", f"Reference profile {alias}: preprocessing",
+                status="unavailable", status_type=StatusType.UNAVAILABLE, family="corpus",
+                warning="this profile predates recorded text_processing settings; rebuild it "
+                        "to guarantee the corpus and the manuscript were prepared the same way"))
+            withhold = True
+        elif dict(recorded_processing) != analysis.processing.fingerprint():
+            report.results.append(MetricResult(
+                f"{prefix}.text_processing", f"Reference profile {alias}: preprocessing",
+                status="unavailable", status_type=StatusType.UNAVAILABLE, family="corpus",
+                warning="corpus and manuscript were prepared differently; comparisons against "
+                        "this profile are withheld"))
+            withhold = True
+
+        recorded_version = profile.get("metric_definition_version")
+        if recorded_version is not None and str(recorded_version) != METRIC_DEFINITION_VERSION:
+            report.results.append(MetricResult(
+                f"{prefix}.metric_definition_version",
+                f"Reference profile {alias}: metric definitions",
+                status="unavailable", status_type=StatusType.UNAVAILABLE, family="corpus",
+                warning=f"this profile was built with metric definitions version "
+                        f"{recorded_version} and this code uses version "
+                        f"{METRIC_DEFINITION_VERSION}; rebuild before trusting its comparisons"))
+
+        if wanted_lexile != "none":
+            recorded_lexile = profile.get("lexile_frequency_source")
+            if recorded_lexile != wanted_lexile:
+                report.results.append(MetricResult(
+                    f"{prefix}.lexile_frequency_source",
+                    f"Reference profile {alias}: Lexile source",
+                    status="unavailable", status_type=StatusType.UNAVAILABLE, family="corpus",
+                    warning=f"built with lexile_frequency_source={recorded_lexile!r} and this "
+                            f"run uses {wanted_lexile!r}; the Lexile percentile against this "
+                            f"profile is withheld"))
+
+        profile_comparison_unit = profile_unit(profile)
+        doc_unit = analysis.comparison_unit
+        if (profile_comparison_unit != "unknown" and doc_unit not in (None, "unknown")
+                and profile_comparison_unit != doc_unit):
+            report.results.append(MetricResult(
+                f"{prefix}.comparison_unit", f"Reference profile {alias}: comparison unit",
+                status="unavailable", status_type=StatusType.UNAVAILABLE, family="corpus",
+                warning=f"this profile describes '{profile_comparison_unit}' units and the "
+                        f"input is '{doc_unit}'; comparisons against this profile are withheld"))
+            withhold = True
+
+        if not withhold:
+            out[alias] = profile
+    return out
+
+
+def _reference_fit_source_key(metric_id):
+    """The raw corpus-distribution key a finding's ``metric_id`` was measured
+    under -- see ``_RAW_KEY_BY_METRIC_ID``."""
+
+    return _RAW_KEY_BY_METRIC_ID.get(metric_id, metric_id)
+
+
+def _reference_fit_percentiles(item, source_key, doc_unit, comparators):
+    """One finding's percentile against every configured extra profile.
+
+    Reuses the corpus's own robust ``stats.compare`` and the comparison-unit
+    safeguard (``units_comparable``) every primary-profile comparison already
+    uses. Does NOT repeat a metric's own bespoke minimum-sample-size gate
+    (``finding["min_sample"]``), because that threshold is not preserved on
+    :class:`MetricResult` once built -- a documented simplification; see
+    ``apply_reference_profiles``.
+    """
+
+    out = {}
+    for alias, (extra_profile, corpus_unit, min_corpus) in comparators.items():
+        reference = distribution(extra_profile, source_key)
+        if not reference or not units_comparable(item.metric_id, doc_unit, corpus_unit):
+            continue
+        comparison = stats.compare(item.value, reference, min_corpus=min_corpus)
+        if comparison.outlier is None:
+            continue
+        out[alias] = {
+            "percentile": comparison.percentile, "direction": comparison.direction,
+            "severity": comparison.severity, "confidence": comparison.confidence,
+            "outlier": comparison.outlier, "corpus_median": comparison.corpus_median,
+        }
+    return out
+
+
+def apply_reference_profiles(analysis, config, report, extra_profiles):
+    """Every already-built finding's reference-fit vector: its percentile
+    against each additional profile, alongside the one it already has
+    against ``corpus_profile``.
+
+    This is the single place the per-extra-profile comparison loop runs,
+    called once from ``_analyze`` after every core and optional metric result
+    already exists. It adds a ``reference_fits`` key to each eligible result's
+    ``distribution`` --
+    ``{alias: {percentile, direction, severity, confidence, outlier,
+    corpus_median}}`` -- so the JSON report stays one object per metric
+    instead of one object per (metric, profile) pair, and the result's
+    existing primary-profile comparison (``.corpus``) is left untouched.
+
+    A no-op, with no side effects at all, when ``extra_profiles`` is empty --
+    which it always is unless ``reference_profiles`` is configured.
+    """
+
+    if not extra_profiles:
+        return
+    settings = config.get("analysis", {}) or {}
+    min_sentences = settings.get("min_sentences_for_corpus", 40)
+    min_words = settings.get("min_words_for_corpus", 500)
+    if analysis.sentence_count < min_sentences or analysis.word_count < min_words:
+        report.results.append(MetricResult(
+            "corpus.reference_profiles", "Reference profiles", status="unavailable",
+            status_type=StatusType.UNAVAILABLE, family="corpus",
+            warning=f"document has {analysis.sentence_count} sentences and "
+                    f"{analysis.word_count} words, below the {min_sentences}/{min_words} "
+                    f"needed to compare it against the additional reference profiles"))
+        return
+    min_corpus = settings.get("min_corpus_sample", stats.MIN_CORPUS_SAMPLE)
+    comparators = {alias: (extra_profile, profile_unit(extra_profile), min_corpus)
+                  for alias, extra_profile in extra_profiles.items()}
+    doc_unit = analysis.comparison_unit
+    for item in report.results:
+        if item.family in ("configuration", "project_rule"):
+            continue
+        if isinstance(item.value, bool) or not isinstance(item.value, (int, float)):
+            continue
+        fits = _reference_fit_percentiles(item, _reference_fit_source_key(item.metric_id),
+                                          doc_unit, comparators)
+        if fits:
+            item.distribution = {**(item.distribution or {}), "reference_fits": fits}
 
 
 def analyze_text(text, config, source="<text>"):
@@ -567,15 +819,23 @@ def _analyze(config, report, path=None, text=None):
 
     profile = load_profile(config, report)
     check_preprocessing(profile, analysis, report)
+    check_definition_version(profile, report)
     lexile_comparable = check_lexile_source(profile, config, report)
     comparator = Comparator(profile, analysis, settings)
+    extra_profiles = load_reference_profiles(config, analysis, report)
 
     core = _core_results(analysis, config, comparator, report, profile,
                          lexile_comparable=lexile_comparable)
     if core is not None:
         report.results.extend(core)
     report.results.extend(project_rules(analysis, config))
-    report.results.extend(_optional_results(analysis, config, profile, comparator))
+    report.results.extend(_optional_results(analysis, config, profile, comparator,
+                                            extra_profiles))
+    # Relationships need every other metric's value for this document, and the
+    # per-profile percentiles are attached once every finding exists.
+    report.results.extend(_relationship_results(report.results, analysis, config, profile,
+                                                comparator))
+    apply_reference_profiles(analysis, config, report, extra_profiles)
     if path is not None:
         report.results.extend(_external_results(path, config))
         report.results.extend(_bundled_results(path, config))
@@ -712,13 +972,19 @@ def _core_results(analysis, config, comparator, report, profile=None,
     return out
 
 
-def _optional_results(analysis, config, profile, comparator):
+def _optional_results(analysis, config, profile, comparator, extra_profiles=None):
     metric_config = config.get("metrics", {}) or {}
     enabled = [name for name in REGISTRY if metric_enabled(metric_config, name)]
     out = []
     for name in enabled:
         spec = REGISTRY[name]
         options = metric_options(metric_config, name)
+        if name == "reference_fit" and extra_profiles:
+            # The one metric this Task 24 profile library reaches: every
+            # other metric's config is untouched. See reference_fit.py's
+            # module docstring for why this is passed through config rather
+            # than a new measure() parameter every metric module would need.
+            options = {**options, "_reference_profiles": extra_profiles}
         started = time.monotonic()
         try:
             module = importlib.import_module(f"textgrader.metrics.{spec.module}")
@@ -784,6 +1050,68 @@ def _finding_result(finding, spec, analysis, comparator, comparable, profile, el
         return item
     return comparator.apply(item, metric_id, value, finding.get("sample_size"),
                             finding.get("min_sample"))
+
+
+def _document_metric_values(results):
+    """Map corpus-profile-column metric ids to this document's already-measured value.
+
+    A corpus profile row keys core metrics by their bare name (``"wps"``,
+    ``"_words"``) and every other suite's findings by that finding's own
+    ``metric_id`` verbatim (see ``textgrader.corpus.build_profile``, which
+    writes ``book[finding["metric_id"]] = value`` directly). ``grade.py``'s own
+    core results instead carry the ``"prose."`` prefix (``"prose.wps"``), so
+    this reverses exactly that one prefix -- nothing else needed a translation.
+    """
+
+    values = {}
+    for result in results:
+        if (result.value is None or isinstance(result.value, bool)
+                or not isinstance(result.value, (int, float))):
+            continue
+        if result.metric_id.startswith("prose."):
+            bare = result.metric_id[len("prose."):]
+            key = f"_{bare}" if bare in ("words", "sentences", "paragraphs") else bare
+        else:
+            key = result.metric_id
+        values.setdefault(key, result.value)
+    return values
+
+
+def _relationship_results(report_results_so_far, analysis, config, profile, comparator):
+    """Post-metric phase: dependence/disagreement/residual features BETWEEN
+    TextGrader's own metrics (Task 22).
+
+    Deliberately isolated and added in exactly one place in ``_analyze``,
+    after every ordinary metric (core and optional) has produced its
+    findings: a residual of one metric given another needs THIS document's
+    own already-measured values for both, which is why this cannot run
+    inside ``_optional_results``'s ordinary per-metric loop and must never
+    have one metric module call another recursively -- see
+    ``textgrader.metrics.metric_relationships``'s module docstring.
+    """
+
+    metric_config = config.get("metrics", {}) or {}
+    name = "metric_relationships"
+    if not metric_enabled(metric_config, name):
+        return []
+    spec = REGISTRY.get(name)
+    if spec is None:  # pragma: no cover - registry always carries this row
+        return []
+    options = metric_options(metric_config, name)
+    document_values = _document_metric_values(report_results_so_far)
+    started = time.monotonic()
+    try:
+        module = importlib.import_module(f"textgrader.metrics.{spec.module}")
+        findings = module.relationship_findings(analysis, document_values, config=options,
+                                                profile=profile)
+    except Exception as exc:
+        return [MetricResult(f"metric.{name}", name.replace("_", " ").title(), status="error",
+                             status_type=StatusType.INTERNAL_ERROR, family=spec.family,
+                             error=f"{type(exc).__name__}: {exc}")]
+    elapsed = time.monotonic() - started
+    comparable = options_match_profile(profile, name, options)
+    return [_finding_result(finding, spec, analysis, comparator, comparable, profile, elapsed)
+           for finding in findings or []]
 
 
 def _external_results(path, config):

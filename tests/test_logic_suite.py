@@ -1,0 +1,1039 @@
+"""Contract tests for the experimental logic/consistency suite.
+
+These mirror the synthetic cases the task spec calls for: a contradiction
+pair, an entailment-shaped pair, a neutral pair, one test per connective
+family, the pair cap holding under a pathological repeat, graceful
+degradation without spaCy, and that a bare lexical-overlap or entity-key
+absence is never promoted into a stronger claim than the module makes.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from textgrader import optional
+from textgrader import propositions as prop_lib
+from textgrader.document import DocumentAnalysis, NlpSettings
+from textgrader.metrics import REGISTRY, logic_suite
+
+SPACY_READY = optional.have("spacy")
+requires_spacy = pytest.mark.skipif(not SPACY_READY, reason="spacy/en_core_web_sm not available")
+
+TRANSFORMERS_READY = optional.have("transformers")
+requires_transformers = pytest.mark.skipif(not TRANSFORMERS_READY, reason="transformers not available")
+
+WORDNET_READY = prop_lib.load_wordnet()[0] is not None
+requires_wordnet = pytest.mark.skipif(not WORDNET_READY, reason="nltk wordnet corpus data not available")
+
+DATEUTIL_READY = optional.have("dateutil")
+requires_dateutil = pytest.mark.skipif(not DATEUTIL_READY, reason="python-dateutil not available")
+
+FASTCOREF_READY = optional.have("fastcoref")
+requires_fastcoref = pytest.mark.skipif(not FASTCOREF_READY, reason="fastcoref not available")
+
+PROPBANK_READY = prop_lib.load_propbank()[0] is not None
+requires_propbank = pytest.mark.skipif(not PROPBANK_READY, reason="nltk propbank corpus data not available")
+
+VERBNET_READY = prop_lib.load_verbnet()[0] is not None
+requires_verbnet = pytest.mark.skipif(not VERBNET_READY, reason="nltk verbnet corpus data not available")
+
+FRAMENET_READY = prop_lib.load_framenet()[0] is not None
+requires_framenet = pytest.mark.skipif(not FRAMENET_READY, reason="nltk framenet corpus data not available")
+
+
+def _findings(text, config=None, **doc_kwargs):
+    analysis = DocumentAnalysis.from_text(text, comparison_unit="book", **doc_kwargs)
+    return {item["metric_id"]: item for item in logic_suite.measure(analysis, config=config)}
+
+
+def test_registered_and_off_by_default():
+    assert "logic_suite" in REGISTRY
+    spec = REGISTRY["logic_suite"]
+    assert spec.family == "discourse"
+    # Every option this module reads must be documented in MetricSpec.defaults.
+    for name in ("features", "window_sentences", "max_pairs", "max_comparisons",
+                "max_evidence", "proposition_cap", "connective_min_words",
+                "repeated_assertion_min_words", "coreference_max_chars",
+                "nli_model", "nli_max_pairs", "nli_batch_size",
+                "srl_model", "srl_max_predicates",
+                "relation_extraction_model", "relation_extraction_max_sentences",
+                "argument_mining_model", "argument_mining_max_pairs"):
+        assert name in spec.defaults, name
+    for name in ("negation_and_quantifiers", "connective_relations", "propositions",
+                "modal_argument_position", "nli_entailment", "coreference_resolution",
+                "lexical_opposition", "temporal_ordering", "semantic_role_labeling",
+                "relation_extraction", "argument_mining", "propbank_argument_structure",
+                "verbnet_class_consistency", "framenet_frame_consistency"):
+        assert name in spec.defaults["features"], name
+    # Every model-backed group must default to off in the registry AND in
+    # config.json -- this is the gate the module docstring calls out by name.
+    for name in ("nli_entailment", "coreference_resolution", "lexical_opposition",
+                "temporal_ordering", "semantic_role_labeling", "relation_extraction",
+                "argument_mining", "propbank_argument_structure", "verbnet_class_consistency",
+                "framenet_frame_consistency"):
+        assert spec.defaults["features"][name] is False, name
+
+
+def test_all_metric_ids_are_stable_and_prefixed():
+    for group_ids in logic_suite.FEATURE_METRICS.values():
+        for metric_id in group_ids:
+            assert metric_id.startswith("discourse.logic_"), metric_id
+            assert metric_id in logic_suite._METRIC_NAMES
+
+
+def test_every_features_key_is_either_a_metric_group_or_a_known_modifier():
+    spec = REGISTRY["logic_suite"]
+    accounted_for = set(logic_suite.FEATURE_METRICS) | logic_suite._MODIFIER_FEATURES
+    assert set(spec.defaults["features"]) == accounted_for
+
+
+# ------------------------------------------------------------ synthetic pairs
+
+@requires_spacy
+def test_synthetic_contradiction_pair_is_a_negation_flip_candidate():
+    text = ("The museum is open every day this week. " * 2 +
+           "By Friday evening, however, the museum is not open at all.")
+    found = _findings(text)
+    item = found["discourse.logic_negation_flip_candidates"]
+    assert item["value"] is not None
+    assert item["value"] > 0
+    assert item["evidence"], "a contradiction candidate must carry evidence, not just a count"
+    row = item["evidence"][0]
+    assert row["type"] == "negation"
+    assert "not" in row["sentence_b"]["text"].lower() or "not" in row["sentence_a"]["text"].lower()
+    # The finding must never claim more than a candidate.
+    assert "candidate" in item["warning"]
+
+
+@requires_spacy
+def test_synthetic_entailment_shaped_pair_scores_high_overlap():
+    text = ("The rain flooded the narrow streets of the old town. Therefore the "
+           "narrow streets of the old town were flooded by the rain.")
+    found = _findings(text)
+    item = found["discourse.logic_therefore_overlap"]
+    assert item["value"] is not None
+    assert item["value"] > 0.5
+
+
+@requires_spacy
+def test_neutral_unrelated_pair_scores_low_overlap():
+    text = ("The gardener planted tulips along the fence. Therefore quantum "
+           "particles obey the Pauli exclusion principle when spin aligns.")
+    found = _findings(text)
+    item = found["discourse.logic_therefore_overlap"]
+    assert item["value"] is not None
+    assert item["value"] < 0.3
+
+
+def test_because_and_however_connectives_are_scored_independently():
+    text = ("She stayed home because the storm had knocked out the power. "
+           "However, her brother went out anyway.")
+    found = _findings(text)
+    because = found["discourse.logic_because_overlap"]
+    contrast = found["discourse.logic_contrast_overlap"]
+    assert because["sample_size"] >= 1
+    assert contrast["sample_size"] >= 1
+
+
+def test_conditional_clause_shape_flags_bare_idiom():
+    text = ("If the bridge floods, the town closes the eastern road. "
+           "If only. Unless the council intervenes, the ferry keeps running.")
+    found = _findings(text)
+    item = found["discourse.logic_conditional_clause_shape_rate"]
+    assert item["sample_size"] == 3
+    assert item["value"] is not None
+    assert item["value"] < 100.0
+    assert any("if only" in row["text"].lower() for row in item["evidence"])
+
+
+def test_connective_chain_length_needs_a_real_chain():
+    text = "Plain sentence one. Plain sentence two. Plain sentence three."
+    found = _findings(text)
+    item = found["discourse.logic_connective_chain_length"]
+    assert item["value"] is None
+    assert "no chain" in item["warning"] or "no sentence" in item["warning"]
+
+
+# ---------------------------------------------------------- pair-cap boundedness
+
+@requires_spacy
+def test_pair_cap_is_obeyed_on_a_pathological_repeat():
+    sentences = []
+    for index in range(120):
+        if index % 2 == 0:
+            sentences.append("The council approved the plan.")
+        else:
+            sentences.append("The council did not approve the plan.")
+    text = " ".join(sentences)
+    found = _findings(text, config={"max_pairs": 5, "window_sentences": 200,
+                                    "max_comparisons": 50_000})
+    item = found["discourse.logic_negation_flip_candidates"]
+    assert len(item["evidence"]) <= 5
+    assert item["distribution"]["candidate_count"] <= 5
+    assert item["distribution"]["settings"]["pairs_capped"] is True
+
+
+@requires_spacy
+def test_bucket_ordering_reaches_a_small_conflict_before_a_huge_uninteresting_bucket():
+    """A small, real conflict must not be starved by a huge bucket ahead of it.
+
+    The pathological case the module docstring used to only document, not
+    fix: one enormous bucket of an identical, never-negated sentence sits at
+    the front of the document, and a tiny two-sentence negation-flip conflict
+    sits at the very end. A comparison budget far too small to ever finish
+    the huge bucket (200 items is up to 19,900 pairs) must still reach the
+    small bucket's conflict, because buckets are now visited smallest-first,
+    not in document order.
+    """
+
+    sentences = ["The cat sat on the mat."] * 200
+    sentences.append("The vault was sealed.")
+    sentences.append("The vault was not sealed.")
+    text = " ".join(sentences)
+    found = _findings(text, config={"max_comparisons": 50, "window_sentences": 500, "max_pairs": 10})
+    item = found["discourse.logic_negation_flip_candidates"]
+    assert item["distribution"]["candidate_count"] == 1
+    assert item["distribution"]["settings"]["comparisons_examined"] <= 50
+
+
+def test_bucketed_pairs_orders_buckets_by_size_with_stable_ties():
+    """Unit-level check on the ordering itself, independent of any metric.
+
+    Two singleton-sized-pair buckets (size 2) must keep their document order
+    relative to each other (a stable sort on equal keys), while a much larger
+    bucket -- wherever it sits in the input -- is always visited last.
+    """
+
+    def make(sentence_index, subject_key, predicate, negated):
+        return prop_lib.Proposition(
+            sentence_index=sentence_index, paragraph_index=0, offset=0, text=f"s{sentence_index}",
+            channel="narration", subject_text=subject_key, subject_key=subject_key,
+            subject_is_pronoun=False, predicate_lemma=predicate, negated=negated,
+            object_text=None, object_key=None, object_is_numeric=False, object_number=None,
+            entity_labels=())
+
+    props = []
+    # A huge bucket ("big", "go") first in document order.
+    for i in range(10):
+        props.append(make(i, "big", "go", False))
+    # Two small buckets after it, each size 2.
+    props.append(make(20, "alpha", "be", False))
+    props.append(make(21, "alpha", "be", True))
+    props.append(make(30, "beta", "be", False))
+    props.append(make(31, "beta", "be", True))
+
+    seen_order = []
+
+    def test(a, b):
+        seen_order.append((a.subject_key, b.subject_key))
+        return "negation" if a.negated != b.negated else None
+
+    scan = prop_lib.bucketed_pairs(props, window_sentences=100, max_pairs=100,
+                                   max_comparisons=100, test=test)
+    # Every comparison from the small buckets happens before any from "big".
+    big_first_index = next(i for i, (a, b) in enumerate(seen_order) if a == "big")
+    small_indices = [i for i, (a, b) in enumerate(seen_order) if a != "big"]
+    assert all(i < big_first_index for i in small_indices)
+    # And the two same-sized small buckets keep their first-seen order.
+    assert seen_order.index(("alpha", "alpha")) < seen_order.index(("beta", "beta"))
+    assert len(scan.pairs) == 2
+
+
+# --------------------------------------------------------- graceful degradation
+
+def test_missing_spacy_disables_only_the_proposition_group(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "spacy")
+    optional.reset_cache()
+    try:
+        text = ("The museum is open. It is not open. Therefore the sign is wrong, "
+               "however nobody read it. Every visitor never noticed.")
+        found = _findings(text)
+        for metric_id in logic_suite.FEATURE_METRICS["propositions"]:
+            assert found[metric_id]["value"] is None
+            assert found[metric_id]["warning"]
+        for metric_id in (logic_suite.FEATURE_METRICS["negation_and_quantifiers"] +
+                          logic_suite.FEATURE_METRICS["connective_relations"]):
+            assert found[metric_id]["metric_id"] == metric_id  # present and computed
+    finally:
+        optional.reset_cache()
+
+
+def test_a_disabled_feature_group_reports_why_not_silence():
+    text = "The museum is open. It is not open. Therefore the sign is wrong."
+    found = _findings(text, config={"features": {"propositions": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["propositions"]:
+        item = found[metric_id]
+        assert item["value"] is None
+        assert "features.propositions=false" in item["warning"]
+
+
+def test_degenerate_documents_do_not_crash():
+    for text in ("", "Hi.", "A\n\nB\n\nC"):
+        found = _findings(text)
+        assert len(found) == sum(len(v) for v in logic_suite.FEATURE_METRICS.values())
+
+
+def test_off_unless_enabled_via_grade(tmp_path, base_config):
+    import grade
+    source = tmp_path / "story.txt"
+    source.write_text("The museum is open. It is not open.", encoding="utf-8")
+    report = grade.analyze(source, base_config)
+    assert not [item for item in report.results if item.metric_id.startswith("discourse.logic_")]
+
+
+@requires_spacy
+def test_enabled_via_grade_reports_expected_ids(tmp_path, base_config):
+    import grade
+    source = tmp_path / "story.txt"
+    source.write_text(
+        "The museum is open every single day. It is not open on Mondays, however. "
+        "Therefore the sign outside is misleading. Because the sign is old, nobody "
+        "trusts it. If the town replaces it, visitors will notice.",
+        encoding="utf-8")
+    config = {**base_config, "metrics": {**base_config["metrics"], "logic_suite": {"enabled": True}}}
+    report = grade.analyze(source, config)
+    ids = {item.metric_id for item in report.results}
+    for group_ids in logic_suite.FEATURE_METRICS.values():
+        for metric_id in group_ids:
+            assert metric_id in ids, metric_id
+
+
+# ------------------------------------------------------- no unsupported claims
+
+@requires_spacy
+def test_missing_shared_property_is_not_a_conflict():
+    """Two propositions about unrelated objects must never be flagged.
+
+    Regression for the requirement that an absent lexical-resource edge (here,
+    simply two different subjects) is never treated as a contradiction.
+    """
+
+    text = "The kettle is red. The umbrella is blue."
+    found = _findings(text)
+    item = found["discourse.logic_entity_attribute_conflict_candidates"]
+    assert item["distribution"]["candidate_count"] == 0
+
+
+@requires_spacy
+def test_pronoun_subjects_are_excluded_from_cross_sentence_matching():
+    text = "She was tired. She was not tired."
+    analysis = DocumentAnalysis.from_text(text, comparison_unit="book")
+    from textgrader import propositions as prop_lib
+    extraction = prop_lib.extract(analysis, 1000)
+    assert all(p.subject_key == "" for p in extraction.propositions if p.subject_is_pronoun)
+    found = _findings(text)
+    # No usable non-pronoun subject anywhere in this tiny document.
+    item = found["discourse.logic_negation_flip_candidates"]
+    assert item["distribution"]["candidate_count"] == 0
+
+
+# ------------------------------------------------------- gating: off by default
+#
+# The most important property of this suite's newest metrics: a config that
+# never mentions them (including ``config=None``, which every test above this
+# point uses) must never load transformers, torch or fastcoref. See the
+# module docstring's "Gating" note for why the registry's own needs_model
+# guard cannot be trusted to keep this suite's NLI channel off.
+
+def test_default_config_never_loads_nli_or_coref_model(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("a transformer model must never load under default config")
+
+    monkeypatch.setattr(logic_suite, "_load_nli_pipeline", boom)
+    monkeypatch.setattr(logic_suite, "_load_argument_mining_pipeline", boom)
+    monkeypatch.setattr(prop_lib, "_load_coref_model", boom)
+    monkeypatch.setattr(prop_lib, "_load_srl_model", boom)
+    monkeypatch.setattr(prop_lib, "_load_relation_model", boom)
+    text = ("Alice was tired. She was not tired at all, though. Therefore the sign "
+           "outside is misleading, however nobody read it.")
+    # config=None: every legacy group defaults on; none of this must touch a model.
+    logic_suite.measure(DocumentAnalysis.from_text(text, comparison_unit="book"))
+
+
+def test_default_config_never_touches_propbank_verbnet_or_framenet(monkeypatch):
+    """The three corpus-lookup channels this pass added need no transformer or
+    fastcoref model, but must be exactly as inert under a default config as
+    the five loaders above -- a book-length FrameNet lemma-index build (see
+    that feature's own cost note) is not something a default config should
+    ever pay for either."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("propbank/verbnet/framenet must never be touched under default config")
+
+    monkeypatch.setattr(prop_lib, "load_propbank", boom)
+    monkeypatch.setattr(prop_lib, "load_verbnet", boom)
+    monkeypatch.setattr(prop_lib, "load_framenet", boom)
+    text = ("Alice was tired. She was not tired at all, though. Therefore the sign "
+           "outside is misleading, however nobody read it.")
+    logic_suite.measure(DocumentAnalysis.from_text(text, comparison_unit="book"))
+
+
+def test_nli_entailment_off_by_default_when_features_key_is_absent():
+    """A ``features`` mapping that only sets an unrelated key must not turn NLI on.
+
+    This is the bug the module's ``on()`` helper exists to prevent: the four
+    original groups fall back to *on* when their key is missing from
+    ``features`` (existing behaviour, kept for compatibility), but every group
+    added since must fall back to *off*, not inherit that same default.
+    """
+
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["nli_entailment"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_registry_requires_documents_the_new_optional_packages():
+    spec = REGISTRY["logic_suite"]
+    for package in ("transformers", "fastcoref", "nltk", "dateutil"):
+        assert package in spec.requires, package
+
+
+# ------------------------------------------------------------- NLI adjudication
+
+@requires_spacy
+@requires_transformers
+def test_nli_entailment_scores_a_real_contradiction_pair():
+    text = "The lamp was lit. The lamp was not lit."
+    found = _findings(text, config={"features": {"nli_entailment": True}, "nli_max_pairs": 10})
+    item = found["discourse.logic_nli_label_distribution"]
+    assert item["value"] is not None
+    assert item["sample_size"] >= 1
+    assert item["distribution"]["model"] == "cross-encoder/nli-deberta-v3-small"
+    assert any(row["nli_label"] == "contradiction" for row in item["evidence"])
+    assert "NOT a fact about the text" in item["warning"]
+    agreement = found["discourse.logic_nli_heuristic_agreement"]
+    assert agreement["value"] == pytest.approx(100.0)
+    assert agreement["distribution"]["confusion"]["negation"]["contradiction"] == 1
+
+
+@requires_spacy
+@requires_transformers
+def test_nli_entailment_scores_a_real_entailment_pair():
+    text = "The teacher said the exam was hard. The teacher said the exam was difficult."
+    found = _findings(text, config={"features": {"nli_entailment": True}, "nli_max_pairs": 10})
+    item = found["discourse.logic_nli_label_distribution"]
+    assert item["sample_size"] >= 1
+    assert any(row["nli_label"] == "entailment" for row in item["evidence"])
+    # Neither heuristic scan can see a paraphrase like this one (no negation
+    # flip, no differing-value object): the NLI channel finding it is exactly
+    # the recall gain the module docstring claims for it.
+    assert "none" in found["discourse.logic_nli_heuristic_agreement"]["distribution"]["confusion"]
+
+
+@requires_spacy
+@requires_transformers
+def test_nli_entailment_scores_a_real_neutral_pair():
+    text = "The gardener planted tulips along the fence. The gardener planted tulips near the pond."
+    found = _findings(text, config={"features": {"nli_entailment": True}, "nli_max_pairs": 10})
+    item = found["discourse.logic_nli_label_distribution"]
+    if item["sample_size"]:
+        assert set(row["nli_label"] for row in item["evidence"]) <= {"entailment", "neutral", "contradiction"}
+
+
+@requires_spacy
+@requires_transformers
+def test_nli_max_pairs_caps_the_model_calls_independently_of_max_pairs():
+    sentences = []
+    for index in range(40):
+        name = f"Witness{index}"
+        sentences.append(f"{name} said the bridge was safe.")
+        sentences.append(f"{name} later said the bridge was not safe.")
+    text = " ".join(sentences)
+    found = _findings(text, config={"features": {"nli_entailment": True}, "nli_max_pairs": 3,
+                                    "window_sentences": 200, "max_pairs": 500,
+                                    "max_comparisons": 50_000})
+    item = found["discourse.logic_nli_label_distribution"]
+    assert item["sample_size"] <= 3
+    assert item["distribution"]["settings"]["nli_max_pairs"] == 3
+
+
+def test_nli_entailment_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        found = _findings("The lamp was lit. The lamp was not lit.",
+                          config={"features": {"nli_entailment": True}})
+        for metric_id in logic_suite.FEATURE_METRICS["nli_entailment"]:
+            assert found[metric_id]["value"] is None
+            assert "transformers" in found[metric_id]["warning"]
+    finally:
+        optional.reset_cache()
+
+
+# ------------------------------------------------------------- WordNet relations
+
+@requires_spacy
+@requires_wordnet
+def test_wordnet_antonym_channel_finds_a_direct_opposite():
+    text = "The soup was hot. Moments later the soup was cold."
+    found = _findings(text, config={"features": {"lexical_opposition": True}})
+    item = found["discourse.logic_wordnet_antonym_candidates"]
+    assert item["value"] is not None and item["value"] > 0
+    assert item["evidence"][0]["type"] == "antonym"
+    assert "not disambiguated" in item["warning"]
+
+
+@requires_spacy
+@requires_wordnet
+def test_wordnet_hypernym_channel_downgrades_an_is_a_pair():
+    text = "The animal was a dog. The animal was a poodle."
+    found = _findings(text, config={"features": {"propositions": True, "lexical_opposition": True}})
+    conflict = found["discourse.logic_entity_attribute_conflict_candidates"]
+    assert conflict["distribution"]["candidate_count"] == 1  # never changed by the WordNet cross-check
+    downgrade = found["discourse.logic_wordnet_hypernym_downgrade_rate"]
+    assert downgrade["value"] == pytest.approx(100.0)
+    assert downgrade["evidence"][0]["subject"] == "animal"
+
+
+def test_wordnet_channel_reports_unavailable_without_nltk(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "nltk")
+    optional.reset_cache()
+    try:
+        found = _findings("The soup was hot. The soup was cold.",
+                          config={"features": {"lexical_opposition": True}})
+        for metric_id in logic_suite.FEATURE_METRICS["lexical_opposition"]:
+            assert found[metric_id]["value"] is None
+            assert "nltk" in found[metric_id]["warning"]
+    finally:
+        optional.reset_cache()
+
+
+# ------------------------------------------------- VerbNet / FrameNet consistency
+#
+# The separation test the task calls for: a passage where the same two
+# participants are described by two verbs from unrelated semantic classes
+# ("built"/"destroyed" the tower) must score higher than one where they are
+# described by two verbs that share a class ("opened"/"closed" the door) --
+# hand-checked against the real corpora, not assumed (see
+# textgrader/propositions.py's own worked-example comment).
+
+def test_verbnet_class_consistency_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["verbnet_class_consistency"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_framenet_frame_consistency_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["framenet_frame_consistency"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_verbnet_and_framenet_report_unavailable_without_nltk(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "nltk")
+    optional.reset_cache()
+    try:
+        found = _findings("The workers built the tower. The workers destroyed the tower.",
+                          config={"features": {"verbnet_class_consistency": True,
+                                              "framenet_frame_consistency": True}})
+        for feature in ("verbnet_class_consistency", "framenet_frame_consistency"):
+            for metric_id in logic_suite.FEATURE_METRICS[feature]:
+                assert found[metric_id]["value"] is None
+                assert "nltk" in found[metric_id]["warning"]
+    finally:
+        optional.reset_cache()
+
+
+@requires_spacy
+@requires_verbnet
+@requires_framenet
+def test_verbnet_and_framenet_separate_incompatible_from_compatible_verb_pairs():
+    """The headline separation test: build/destroy (no shared VerbNet class,
+    no shared FrameNet frame) must score higher than open/close (one shared
+    class, one shared frame) for the exact same two participants."""
+
+    config = {"features": {"verbnet_class_consistency": True, "framenet_frame_consistency": True}}
+    incompatible = _findings(
+        "The workers built the tower. Later, the workers destroyed the tower.", config=config)
+    compatible = _findings(
+        "Alice opened the door. Later, Alice closed the door.", config=config)
+
+    vn_incompatible = incompatible["discourse.logic_verbnet_class_conflict_candidates"]
+    vn_compatible = compatible["discourse.logic_verbnet_class_conflict_candidates"]
+    assert vn_incompatible["distribution"]["candidate_count"] == 1
+    assert vn_compatible["distribution"]["candidate_count"] == 0
+    assert (vn_incompatible["value"] or 0) > (vn_compatible["value"] or 0)
+    row = vn_incompatible["evidence"][0]
+    assert row["verb_a"] == "build" and row["verb_b"] == "destroy"
+    assert not (set(row["verbnet_classes_a"]) & set(row["verbnet_classes_b"]))
+    assert "unjudgeable" in vn_incompatible["warning"]
+
+    fn_incompatible = incompatible["discourse.logic_framenet_frame_conflict_candidates"]
+    fn_compatible = compatible["discourse.logic_framenet_frame_conflict_candidates"]
+    assert fn_incompatible["distribution"]["candidate_count"] == 1
+    assert fn_compatible["distribution"]["candidate_count"] == 0
+    assert (fn_incompatible["value"] or 0) > (fn_compatible["value"] or 0)
+
+
+@requires_spacy
+@requires_verbnet
+def test_verbnet_class_consistency_needs_a_non_pronoun_object():
+    text = "She saw it. He broke it."
+    found = _findings(text, config={"features": {"verbnet_class_consistency": True}})
+    item = found["discourse.logic_verbnet_class_conflict_candidates"]
+    # "it" is a pronoun object for both: participant_key excludes it, so
+    # there is nothing to compare -- never a false match on a shared pronoun.
+    assert item["distribution"]["candidate_count"] == 0
+
+
+# ----------------------------------------------------------- temporal ordering
+
+@requires_spacy
+@requires_dateutil
+def test_temporal_ordering_flags_a_reversed_flashback():
+    text = "The tower was built in 1990. Flashback: the tower was built in 1950."
+    found = _findings(text, config={"features": {"temporal_ordering": True}})
+    item = found["discourse.logic_temporal_order_candidates"]
+    assert item["value"] == pytest.approx(100.0)
+    row = item["evidence"][0]
+    assert row["earlier"]["date_text"] == "1950"
+    assert row["later"]["date_text"] == "1990"
+    assert "NOT an error" in item["warning"]
+
+
+@requires_spacy
+@requires_dateutil
+def test_temporal_ordering_does_not_flag_chronological_order():
+    text = "The tower was built in 1950. Years later, the tower was rebuilt in 1990."
+    found = _findings(text, config={"features": {"temporal_ordering": True}})
+    item = found["discourse.logic_temporal_order_candidates"]
+    # Either no temporal-conflict candidate at all (different predicates:
+    # "build" vs "rebuild") or, if one is found, it must not be reversed.
+    if item["value"] is not None:
+        assert item["distribution"]["reversed_count"] == 0
+
+
+@requires_spacy
+def test_temporal_ordering_needs_a_temporal_candidate_pair():
+    text = "The kettle is red. The umbrella is blue."
+    found = _findings(text, config={"features": {"temporal_ordering": True}})
+    item = found["discourse.logic_temporal_order_candidates"]
+    assert item["value"] is None
+    assert "temporal" in item["warning"]
+
+
+# --------------------------------------------------------------- coreference
+
+@requires_spacy
+def test_coreference_resolution_lets_a_pronoun_subject_into_the_pool(monkeypatch):
+    """With a working resolver, "she" should bucket with its named antecedent.
+
+    fastcoref itself is not exercised here (see the next test for that): a
+    minimal fake stands in for it so this test is fast and does not depend on
+    a real coreference model loading cleanly in this environment.
+    """
+
+    text = "Alice was tired. She was not tired at all, though."
+
+    class FakeResult:
+        def __init__(self, clusters):
+            self._clusters = clusters
+
+        def get_clusters(self, as_strings=False):
+            return self._clusters
+
+    class FakeModel:
+        def predict(self, texts):
+            she_at = texts.index("She")
+            return FakeResult([[(0, 5), (she_at, she_at + 3)]])
+
+    monkeypatch.setitem(prop_lib._COREF_MODEL_CACHE, "model", (FakeModel(), None))
+    try:
+        found = _findings(text, config={"features": {"coreference_resolution": True}})
+        item = found["discourse.logic_negation_flip_candidates"]
+        assert item["distribution"]["candidate_count"] == 1
+        assert item["evidence"][0]["sentence_a"]["text"] == "Alice was tired."
+        assert "resolved 1 pronoun-subject" in item["warning"]
+    finally:
+        prop_lib._COREF_MODEL_CACHE.pop("model", None)
+
+
+@requires_spacy
+def test_coreference_resolution_degrades_without_crashing_when_fastcoref_is_absent(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "fastcoref")
+    optional.reset_cache()
+    try:
+        text = "Alice was tired. She was not tired at all, though."
+        found = _findings(text, config={"features": {"coreference_resolution": True}})
+        item = found["discourse.logic_negation_flip_candidates"]
+        assert item["distribution"]["candidate_count"] == 0  # "she" still excluded
+        assert "unavailable this run" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+@requires_spacy
+def test_coreference_resolution_off_by_default_is_documented_as_excluded():
+    text = "Alice was tired. She was not tired at all, though."
+    found = _findings(text)  # config=None
+    item = found["discourse.logic_negation_flip_candidates"]
+    assert "coreference_resolution is off" in item["warning"]
+
+
+@requires_spacy
+@requires_fastcoref
+def test_coreference_resolution_against_a_real_fastcoref_model():
+    """The whole coreference path, exercised against the real model, not a fake.
+
+    This is the exact case the module docstring names as coreference
+    resolution's reason to exist: a pronoun-referenced contradiction that is
+    invisible with the feature off and recovered with it on. Kept to two short
+    sentences so this stays fast; the model itself (biu-nlp/f-coref via
+    fastcoref) genuinely loads and predicts here, through the same
+    transformers-5.x compatibility shim the coherence suite uses.
+    """
+
+    text = "Alice was tired. She was not tired at all, though."
+    off = _findings(text, config={"features": {"coreference_resolution": False}})
+    on = _findings(text, config={"features": {"coreference_resolution": True}})
+    off_item = off["discourse.logic_negation_flip_candidates"]
+    on_item = on["discourse.logic_negation_flip_candidates"]
+    # Recall before: the pronoun subject is excluded entirely, so the
+    # negation-flip pair sharing "Alice"/"she" as its subject is never found.
+    assert off_item["distribution"]["candidate_count"] == 0
+    # Recall after: a real model resolves "she" to "Alice" and the pair is found.
+    assert on_item["distribution"]["candidate_count"] == 1
+    assert on_item["evidence"][0]["sentence_a"]["text"] == "Alice was tired."
+    assert on_item["evidence"][0]["sentence_b"]["negated"] is True
+    assert "resolved 1 pronoun-subject" in on_item["warning"]
+
+
+@requires_spacy
+@requires_fastcoref
+def test_coreference_resolution_keys_a_plural_mention_by_lemma_not_surface_form():
+    """Regression: a resolved plural mention must land in the same bucket as a
+    directly-named singular-lemma subject, not a separate ``lemma:<plural>`` one.
+
+    Found by running coreference resolution against the real model for the
+    first time (see the module docstring): ``_coref_representative`` used to
+    key a resolved mention off its raw, un-lemmatized last word, so "They"
+    resolved to "the men" landed in ``lemma:men`` while the directly-extracted
+    sentence's subject "men" was keyed ``lemma:man`` (spaCy's lemma) -- the two
+    never shared a bucket and coreference bought nothing on exactly the
+    contradiction it was meant to surface.
+    """
+
+    text = "The men were tired. They were not tired at all, though."
+    found = _findings(text, config={"features": {"coreference_resolution": True}})
+    item = found["discourse.logic_negation_flip_candidates"]
+    assert item["distribution"]["candidate_count"] == 1
+
+
+@requires_spacy
+def test_coreference_representative_keys_a_resolved_mention_by_lemma(monkeypatch):
+    """Same regression as above, pinned with a fake model so it stays fast and
+    deterministic regardless of what a future fastcoref/model version does.
+    """
+
+    text = "The men were tired. They were not tired at all, though."
+
+    class FakeResult:
+        def __init__(self, clusters):
+            self._clusters = clusters
+
+        def get_clusters(self, as_strings=False):
+            return self._clusters
+
+    class FakeModel:
+        def predict(self, texts):
+            they_at = texts.index("They")
+            return FakeResult([[(0, 7), (they_at, they_at + 4)]])  # "The men" / "They"
+
+    monkeypatch.setitem(prop_lib._COREF_MODEL_CACHE, "model", (FakeModel(), None))
+    try:
+        found = _findings(text, config={"features": {"coreference_resolution": True}})
+        item = found["discourse.logic_negation_flip_candidates"]
+        assert item["distribution"]["candidate_count"] == 1
+    finally:
+        prop_lib._COREF_MODEL_CACHE.pop("model", None)
+
+
+# ---------------------------------------------------------- hand-checked prose
+#
+# The task behind this module's original pass found two real bugs by running
+# it on constructed text, not from unit tests; this section repeats that
+# discipline for the NLI channel specifically, on both a planted contradiction
+# and a legitimate in-fiction one (an unreliable narrator), which must NOT be
+# reported as an error in the text.
+
+@requires_spacy
+@requires_transformers
+def test_hand_check_planted_contradiction_is_labelled_contradiction():
+    text = ("The vault door was sealed shut every night without exception. "
+           "On the night of the theft, however, the vault door was not sealed at all.")
+    found = _findings(text, config={"features": {"nli_entailment": True}})
+    item = found["discourse.logic_nli_label_distribution"]
+    assert item["sample_size"], "expected at least one NLI-scored candidate pair"
+    assert any(row["nli_label"] == "contradiction" for row in item["evidence"])
+
+
+@requires_spacy
+@requires_transformers
+def test_hand_check_unreliable_narrator_contradiction_is_not_reported_as_an_error():
+    """An in-fiction lie must still score as a model contradiction -- and the
+    finding's own warning, not a suppressed value, is what keeps that from
+    being misread as an error in the text.
+    """
+
+    text = "The narrator swore the door was locked. In truth, the door was not locked at all."
+    found = _findings(text, config={"features": {"nli_entailment": True}})
+    item = found["discourse.logic_nli_label_distribution"]
+    assert item["sample_size"], "expected the ccomp-vs-narration pair to reach the model"
+    assert any(row["nli_label"] == "contradiction" for row in item["evidence"])
+    # The lie IS a contradiction by the model's own lights -- exactly as it
+    # should be -- but the finding must still frame that as a model score,
+    # never as a claim that the text itself contains an error.
+    assert "not evidence of an error in the writing" in item["warning"]
+
+
+# --------------------------------------------------------- semantic role labelling
+
+def test_srl_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["semantic_role_labeling"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_srl_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        found = _findings("The door was locked.",
+                          config={"features": {"semantic_role_labeling": True}})
+        for metric_id in logic_suite.FEATURE_METRICS["semantic_role_labeling"]:
+            assert found[metric_id]["value"] is None
+            assert "transformers" in found[metric_id]["warning"] or "unavailable" in found[metric_id]["warning"]
+    finally:
+        optional.reset_cache()
+
+
+@requires_spacy
+@requires_transformers
+def test_srl_against_a_real_model_finds_a_thin_passive_frame():
+    """Real ``cu-kairos/propbank_srl_seq2seq_t5_small`` on one short sentence.
+
+    A passive with no expressed agent ("The door was locked.") has exactly one
+    core PropBank argument (ARG-1, the door) -- hand-checked against the real
+    model, not assumed (see the module docstring's cost note for why this test
+    stays to a single short sentence and a tiny ``srl_max_predicates``).
+    """
+
+    text = "The door was locked."
+    found = _findings(text, config={"features": {"semantic_role_labeling": True},
+                                    "srl_max_predicates": 2})
+    omission = found["discourse.logic_srl_argument_omission_rate"]
+    assert omission["sample_size"] == 1
+    assert omission["value"] == pytest.approx(100.0)
+    assert omission["evidence"][0]["roles"]
+    assert "candidate signal" in omission["warning"]
+    # Only one occurrence of "lock" in this document: nothing to compare for
+    # role-pattern consistency, and the finding must say so, not guess.
+    consistency = found["discourse.logic_srl_role_pattern_consistency"]
+    assert consistency["value"] is None
+    assert "two or more" in consistency["warning"]
+
+
+# ---------------------------------------------- PropBank roleset argument structure
+
+def test_propbank_argument_structure_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["propbank_argument_structure"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_propbank_argument_structure_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        found = _findings("He gave.", config={"features": {"propbank_argument_structure": True}})
+        item = found["discourse.logic_propbank_argument_omission_rate"]
+        assert item["value"] is None
+        assert "transformers" in item["warning"] or "unavailable" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+def test_propbank_argument_structure_reports_unavailable_without_propbank_corpus(monkeypatch):
+    """A missing PropBank corpus must not be conflated with a missing SRL
+    model: the reason must name the corpus, and this must not require a real
+    SRL run at all -- the corpus check runs before the (far more expensive)
+    SRL model is ever loaded, so this degrades instantly even with spaCy and
+    transformers both unavailable (the loader is monkeypatched directly, the
+    same way other corpus-missing paths in this file are simulated)."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("the SRL model must never load when the PropBank corpus is missing")
+
+    monkeypatch.setattr(prop_lib, "load_propbank",
+                        lambda: (None, "nltk propbank corpus data unavailable; run "
+                                       "python -m nltk.downloader propbank"))
+    monkeypatch.setattr(prop_lib, "_load_srl_model", boom)
+    found = _findings("The door was locked.",
+                      config={"features": {"propbank_argument_structure": True}})
+    item = found["discourse.logic_propbank_argument_omission_rate"]
+    assert item["value"] is None
+    assert "propbank" in item["warning"]
+
+
+@requires_spacy
+@requires_transformers
+@requires_propbank
+def test_propbank_argument_omission_separates_intact_from_systematically_dropped_arguments():
+    """The task's own worked example: "He gave." / "She put." / "They told."
+    -- systematically dropped core arguments -- must score a higher omission
+    rate than the same three predicates used with their arguments intact.
+    Both documents are scored in the same test so the SRL model loads once.
+    """
+
+    config = {"features": {"propbank_argument_structure": True}, "srl_max_predicates": 3}
+    intact = _findings(
+        "He gave her the book. She put the vase on the table. They told him the news.",
+        config=config)
+    dropped = _findings("He gave. She put. They told.", config=config)
+
+    intact_item = intact["discourse.logic_propbank_argument_omission_rate"]
+    dropped_item = dropped["discourse.logic_propbank_argument_omission_rate"]
+    assert intact_item["sample_size"] == 3
+    assert dropped_item["sample_size"] == 3
+    assert intact_item["value"] == pytest.approx(0.0)
+    assert dropped_item["value"] == pytest.approx(100.0)
+    assert dropped_item["value"] > intact_item["value"]
+    for row in dropped_item["evidence"]:
+        assert row["missing_core_roles"]
+    assert "not real word-sense disambiguation" in dropped_item["warning"]
+    assert "stylistic ellipsis" in dropped_item["warning"]
+
+
+# ------------------------------------------------- closed-schema relation extraction
+
+def test_relation_extraction_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["relation_extraction"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_relation_extraction_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        found = _findings("Marie Curie was born in Warsaw.",
+                          config={"features": {"relation_extraction": True}})
+        item = found["discourse.logic_relation_extraction_triple_rate"]
+        assert item["value"] is None
+        assert "transformers" in item["warning"] or "unavailable" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+@requires_spacy
+@requires_transformers
+def test_relation_extraction_against_a_real_model_on_a_wikidata_style_fact():
+    """Real ``Babelscape/rebel-large`` (greedy decoding) on one short,
+    real-world biographical sentence -- hand-checked to actually produce
+    ``{'head': 'Marie Curie', 'type': 'place of birth', 'tail': 'Warsaw'}``,
+    not assumed from the model card.
+    """
+
+    text = "Marie Curie was born in Warsaw."
+    found = _findings(text, config={"features": {"relation_extraction": True},
+                                    "relation_extraction_max_sentences": 2})
+    item = found["discourse.logic_relation_extraction_triple_rate"]
+    assert item["sample_size"] == 1
+    assert item["distribution"]["triple_count"] >= 1
+    row = item["evidence"][0]
+    assert "curie" in row["head"].lower()
+    assert "warsaw" in row["tail"].lower()
+    assert "CLOSED-schema" in item["warning"]
+
+
+@requires_spacy
+@requires_transformers
+def test_relation_extraction_can_hallucinate_a_schema_compatible_relation_on_fiction():
+    """A real, hand-checked surprise, not the assumption this test used to
+    make: a plain fictional sentence with no stated Wikidata-style fact does
+    NOT reliably come back empty. Hand-checked against the real model:
+    "Alice was tired after her long journey through the old town." -- which
+    asserts nothing about where Alice lives -- generated
+    ``{'head': 'Alice', 'type': 'residence', 'tail': 'old town'}``, a
+    plausible-sounding, schema-compatible triple invented under the seq2seq
+    format's own pressure to always emit *something*, not read off the text.
+    This is why every relation_extraction finding calls each triple a model
+    judgement, never a verified fact, and why the module docstring no longer
+    claims fiction "legitimately scores near zero" as if that were the whole
+    story -- it can just as easily score a false positive.
+    """
+
+    text = "Alice was tired after her long journey through the old town."
+    found = _findings(text, config={"features": {"relation_extraction": True},
+                                    "relation_extraction_max_sentences": 2})
+    item = found["discourse.logic_relation_extraction_triple_rate"]
+    assert item["sample_size"] == 1
+    # Whatever the exact triple, it must come through as well-formed
+    # evidence with all three fields populated -- never a partial parse.
+    for row in item["evidence"]:
+        assert row["head"] and row["relation_type"] and row["tail"]
+
+
+# --------------------------------------------------------------- argument mining
+
+def test_argument_mining_off_by_default_when_features_key_is_absent():
+    found = _findings("The lamp was lit. The lamp was not lit.",
+                      config={"features": {"negation_and_quantifiers": False}})
+    for metric_id in logic_suite.FEATURE_METRICS["argument_mining"]:
+        assert found[metric_id]["value"] is None
+        assert "disabled by config" in found[metric_id]["warning"]
+
+
+def test_argument_mining_reports_unavailable_without_transformers(monkeypatch):
+    monkeypatch.setenv("TEXTGRADER_DISABLE_OPTIONAL", "transformers")
+    optional.reset_cache()
+    try:
+        text = ("The council delayed the vital bridge repairs for several months. "
+               "Therefore the fragile old bridge finally collapsed under heavy traffic.")
+        found = _findings(text, config={"features": {"argument_mining": True}})
+        item = found["discourse.logic_argument_relation_label_distribution"]
+        assert item["value"] is None
+        assert "transformers" in item["warning"] or "unavailable" in item["warning"]
+    finally:
+        optional.reset_cache()
+
+
+def test_argument_mining_needs_a_connective_pair():
+    text = "Plain sentence one. Plain sentence two."
+    found = _findings(text, config={"features": {"argument_mining": True}})
+    item = found["discourse.logic_argument_relation_label_distribution"]
+    assert item["value"] is None
+    assert "connective" in item["warning"]
+
+
+@requires_spacy
+@requires_transformers
+def test_argument_mining_against_a_real_model_on_a_support_pair():
+    """Real ``raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L`` on one
+    therefore-linked pair, capped to a single candidate so this stays fast.
+    """
+
+    text = ("The council delayed the vital bridge repairs for several months. "
+           "Therefore the fragile old bridge finally collapsed under heavy traffic.")
+    found = _findings(text, config={"features": {"argument_mining": True},
+                                    "argument_mining_max_pairs": 1})
+    item = found["discourse.logic_argument_relation_label_distribution"]
+    assert item["sample_size"] == 1
+    assert item["evidence"][0]["argmin_label"] in {"no-relation", "inference", "conflict", "rephrase"}
+    assert item["distribution"]["model"] == "raruidol/ArgumentMining-EN-ARI-AIF-RoBERTa_L"
+    assert "connective_chain_length proxy" in item["warning"]
+    agreement = found["discourse.logic_argument_relation_connective_agreement"]
+    assert agreement["sample_size"] == 1
+    assert agreement["distribution"]["confusion"]

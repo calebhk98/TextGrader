@@ -30,6 +30,7 @@ import argparse
 import hashlib
 import importlib
 import json
+import math
 import os
 import statistics
 from collections import Counter
@@ -39,11 +40,21 @@ from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA_VERSION = 2
 PARSER_VERSION = "2"
-METRIC_DEFINITION_VERSION = "2"
+#: Moves when an existing metric id starts measuring something different, so a
+#: profile built before the change is not silently compared against it.
+#: 3: run lengths, word lengths in characters, commas per sentence and
+#: sentences per paragraph headline the mean instead of the median.
+#: 4: core_metrics.syllables counts silent -ed/-es, silent e and hiatus vowels
+#: correctly, which moves the core fk (Flesch-Kincaid) value.  In the same
+#: version, both nlp.readability_syllable_disagreement_rate_* ids count only
+#: words CMUdict knows, and repetition.reuse_longest_approximate_repeated_run
+#: stops where its trailing window stops matching instead of carrying an
+#: unrelated tail on the strength of a verbatim start.
+METRIC_DEFINITION_VERSION = "4"
 
 from .core_metrics import measure as core_measure
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing
-from .metrics import MODEL_METRICS, REGISTRY
+from .metrics import MODEL_METRICS, REGISTRY, is_enabled
 from .stats import quantile_curve, summarize
 
 CORE_METRIC_KEYS = (
@@ -126,6 +137,20 @@ def _distribution(values: Sequence[float | int]) -> dict[str, Any]:
     return summary
 
 
+def _stable(value: float | int) -> float | int:
+    """A finding value rounded to 12 significant digits for storage.
+
+    Several libraries sum floats in set or dict order, which depends on the
+    process hash seed, so the same book can score 0.1234567890123 in one build
+    and 0.1234567890124 in the next.  Twelve digits is far below anything a
+    percentile can resolve and makes the stored profile byte-reproducible.
+    """
+
+    if isinstance(value, float) and math.isfinite(value):
+        return float(f"{value:.12g}")
+    return value
+
+
 def _timestamp(value: str | None) -> str:
     if value:
         return value
@@ -134,19 +159,36 @@ def _timestamp(value: str | None) -> str:
     return moment.isoformat().replace("+00:00", "Z")
 
 
-def _metric_names(include_parse: bool, include_model: bool) -> list[str]:
+def _metric_names(include_parse: bool, include_model: bool,
+                  metric_config: Mapping[str, Any] | None = None,
+                  selection: str = "enabled") -> list[str]:
     """Which registered metrics to precompute for every corpus text.
 
-    Everything cheap is profiled whether or not it is enabled for grading,
-    because a distribution is only useful if it already exists on the day
-    somebody turns a metric on.  Two groups are opt-in because of what they
-    cost per book, not because they are unwanted: the spaCy metrics are tens of
-    seconds each, and the semantic ones download and run an embedding model.
+    ``selection="enabled"`` (the default) profiles exactly the metrics switched
+    on in the ``metrics`` config, because computing a distribution nobody asked
+    for is work nobody asked for -- and the expensive suites are expensive
+    enough that "profile everything cheap" stopped being cheap.  Pass
+    ``selection="all"`` to precompute every registered metric regardless, which
+    is what you want when building a reference profile to ship, so a
+    distribution already exists on the day somebody turns a metric on.
+
+    ``include_parse``/``include_model`` remain a separate axis: they say
+    whether the spaCy and embedding-model metrics may run at all, and they gate
+    both selections.
     """
 
+    if selection == "auto":
+        # No config supplied at all means the caller has not said what it
+        # wants, so precompute everything; an explicit (possibly empty)
+        # metrics mapping is a statement about what is wanted, so honour it.
+        selection = "all" if metric_config is None else "enabled"
+    if selection not in ("enabled", "all"):
+        raise ValueError(
+            f"unknown metric selection {selection!r}; use 'enabled', 'all' or 'auto'")
     return [name for name, spec in REGISTRY.items()
             if (include_parse or not spec.needs_parse)
-            and (include_model or not spec.needs_model)]
+            and (include_model or not spec.needs_model)
+            and (selection == "all" or is_enabled(metric_config, name))]
 
 
 def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local corpus",
@@ -162,8 +204,48 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                   lexile_frequency_source: str = "none",
                   include_parse_metrics: bool = False,
                   include_model_metrics: bool = False,
-                  progress=None) -> dict[str, Any]:
-    """Profile local text files without retaining or later requiring raw books."""
+                  metric_selection: str = "auto",
+                  progress=None,
+                  # ---- Task 24: additive reference-profile metadata --------
+                  # None of these change what is measured; they are recorded
+                  # so a profile used as one alias of several under
+                  # config.json's "reference_profiles" carries enough
+                  # provenance to show in a report and to judge whether it is
+                  # even an appropriate reference for a given document. Every
+                  # one defaults to None, so an existing caller that supplies
+                  # none of them writes a profile identical to before this
+                  # task -- see grade.py's load_profile/load_reference_profiles,
+                  # which already read these keys with .get(...).
+                  source: str | None = None, license_note: str | None = None,
+                  language: str | None = None, date_range: str | None = None,
+                  genre: str | None = None, domain: str | None = None,
+                  dataset_revision: str | None = None) -> dict[str, Any]:
+    """Precompute, once, what every grading run would otherwise recompute.
+
+    A profile is a cache.  Measuring forty reference books is slow and the
+    answer does not change between runs, so it is done once here and the
+    result is what ``grade.py`` compares a manuscript against.  The corpus
+    itself stays reproducible: ``build_corpus.py`` downloads it and this
+    function reads whatever text files are in the corpus folder, so a profile
+    can always be rebuilt rather than being a artifact nobody can regenerate.
+
+    What lands in the profile is therefore a question of what is worth caching.
+    Per-book scalars and the feature vectors under ``feature_profiles`` are,
+    because they are small and every run needs them.  Raw book text is not: it
+    is large, and re-reading the corpus folder gets it back.  A measurement
+    that genuinely needs both texts at once (a true compression distance
+    between a manuscript and a specific reference book, say) cannot be served
+    from the cache at all and has to read the corpus at grading time, which is
+    why those channels carry their own config switch.
+
+    ``metric_selection`` decides which metrics are precomputed: ``"enabled"``
+    follows the ``metrics`` config, ``"all"`` precomputes everything the
+    parse/model flags allow, and ``"auto"`` (the default) means ``"enabled"``
+    when a ``metrics`` mapping was supplied and ``"all"`` when it was not.
+    Building a profile to ship wants ``"all"``; a project profiling its own
+    corpus for its own enabled metrics wants ``"enabled"`` and should not pay
+    for suites it has switched off.
+    """
 
     files = _source_files(inputs)
     if not files:
@@ -178,11 +260,20 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     processing = TextProcessing.from_config(settings)
     nlp_settings = NlpSettings.from_config(nlp)
     metric_settings = dict(metrics or {})
-    wanted = _metric_names(include_parse_metrics, include_model_metrics)
+    wanted = _metric_names(include_parse_metrics, include_model_metrics,
+                           metrics, metric_selection)
 
     books: list[dict[str, Any]] = []
     used_ids: Counter[str] = Counter()
     frequency: Counter[str] = Counter()
+    # Per-author unigram frequency, alongside the corpus-wide ``frequency``
+    # above. Populated only for books whose manifest entry gives an ``author``;
+    # a corpus built without author metadata gets an empty dict, and a reader
+    # of an OLDER profile (built before this table existed) finds the key
+    # simply absent -- both are the same "no per-author table" case to
+    # ``textgrader.metrics.stylometry_suite``'s ``author_language_model``
+    # group, which reads this with ``.get(..., {})`` rather than requiring it.
+    author_frequency: dict[str, Counter[str]] = {}
     feature_profiles: dict[str, list[dict[str, float]]] = {"function_words": []}
     metric_errors: dict[str, str] = {}
     skipped: list[str] = []
@@ -224,6 +315,9 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
             used_ids[base_id] += 1
             source_id = base_id if used_ids[base_id] == 1 else f"{base_id}-{used_ids[base_id]}"
             frequency.update(analysis.tokens)
+            author = item_meta.get("author")
+            if author:
+                author_frequency.setdefault(str(author), Counter()).update(analysis.tokens)
             book = {
                 "source_id": source_id, "source_filename": path.name,
                 "source_path": relative_name, "source_hash": f"sha256:{digest}",
@@ -243,7 +337,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                 core = core_measure(analysis, floor=1,
                                     lexile_source=lexile_frequency_source)
                 if core:
-                    book.update({key: core[key] for key in CORE_METRIC_KEYS
+                    book.update({key: _stable(core[key]) for key in CORE_METRIC_KEYS
                                  if core.get(key) is not None})
                     # Lexile is off unless a frequency source is configured, so
                     # it is written only when one was. Without this the metric
@@ -256,7 +350,8 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                 setting = metric_settings.get(name, {})
                 options = dict(spec.defaults)
                 if isinstance(setting, Mapping):
-                    options.update({key: value for key, value in setting.items() if key != "enabled"})
+                    options.update({key: value for key, value in setting.items()
+                                    if key != "enabled" and not key.startswith("_")})
                 try:
                     module = importlib.import_module(f"textgrader.metrics.{spec.module}")
                     findings = module.measure(analysis, config=options, profile=None)
@@ -266,7 +361,29 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                 for finding in findings or []:
                     value = finding.get("value")
                     if isinstance(value, (int, float)) and not isinstance(value, bool):
-                        book[finding["metric_id"]] = value
+                        book[finding["metric_id"]] = _stable(value)
+                # A metric that needs more than one number per book -- an
+                # embedding, a transition table, a frequency vector -- caches it
+                # by exposing profile_vector(analysis, config).  Only a scalar
+                # fits in a book row, which is what kept those measurements
+                # out of the profile and forced them to be within-document.
+                builder = getattr(module, "profile_vector", None)
+                if callable(builder):
+                    try:
+                        vector = builder(analysis, options)
+                    except Exception as exc:
+                        metric_errors[f"{name}.profile_vector"] = f"{type(exc).__name__}: {exc}"
+                        vector = None
+                    if vector:
+                        rows = feature_profiles.setdefault(name, [])
+                        # Row i must describe books[i].  A book whose vector was
+                        # skipped or failed gets an empty placeholder, because
+                        # appending only on success silently shifts every later
+                        # row and turns "nearest reference book" into a wrong
+                        # answer rather than a missing one.
+                        while len(rows) < len(books):
+                            rows.append({})
+                        rows.append(vector)
             for name, values in _item_values(analysis).items():
                 pooled[name].extend(values)
             function_words = importlib.import_module("textgrader.metrics.function_words")
@@ -274,6 +391,10 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
             books.append(book)
         if progress:
             progress(relative_name, book)
+
+    for name, rows in feature_profiles.items():
+        while len(rows) < len(books):
+            rows.append({})
 
     base_keys = ("word_count", "sentence_count", "paragraph_count", "mean_sentence_words",
                  "mean_paragraph_words", "mean_word_characters")
@@ -307,6 +428,12 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "corpus_name": corpus_name,
         "comparison_unit": comparison_unit,
         "build_timestamp": _timestamp(built_at),
+        # Task 24 reference-profile metadata: source/licence/language/date
+        # range/genre/domain/revision, every one optional and additive. See
+        # this function's docstring and grade.py's load_reference_profiles.
+        "source": source, "license_note": license_note, "language": language,
+        "date_range": date_range, "genre": genre, "domain": domain,
+        "dataset_revision": dataset_revision,
         "text_processing": processing.fingerprint(),
         # Retained under the pre-2.0 name so older readers still find it.
         "preprocessing": processing.fingerprint(),
@@ -332,6 +459,17 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                    "sources": len(books)}
             for name, values in pooled.items() if values},
         "word_frequency_total": sum(frequency.values()),
+        # Per-author unigram frequency tables, additive to the schema: empty
+        # when no book's manifest entry carried an "author", and absent
+        # entirely from any profile written before this field existed, which
+        # is why every reader of these two keys uses .get(..., {}) rather
+        # than assuming they are present. See CORPUS_LANGUAGE_MODEL /
+        # AUTHOR_LANGUAGE_MODEL in textgrader.metrics.stylometry_suite.
+        "author_word_frequency": {
+            author: {word: counter[word] for word in sorted(counter)}
+            for author, counter in sorted(author_frequency.items())},
+        "author_word_frequency_total": {
+            author: sum(counter.values()) for author, counter in sorted(author_frequency.items())},
         "feature_profiles": feature_profiles,
     }
 
@@ -411,12 +549,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="sections shorter than this are skipped when splitting")
     parser.add_argument("--no-core-metrics", action="store_true",
                         help="omit the default core prose distributions")
+    parser.add_argument("--metric-selection", choices=("enabled", "all", "auto"), default=None,
+                        help="which registered metrics to precompute: 'enabled' follows the "
+                             "metrics config, 'all' precomputes everything the parse/model "
+                             "flags allow, 'auto' picks 'enabled' when a config supplies "
+                             "metrics. Defaults to corpus_builder.metric_selection in the "
+                             "config, else 'auto'.")
     parser.add_argument("--parse-metrics", action="store_true",
                         help="also profile the spaCy-parse metrics (tens of seconds per book)")
     parser.add_argument("--model-metrics", action="store_true",
                         help="also profile the semantic metrics, which download and run a "
                              "sentence-embedding model over every book")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--source", default=None,
+                        help="Task 24: where this corpus came from, e.g. a dataset name/URL")
+    parser.add_argument("--license-note", default=None,
+                        help="Task 24: the corpus's licence/terms, recorded on the profile")
+    parser.add_argument("--language", default=None, help="Task 24: the corpus's language code")
+    parser.add_argument("--date-range", default=None,
+                        help="Task 24: the corpus's date range/period, e.g. '1961' or '1990-1992'")
+    parser.add_argument("--genre", default=None, help="Task 24: a genre label for this profile")
+    parser.add_argument("--domain", default=None, help="Task 24: a domain label for this profile")
+    parser.add_argument("--dataset-revision", default=None,
+                        help="Task 24: the exact dataset revision/tag/commit/version used")
     args = parser.parse_args(argv)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8")) if args.manifest else None
     config = json.loads(args.config.read_text(encoding="utf-8")) if args.config else {}
@@ -431,10 +586,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         lexile_frequency_source=(config.get("analysis", {}) or {}).get(
             "lexile_frequency_source", "none"),
         metrics=config.get("metrics", {}), comparison_unit=args.comparison_unit,
+        metric_selection=args.metric_selection or
+        (config.get("corpus_builder", {}) or {}).get("metric_selection", "auto"),
         split_sections=args.split_sections, min_section_words=args.min_section_words,
         include_core_metrics=not args.no_core_metrics,
         include_parse_metrics=args.parse_metrics,
-        include_model_metrics=args.model_metrics, progress=progress)
+        include_model_metrics=args.model_metrics, progress=progress,
+        source=args.source, license_note=args.license_note, language=args.language,
+        date_range=args.date_range, genre=args.genre, domain=args.domain,
+        dataset_revision=args.dataset_revision)
     write_profile(profile, args.output)
     if not args.quiet:
         print(f"\nwrote {profile['book_count']} {args.comparison_unit}(s) to {args.output}")

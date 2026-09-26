@@ -105,6 +105,13 @@ class TextProcessing:
             "drop_marker_paragraphs": self.drop_marker_paragraphs,
             "normalize_quotes": self.normalize_quotes,
             "segmenter": self.segmenter,
+            # What "auto" actually resolved to on this machine.  The setting
+            # alone is not enough: "auto" means pySBD where it is installed and
+            # the built-in splitter where it is not, and the two disagree by up
+            # to 80% on mean sentence length in dialogue-heavy prose.  Without
+            # this, a manuscript split one way was compared against a corpus
+            # split the other, and both sides said "auto".
+            "segmenter_resolved": resolved_segmenter(self),
             "language": self.language,
             "segmenter_clean": self.segmenter_clean,
             "transcript": dict(self.transcript) if self.transcript else None,
@@ -136,11 +143,90 @@ class NlpSettings:
         return item
 
 
+#: The name recorded for pySBD with the quotation fix below.  It is a distinct
+#: name, not "pysbd", because it produces different sentences: a corpus
+#: profile built with plain pySBD must not be compared against it.  The
+#: number moves whenever the sentences it produces change: version 1 moved a
+#: straight opening quote back onto the previous sentence.
+QUOTE_AWARE_PYSBD = "pysbd-quote-aware-2"
+
+#: pySBD's BetweenPunctuation step refuses to split inside any of these pairs,
+#: treating the enclosed text as one unit: straight and curly single and
+#: double quotes, guillemets, parentheses, square brackets, and ``--`` dash
+#: pairs.  That is right for a short aside and badly wrong for fiction, where a
+#: paragraph is often one long quoted speech.  Measured on dialogue-heavy
+#: novels, it collapsed 35-45% of sentence boundaries and inflated mean
+#: sentence length by 40-80%: one quoted paragraph of *Sense and Sensibility*
+#: came back as a single 815-word "sentence", and one of *Confidence* as 1,293.
+_PAIRED = "'\u2018\u2019\"\u201c\u201d\u00ab\u00bb()[]"
+#: The closing half of each pair, which masking can strand at the start of the
+#: next piece ("Is it you?" / "\u201d she asked.").
+_CLOSERS = "'\u2019\"\u201d\u00bb)]"
+#: U+2063 INVISIBLE SEPARATOR: not punctuation, so pySBD protects nothing
+#: around it.  One character for one character, so every span pySBD returns
+#: on the masked text is a valid span of the original.
+_MASK = "\u2063"
+_MASK_TABLE = {ord(char): _MASK for char in _PAIRED}
+
+
+def _stranded_closers(open_doubles: bool, lead_text: str) -> int:
+    """How many leading characters of ``lead_text`` close the text before it.
+
+    Curly double quotes, guillemets and brackets say which way they face.  A
+    straight ``"`` does not: at the start of a piece it is as often the next
+    quotation's opener as the last one's closer, and moving an opener back
+    leaves 'He waited."' followed by 'Well?" she asked.'  So it only counts
+    as a closer while a double quotation is still open in the paragraph so far
+    (``open_doubles``, an odd count of them).
+
+    A straight ``'`` or a curly ``\u2019`` only counts when no letter or digit
+    follows it.  Both double as apostrophes, which makes counting them
+    meaningless, but a closing quote is never followed directly by a letter,
+    while an opening quote and an elision (Hardy's "\u2019Tis", "\u2019em") are.
+    """
+
+    count = 0
+    for index, char in enumerate(lead_text):
+        if char not in _CLOSERS:
+            break
+        if char == '"':
+            if not open_doubles:
+                break
+            open_doubles = False
+        elif char in "'\u2019":
+            following = lead_text[index + 1:index + 2]
+            if following.isalnum():
+                break
+        count += 1
+    return count
+
+
+def resolved_segmenter(processing: "TextProcessing") -> str:
+    """The segmenter a run with these settings actually uses, by name.
+
+    Mirrors :class:`Segmenter`'s choice without building one, so a profile's
+    fingerprint can record it cheaply.  ``segmenter_clean=True`` keeps plain
+    pySBD, because its cleaning rewrites the text and offsets no longer map
+    back, which the quotation fix depends on.
+    """
+
+    if processing.segmenter in ("auto", "pysbd") and require("pysbd")[0] is not None:
+        return "pysbd" if processing.segmenter_clean else QUOTE_AWARE_PYSBD
+    return "builtin"
+
+
 class Segmenter:
     """Resolve the sentence splitter once, then reuse it.
 
     Building a ``pysbd.Segmenter`` per paragraph made segmentation the single
     most expensive step in the pipeline; it is built once per run here.
+
+    pySBD is kept because it is right about what the built-in splitter gets
+    wrong: it does not end a sentence at "Mr.", "Dr.", "J. R. R." or "4 p.m.",
+    which the built-in splitter does.  What it gets wrong is quoted and
+    bracketed text (see ``_PAIRED``), so the pairs are hidden from it while it
+    segments and the two artefacts that hiding causes are repaired afterwards.
+    Text with no paired punctuation is segmented exactly as plain pySBD would.
     """
 
     __slots__ = ("wanted", "language", "clean", "used", "warning", "_impl")
@@ -156,8 +242,16 @@ class Segmenter:
             pysbd, reason = require("pysbd")
             if pysbd is not None:
                 try:
-                    self._impl = pysbd.Segmenter(language=self.language, clean=self.clean)
-                    self.used = "pysbd"
+                    if self.clean:
+                        self._impl = pysbd.Segmenter(language=self.language, clean=True)
+                        self.used = "pysbd"
+                        self.warning = ("segmenter_clean=true keeps plain pySBD, which merges "
+                                        "every sentence inside a quotation or parenthesis into "
+                                        "one; set segmenter_clean=false for quote-aware splitting")
+                    else:
+                        self._impl = pysbd.Segmenter(language=self.language, clean=False,
+                                                     char_span=True)
+                        self.used = QUOTE_AWARE_PYSBD
                 except Exception as exc:  # pragma: no cover - pySBD language guard
                     reason = f"pysbd failed ({type(exc).__name__}: {exc})"
             if self._impl is None and self.wanted == "pysbd":
@@ -172,10 +266,43 @@ class Segmenter:
         if self._impl is None:
             return textlib.sentences(body)
         try:
-            found = [item.strip() for item in self._impl.segment(body)]
+            if self.used == QUOTE_AWARE_PYSBD:
+                found = self._quote_aware(body)
+            else:
+                found = [item.strip() for item in self._impl.segment(body)]
         except Exception:  # pragma: no cover - pySBD input guard
             return textlib.sentences(body)
         return [item for item in found if textlib.words(item)]
+
+    def _quote_aware(self, body: str) -> list[str]:
+        masked = body.replace("--", _MASK * 2).translate(_MASK_TABLE)
+        out: list[str] = []
+        # Straight double quotes in the body before the current piece.
+        doubles = 0
+        consumed = 0
+        for span in self._impl.segment(masked):
+            piece = body[span.start:span.end]
+            doubles += body[consumed:span.start].count('"')
+            consumed = span.end
+            if out:
+                lead_text = piece.lstrip()
+                stranded = _stranded_closers(bool(doubles % 2), lead_text)
+                doubles += piece.count('"')
+                if stranded:
+                    # A closing quote belongs to the sentence it closes.
+                    out[-1] = out[-1].rstrip() + lead_text[:stranded]
+                    piece = lead_text[stranded:]
+                    if piece.strip()[:1].islower():
+                        # '"Is it you?" she asked.' is one sentence.  Only
+                        # rejoined after a moved closer, so pySBD's own
+                        # decisions elsewhere are left exactly as they were.
+                        out[-1] = out[-1].rstrip() + " " + piece.strip()
+                        continue
+            else:
+                doubles += piece.count('"')
+            if piece.strip():
+                out.append(piece.strip())
+        return out
 
 
 @dataclass
