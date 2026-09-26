@@ -277,7 +277,9 @@ def _scorer():
     rapidfuzz, _ = require("rapidfuzz")
     if rapidfuzz is not None:
         return rapidfuzz.fuzz.ratio
-    return lambda a, b: 100.0 * difflib.SequenceMatcher(None, a, b).ratio()
+    # autojunk treats any character making up over 1% of a string longer than
+    # 200 characters as junk, which scores a verbatim repeat around 60.
+    return lambda a, b: 100.0 * difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
 
 
 def _covering(intervals: list[list[int]], position: int) -> list[int] | None:
@@ -316,7 +318,10 @@ def longest_approximate_repeated_run(
     ``threshold`` is then extended forward, ``extend_step`` tokens at a time,
     for as long as the trailing ``window`` tokens of each side still clear it
     and the two sides have not grown into each other.  The longest pair is
-    returned with the similarity of its whole run.
+    returned with its similarity: the mean over consecutive ``window``-sized
+    chunks of the run, the same slices the extension judged.  Scoring the
+    run as one string instead costs the square of its length in either
+    backend (seconds for a 1,300-token repeat, far longer for a chapter).
 
     Two things keep this linear in the length of what repeats.  Each
     extension step scores a ``window``-sized slice, so a step costs the same
@@ -391,8 +396,12 @@ def longest_approximate_repeated_run(
     if best is None:
         return None
     length, lo, hi = best
+    offsets = list(range(0, length - window + 1, window))
+    if offsets[-1] != length - window:
+        offsets.append(length - window)
+    similarity = sum(similar(lo + k, hi + k, window) for k in offsets) / len(offsets)
     return {"length": length, "first_position": lo, "second_position": hi,
-            "similarity": similar(lo, hi, length), "candidate_pairs_examined": pair_count}
+            "similarity": similarity, "candidate_pairs_examined": pair_count}
 
 
 # ------------------------------------------------------------------- motifs
