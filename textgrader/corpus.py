@@ -30,6 +30,7 @@ import argparse
 import hashlib
 import importlib
 import json
+import math
 import os
 import statistics
 from collections import Counter
@@ -130,6 +131,20 @@ def _distribution(values: Sequence[float | int]) -> dict[str, Any]:
     summary["values"] = ordered
     summary["q1"], summary["q3"] = summary.get("p25"), summary.get("p75")
     return summary
+
+
+def _stable(value: float | int) -> float | int:
+    """A finding value rounded to 12 significant digits for storage.
+
+    Several libraries sum floats in set or dict order, which depends on the
+    process hash seed, so the same book can score 0.1234567890123 in one build
+    and 0.1234567890124 in the next.  Twelve digits is far below anything a
+    percentile can resolve and makes the stored profile byte-reproducible.
+    """
+
+    if isinstance(value, float) and math.isfinite(value):
+        return float(f"{value:.12g}")
+    return value
 
 
 def _timestamp(value: str | None) -> str:
@@ -318,7 +333,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                 core = core_measure(analysis, floor=1,
                                     lexile_source=lexile_frequency_source)
                 if core:
-                    book.update({key: core[key] for key in CORE_METRIC_KEYS
+                    book.update({key: _stable(core[key]) for key in CORE_METRIC_KEYS
                                  if core.get(key) is not None})
                     # Lexile is off unless a frequency source is configured, so
                     # it is written only when one was. Without this the metric
@@ -342,7 +357,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                 for finding in findings or []:
                     value = finding.get("value")
                     if isinstance(value, (int, float)) and not isinstance(value, bool):
-                        book[finding["metric_id"]] = value
+                        book[finding["metric_id"]] = _stable(value)
                 # A metric that needs more than one number per book -- an
                 # embedding, a transition table, a frequency vector -- caches it
                 # by exposing profile_vector(analysis, config).  Only a scalar

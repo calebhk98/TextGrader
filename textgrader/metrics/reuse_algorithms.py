@@ -105,7 +105,10 @@ def capped_inverted_candidates(shingle_sets: Sequence[frozenset], *, cap: int = 
         candidates: set[int] = set()
         for token in shingle_set:
             candidates.update(postings.get(token, ()))
-        for j in candidates:
+        # Sorted: a set's iteration order depends on its insertion history,
+        # which follows the (per-process, hash-seeded) order of the string
+        # shingles, and the cap below keeps whichever candidates come first.
+        for j in sorted(candidates):
             if j == i or j in graph[i]:
                 continue
             if len(graph[i]) >= max_candidates_per_item:
@@ -162,7 +165,7 @@ def minhash_lsh_candidates(shingle_sets: Sequence[frozenset], *, num_perm: int =
     jaccards: dict[frozenset, float] = {}
     for i, m in enumerate(minhashes):
         found = 0
-        for j in lsh.query(m):
+        for j in sorted(lsh.query(m)):  # query returns set order; the cap keeps the first
             if j == i:
                 continue
             if found >= max_candidates_per_item:

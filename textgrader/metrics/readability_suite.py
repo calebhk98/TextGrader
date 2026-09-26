@@ -89,7 +89,10 @@ Libraries used, and how each was verified
   stress markers. Used directly by :func:`_syllable_crosscheck` for a
   three-way syllable-count comparison (``core_metrics.syllables``' rule-based
   count, reused unmodified, textstat's ``syllable_count`` -- pyphen-hyphenation
-  based -- and CMUdict via ``pronouncing``).  The core count once undercounted
+  based -- and CMUdict via ``pronouncing``).  Both disagreement rates are
+  scored over the sampled words CMUdict contains; the rest have no
+  reference, and their share is reported as ``cmudict_coverage_percent``.
+  The core count once undercounted
   diphthong words ("fire", "poem", "cruel", "hour", "science" scored 1); it
   now matches CMUdict on those, and on 99.2% of running words in held-out
   corpus vocabulary, so the remaining disagreement is mostly irregular
@@ -1014,11 +1017,16 @@ def _syllable_crosscheck(analysis: DocumentAnalysis, config: Mapping[str, Any] |
     truncated = len(unique_words) > cap
     sample = unique_words[:cap]
 
-    def cmudict_count(word: str) -> tuple[int, bool]:
+    # Both rates are scored only over words CMUdict knows.  Counting an
+    # out-of-dictionary word would need some other counter as the stand-in
+    # reference, and whichever one it is agrees with itself: using the core
+    # counter there made core-vs-CMUdict look better than it is and made
+    # textstat-vs-CMUdict move whenever the core counter changed.
+    def cmudict_count(word: str) -> int | None:
         phones_list = pronouncing_mod.phones_for_word(word)
         if phones_list:
-            return pronouncing_mod.syllable_count(phones_list[0]), True
-        return core_metrics.syllables(word), False
+            return pronouncing_mod.syllable_count(phones_list[0])
+        return None
 
     max_evidence = int(option(config, "max_evidence", DEFAULT_MAX_EVIDENCE))
     core_mismatches = 0
@@ -1028,10 +1036,11 @@ def _syllable_crosscheck(analysis: DocumentAnalysis, config: Mapping[str, Any] |
     core_evidence: list[dict[str, Any]] = []
     textstat_available = textstat_mod is not None
     for word in sample:
+        cmu_count = cmudict_count(word)
+        if cmu_count is None:
+            continue
+        in_dictionary += 1
         core_count = core_metrics.syllables(word)
-        cmu_count, found = cmudict_count(word)
-        if found:
-            in_dictionary += 1
         core_differs = core_count != cmu_count
         if core_differs:
             core_mismatches += 1
@@ -1045,26 +1054,29 @@ def _syllable_crosscheck(analysis: DocumentAnalysis, config: Mapping[str, Any] |
                 textstat_mismatches += 1
                 if core_differs:
                     both_mismatch += 1
-        if core_differs and found and len(core_evidence) < max_evidence:
+        if core_differs and len(core_evidence) < max_evidence:
             core_evidence.append({"word": word, "core_heuristic": core_count,
                                   "cmudict": cmu_count, "textstat": textstat_count})
 
     sampled = len(sample)
+    scored = in_dictionary
     out = [finding(
-        mid_core, name_core, 100.0 * core_mismatches / sampled if sampled else None, "percent",
+        mid_core, name_core, 100.0 * core_mismatches / scored if scored else None, "percent",
         family=FAMILY, sample_size=word_count, min_sample=MIN_SAMPLE,
         distribution={"unique_words_sampled": sampled, "truncated": truncated,
+                     "words_in_cmudict": scored,
                      "cmudict_coverage_percent": 100.0 * in_dictionary / sampled if sampled
                      else None},
         evidence=core_evidence)]
     if textstat_available:
         out.append(finding(
             mid_textstat, name_textstat,
-            100.0 * textstat_mismatches / sampled if sampled else None, "percent", family=FAMILY,
+            100.0 * textstat_mismatches / scored if scored else None, "percent", family=FAMILY,
             sample_size=word_count, min_sample=MIN_SAMPLE,
             distribution={"unique_words_sampled": sampled, "truncated": truncated,
-                         "both_disagree_with_cmudict_percent": 100.0 * both_mismatch / sampled
-                         if sampled else None}))
+                         "words_in_cmudict": scored,
+                         "both_disagree_with_cmudict_percent": 100.0 * both_mismatch / scored
+                         if scored else None}))
     else:
         out.append(unavailable(mid_textstat, name_textstat, textstat_reason, family=FAMILY,
                                unit="percent"))

@@ -279,6 +279,26 @@ def test_syllable_disagreement_rate_is_a_bounded_percent():
     assert 0.0 <= textstat_item["value"] <= 100.0
 
 
+@requires_libraries
+def test_syllable_disagreement_ignores_words_cmudict_does_not_know():
+    """A word with no CMUdict entry has no reference count, so adding such
+    words must leave both rates unchanged.  Scoring them against a fallback
+    counter once moved the textstat rate whenever the core counter changed."""
+    base = ("Every evening the colonel talked business and read a poem about fire, "
+            "or so the beautiful old story of the world goes. ")
+    invented = "Zorblaxian quimbrotted flenwicks glarmously. "
+    plain = _findings(base * 8)
+    padded = _findings((base + invented) * 8)
+    for suffix in ("core_vs_cmudict", "textstat_vs_cmudict"):
+        metric_id = f"{m.PREFIX}syllable_disagreement_rate_{suffix}"
+        assert padded[metric_id]["value"] == pytest.approx(plain[metric_id]["value"])
+        assert padded[metric_id]["distribution"]["words_in_cmudict"] == \
+            plain[metric_id]["distribution"]["words_in_cmudict"]
+    core = padded[f"{m.PREFIX}syllable_disagreement_rate_core_vs_cmudict"]["distribution"]
+    assert core["unique_words_sampled"] > core["words_in_cmudict"]
+    assert core["cmudict_coverage_percent"] < 100.0
+
+
 # ------------------------------------------------------- segmentation diagnostics
 
 @requires_libraries

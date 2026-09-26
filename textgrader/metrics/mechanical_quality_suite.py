@@ -940,14 +940,17 @@ def _likely_typo_findings(analysis: DocumentAnalysis, config: Mapping[str, Any] 
     # case a future change makes even the ED1 path non-trivial.
     max_candidates = int(option(config, "likely_typo_max_candidates",
                                 DEFAULT_LIKELY_TYPO_MAX_CANDIDATES))
-    candidates = sorted(all_candidates, key=lambda w: -doc_counts[w])[:max_candidates]
+    # Ties broken by the word: all_candidates is a set, whose order changes with
+    # the process's hash seed, so a count-only key let the cap keep different
+    # words on different runs.
+    candidates = sorted(all_candidates, key=lambda w: (-doc_counts[w], w))[:max_candidates]
     typo_evidence: dict[str, list] = {"narration": [], "dialogue": []}
     typo_count = {"narration": 0, "dialogue": 0}
     for word in candidates:
         near = pyspell_checker_obj.known(pyspell_checker_obj.edit_distance_1(word))
         if not near:
             continue
-        correction = max(near, key=lambda w: pyspell_checker_obj.word_frequency[w])
+        correction = max(sorted(near), key=lambda w: pyspell_checker_obj.word_frequency[w])
         if correction == word:
             continue
         for ch in ("narration", "dialogue"):
@@ -1013,7 +1016,7 @@ def _fused_token_findings(analysis: DocumentAnalysis,
     doc_counts = Counter(item["lower"] for item in occurrences)
     sym_unknown = {word for word in doc_counts if word not in sym_spell.words}
     candidates = sorted((w for w in sym_unknown if len(w) >= min_length and w.isalpha()),
-                        key=lambda w: -doc_counts[w])[:max_candidates]
+                        key=lambda w: (-doc_counts[w], w))[:max_candidates]
     flagged = []
     for word in candidates:
         try:
