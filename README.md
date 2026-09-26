@@ -458,6 +458,39 @@ the metric's own `name`, docstring and `warning` as well:
 - single-quote dialogue is not parsed: an apostrophe and a closing single quote
   are the same character. The parser reports the limitation rather than
   guessing.
+- syllables (and so the core `fk`) come from **spelling rules**, not a
+  pronunciation dictionary, so the core metrics need no optional package.
+  Against CMUdict on held-out corpus vocabulary they match 99.2% of running
+  words; what they miss is irregular spelling such as "colonel", "business"
+  and "evening". `readability_suite` reports the disagreement with CMUdict.
+
+### Known gaps
+
+Work that is not done yet, kept here so it is not mistaken for finished:
+
+- **Topic-model metrics have no corpus comparison.** The 21
+  `semantic.structure_topic_*` findings need a model fitted on the whole
+  corpus, which does not exist while the profile is being built, so the
+  profile holds their inputs but no per-book values. A second pass over the
+  corpus after the first would fix it.
+- **Change points miss even an author splice.** `change_points` finds none in
+  47 of the 50 reference books, and none in 20,000 words of *Alice* followed
+  by 20,000 of *The Secret Agent*, at any window size or penalty tried. Its
+  eight section features vary about as much within one book as between those
+  two authors; it needs stronger features (function-word profiles, say), not
+  a lower penalty, which only adds false positives.
+- **Several reference profiles: no period fit, and a looser sample gate.**
+  A profile's `period` is recorded and shown but not scored, and percentiles
+  against the extra `reference_profiles` skip each metric's own minimum
+  sample size (the primary profile still applies it).
+- **Some packages compile.** `fasttext`, `gcld3` and `py-tlsh` build native
+  code, so they live in `requirements-native.txt` and need a C++ compiler
+  (and `protoc` for `gcld3`). Without them only their own channels report
+  `unavailable`.
+- **Some channels need system tools pip cannot install.** `prosody_suite`'s
+  `phonemizer` backend and parts of its `poesy` cross-check need the `espeak`
+  binary, and `nonlinear_dynamics_suite`'s PyRQA cross-check needs an OpenCL
+  device. Each says so in its `unavailable` warning.
 
 ## Project reports
 

@@ -227,12 +227,12 @@ def test_lix_exact_value():
 def test_contested_syllable_words_reproduced_exactly():
     """The exact per-word counts the module docstring cites.
 
-    ``core_metrics.syllables`` (a vowel-cluster regex heuristic) undercounts
-    several common diphthong words that both textstat's pyphen-based counter
-    and the real CMU Pronouncing Dictionary (via ``pronouncing``) count
-    correctly, while plainer multi-syllable words agree across all three.
-    Reproduced directly against the installed packages before being pinned
-    here, so a change to any of the three counters is caught.
+    ``core_metrics.syllables`` used to undercount diphthong words (fire,
+    poem, cruel, hour, science all scored 1); its rules now match CMUdict on
+    them.  What it still gets wrong is irregular spelling (evening, business,
+    colonel), which is what the cross-check exists to show.  Reproduced
+    directly against the installed packages, so a change to either counter
+    is caught.
     """
 
     pronouncing_mod, reason = optional.require("pronouncing")
@@ -243,8 +243,9 @@ def test_contested_syllable_words_reproduced_exactly():
         phones = pronouncing_mod.phones_for_word(word)
         return pronouncing_mod.syllable_count(phones[0]) if phones else None
 
-    contested = {"fire": (1, 2), "poem": (1, 2), "cruel": (1, 2), "hour": (1, 2),
-                "science": (1, 2)}
+    for word in ("fire", "poem", "cruel", "hour", "science"):
+        assert core_syllables(word) == cmudict_count(word) == 2, word
+    contested = {"evening": (3, 2), "business": (3, 2), "colonel": (3, 2)}
     for word, (core_expected, cmu_expected) in contested.items():
         assert core_syllables(word) == core_expected, word
         assert cmudict_count(word) == cmu_expected, word
@@ -257,13 +258,14 @@ def test_contested_syllable_words_reproduced_exactly():
 
 @requires_libraries
 def test_syllable_crosscheck_flags_the_contested_words_as_evidence():
-    text = ("Every poem about fire and science takes an hour to write naturally, "
+    text = ("Every evening the colonel talked business and read a poem about fire, "
            "or so the beautiful old story of the world goes. " * 8)
     found = _findings(text)
     item = found[f"{m.PREFIX}syllable_disagreement_rate_core_vs_cmudict"]
     assert item["value"] is not None and item["value"] > 0
     evidence_words = {row["word"] for row in item["evidence"]}
-    assert evidence_words & {"fire", "poem", "cruel", "hour", "science"}
+    assert evidence_words & {"evening", "business", "colonel"}
+    assert not evidence_words & {"fire", "poem"}
     for row in item["evidence"]:
         assert row["core_heuristic"] != row["cmudict"]
 

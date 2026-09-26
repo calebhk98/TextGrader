@@ -43,7 +43,9 @@ PARSER_VERSION = "2"
 #: profile built before the change is not silently compared against it.
 #: 3: run lengths, word lengths in characters, commas per sentence and
 #: sentences per paragraph headline the mean instead of the median.
-METRIC_DEFINITION_VERSION = "3"
+#: 4: core_metrics.syllables counts silent -ed/-es, silent e and hiatus vowels
+#: correctly, which moves the core fk (Flesch-Kincaid) value.
+METRIC_DEFINITION_VERSION = "4"
 
 from .core_metrics import measure as core_measure
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing

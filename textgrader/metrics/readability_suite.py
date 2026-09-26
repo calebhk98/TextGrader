@@ -87,15 +87,15 @@ Libraries used, and how each was verified
   Confirmed for real: ``pronouncing.phones_for_word("hello")`` returns CMU
   phonetic transcriptions and ``pronouncing.syllable_count(phones)`` counts
   stress markers. Used directly by :func:`_syllable_crosscheck` for a
-  three-way syllable-count comparison (this module's own vowel-cluster
-  heuristic reused unmodified from ``core_metrics.syllables``, textstat's
-  ``syllable_count`` -- pyphen-hyphenation based -- and CMUdict via
-  ``pronouncing``, with a documented, real disagreement: ``core_metrics.
-  syllables`` undercounts several common diphthong words ("fire", "poem",
-  "cruel", "hour", "science" all score 1 there and 2 under both textstat and
-  CMUdict; see ``tests/test_readability_suite.py`` for the exact reproduced
-  numbers), while "every"/"naturally"/"beautiful"/"world" agree across all
-  three.
+  three-way syllable-count comparison (``core_metrics.syllables``' rule-based
+  count, reused unmodified, textstat's ``syllable_count`` -- pyphen-hyphenation
+  based -- and CMUdict via ``pronouncing``).  The core count once undercounted
+  diphthong words ("fire", "poem", "cruel", "hour", "science" scored 1); it
+  now matches CMUdict on those, and on 99.2% of running words in held-out
+  corpus vocabulary, so the remaining disagreement is mostly irregular
+  spellings no rule predicts ("evening", "business", "colonel": 3 in the core
+  count, 2 in CMUdict).  See ``tests/test_readability_suite.py`` for the exact
+  reproduced numbers.
 
 Reuse canonical words/sentences, where that is possible
 ----------------------------------------------------------
