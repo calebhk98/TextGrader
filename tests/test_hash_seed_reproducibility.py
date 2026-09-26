@@ -46,31 +46,31 @@ TYPO_TEXT = " ".join(
     for word in ("recieve", "wierd", "adress", "untill", "freind", "beleive", "calender",
                  "tommorow", "seperate", "occured", "neccessary", "goverment"))
 
-# Eighty near-duplicate paragraphs, so every paragraph has many candidates of
-# equal standing and a per-item cap of one has to choose among them.  It
-# takes this many: a set of small integers iterates in sorted order whatever
-# order they were added in, until indices outgrow the set's hash table and
-# collide, and only then does the insertion order leak through.
-REUSE_TEXT = "\n\n".join(
-    f"The {adjective} {noun} stood beside the river where the long road bent toward the hills, "
-    f"and every traveller who passed it in the grey light of the morning stopped to look "
-    f"at the {noun} and wonder who had set it there so many years before the town was built. "
-    f"Nobody in the valley could say, and the {noun} kept its own counsel through every winter."
-    for adjective in ("old", "tall", "broken", "white", "narrow", "mossy", "leaning", "lonely",
-                      "ancient", "silent")
-    for noun in ("stone", "tower", "gate", "cross", "wall", "well", "mill", "barn"))
+# Candidate generation over tokens that recur with different strides: each
+# item's candidates then spread over hundreds of indices.  A set of small
+# integers iterates in sorted order whatever order they were added in, until
+# its values outgrow the set's hash table and collide; only then does the
+# (hash-seeded) order of the string tokens leak through to a capped loop.
+CANDIDATE_SCRIPT = """
+import json
+from textgrader.metrics import reuse_algorithms as ra
+sets = [frozenset({f"a{i % 7}", f"b{i % 11}", f"c{i % 13}", f"d{i % 17}", f"e{i % 19}"})
+        for i in range(1500)]
+graph, _ = ra.capped_inverted_candidates(sets, cap=40, max_candidates_per_item=2)
+print(json.dumps(sorted((k, sorted(v)) for k, v in graph.items())))
+"""
 
 
-def _measure(suite: str, text: str, overrides: dict, seed: str) -> str:
+def _run(args: list[str], seed: str) -> str:
     env = dict(os.environ, PYTHONHASHSEED=seed)
-    done = subprocess.run([sys.executable, "-c", SCRIPT, suite, text, json.dumps(overrides)],
-                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
+    done = subprocess.run([sys.executable, "-c", *args], cwd=ROOT, env=env,
+                          capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stderr[-2000:]
     return done.stdout
 
 
 def _assert_seed_independent(suite: str, text: str, overrides: dict) -> None:
-    outputs = {seed: _measure(suite, text, overrides, seed) for seed in SEEDS}
+    outputs = {seed: _run([SCRIPT, suite, text, json.dumps(overrides)], seed) for seed in SEEDS}
     first = outputs[SEEDS[0]]
     for seed, output in outputs.items():
         if output != first:
@@ -90,9 +90,6 @@ def test_mechanical_quality_is_hash_seed_independent():
                              {"likely_typo_max_candidates": 3})
 
 
-def test_reuse_is_hash_seed_independent():
-    for package in ("datasketch", "tlsh"):
-        module, reason = optional.require(package)
-        if module is None:
-            pytest.skip(reason)
-    _assert_seed_independent("reuse_suite", REUSE_TEXT, {"max_candidates_per_item": 1})
+def test_reuse_candidate_generation_is_hash_seed_independent():
+    outputs = {seed: _run([CANDIDATE_SCRIPT], seed) for seed in SEEDS}
+    assert len(set(outputs.values())) == 1, "candidate graphs differ between hash seeds"
