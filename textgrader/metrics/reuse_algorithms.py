@@ -27,7 +27,8 @@ own list of acceptable ones:
     windowed candidate generation: fixed-size, strided token windows are
     shingled and run through the same capped inverted index, then only the
     resulting candidates are scored with a real string-similarity function
-    and greedily extended. A raw 187,000-word novel produces on the order of
+    and greedily extended, one constant-size slice per step, with each
+    diagonal's runs recorded so no stretch is extended twice. A raw 187,000-word novel produces on the order of
     tens of thousands of windows, which the inverted index handles in
     O(windows * average postings length), never O(windows^2).
 
@@ -39,6 +40,7 @@ channel of :mod:`reuse_suite`, never the whole suite.
 
 from __future__ import annotations
 
+import bisect
 import difflib
 from collections import Counter, defaultdict
 from typing import Any, Mapping, Sequence
@@ -268,10 +270,37 @@ def _ratio(a: str, b: str) -> float:
     number even with every optional package absent.
     """
 
+    return _scorer()(a, b)
+
+
+def _scorer():
     rapidfuzz, _ = require("rapidfuzz")
     if rapidfuzz is not None:
-        return rapidfuzz.fuzz.ratio(a, b)
-    return 100.0 * difflib.SequenceMatcher(None, a, b).ratio()
+        return rapidfuzz.fuzz.ratio
+    return lambda a, b: 100.0 * difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _covering(intervals: list[list[int]], position: int) -> list[int] | None:
+    """The interval in a sorted, disjoint ``[start, end)`` list holding ``position``."""
+
+    index = bisect.bisect_right(intervals, [position, float("inf")]) - 1
+    if index >= 0 and intervals[index][0] <= position < intervals[index][1]:
+        return intervals[index]
+    return None
+
+
+def _cover(intervals: list[list[int]], start: int, end: int) -> None:
+    """Add ``[start, end)`` to a sorted, disjoint interval list, merging overlaps."""
+
+    index = bisect.bisect_left(intervals, [start, start])
+    if index > 0 and intervals[index - 1][1] >= start:
+        index -= 1
+        start = intervals[index][0]
+    stop = index
+    while stop < len(intervals) and intervals[stop][0] <= end:
+        end = max(end, intervals[stop][1])
+        stop += 1
+    intervals[index:stop] = [[start, end]]
 
 
 def longest_approximate_repeated_run(
@@ -284,10 +313,19 @@ def longest_approximate_repeated_run(
     the module docstring): fixed-size, strided windows of the token stream
     are shingled, and only windows that already share a shingle become
     candidates. A candidate pair whose RapidFuzz/difflib ratio clears
-    ``threshold`` is then greedily extended in both directions, one
-    ``extend_step`` at a time, for as long as the ratio keeps clearing it and
-    the two windows have not grown into each other. The longest surviving
-    pair across all candidates is returned.
+    ``threshold`` is then extended forward, ``extend_step`` tokens at a time,
+    for as long as the trailing ``window`` tokens of each side still clear it
+    and the two sides have not grown into each other.  The longest pair is
+    returned with the similarity of its whole run.
+
+    Two things keep this linear in the length of what repeats.  Each
+    extension step scores a ``window``-sized slice, so a step costs the same
+    at token 10 as at token 10,000; rescoring the whole run on every step
+    made a long repeat quadratic, and a book whose chapters repeat, cubic.
+    And a run is recorded against its diagonal (the offset between its two
+    sides): a later candidate on the same diagonal inside a recorded run is
+    the same repeat and is skipped, and an extension that reaches one jumps
+    to its end instead of rescoring it.
     """
 
     n = len(tokens)
@@ -300,50 +338,61 @@ def longest_approximate_repeated_run(
     shingle_sets = [shingles(tokens[s:s + window], shingle_k) for s in starts]
     graph, pair_count = capped_inverted_candidates(
         shingle_sets, max_candidates_per_item=max_candidates_per_item)
+    score = _scorer()
 
-    best: dict[str, Any] | None = None
-    seen_pairs: set[tuple[int, int]] = set()
-    for i, neighbors in graph.items():
-        for j in neighbors:
+    def similar(lo: int, hi: int, length: int) -> float:
+        return score(" ".join(tokens[lo:lo + length]), " ".join(tokens[hi:hi + length]))
+
+    best: tuple[int, int, int] | None = None
+    covered: dict[int, list[list[int]]] = defaultdict(list)
+    for i in sorted(graph):
+        for j in sorted(graph[i]):
             if j <= i:
                 continue
             a_start, b_start = starts[i], starts[j]
             lo, hi = (a_start, b_start) if a_start < b_start else (b_start, a_start)
-            if lo == hi or (lo, hi) in seen_pairs:
+            if lo == hi:
                 continue
-            seen_pairs.add((lo, hi))
-            length = window
             # The two candidate windows share a shingle but need not start at
             # the same offset within whatever repeated passage they belong to
             # (a fixed stride only samples every ``stride`` tokens). Search a
             # bounded neighborhood of alignments -- at most 2*window shifts,
             # a constant per candidate, never a function of document length
             # -- and keep the shift that scores best before extending.
-            best_shift, score = 0, -1.0
+            best_shift, top = 0, -1.0
             for shift in range(-window, window + 1):
                 shifted_hi = hi + shift
-                if shifted_hi < 0 or shifted_hi + length > n or shifted_hi <= lo:
+                if shifted_hi < 0 or shifted_hi + window > n or shifted_hi <= lo:
                     continue
-                candidate_score = _ratio(" ".join(tokens[lo:lo + length]),
-                                         " ".join(tokens[shifted_hi:shifted_hi + length]))
-                if candidate_score > score:
-                    best_shift, score = shift, candidate_score
+                candidate_score = similar(lo, shifted_hi, window)
+                if candidate_score > top:
+                    best_shift, top = shift, candidate_score
             hi = hi + best_shift
-            if score < threshold:
+            if top < threshold:
                 continue
+            diagonal = covered[hi - lo]
+            if _covering(diagonal, lo) is not None:
+                continue
+            length = window
             while True:
+                known = _covering(diagonal, lo + length)
+                if known is not None:
+                    length = min(known[1] - lo, hi - lo, n - hi)
                 new_length = length + extend_step
                 if hi + new_length > n or lo + new_length > hi:
                     break
-                new_score = _ratio(" ".join(tokens[lo:lo + new_length]),
-                                   " ".join(tokens[hi:hi + new_length]))
-                if new_score < threshold:
+                tail = new_length - window
+                if similar(lo + tail, hi + tail, window) < threshold:
                     break
-                length, score = new_length, new_score
-            if best is None or length > best["length"]:
-                best = {"length": length, "first_position": lo, "second_position": hi,
-                        "similarity": score}
-    return best if best is None else dict(best, candidate_pairs_examined=pair_count)
+                length = new_length
+            _cover(diagonal, lo, lo + length)
+            if best is None or length > best[0]:
+                best = (length, lo, hi)
+    if best is None:
+        return None
+    length, lo, hi = best
+    return {"length": length, "first_position": lo, "second_position": hi,
+            "similarity": similar(lo, hi, length), "candidate_pairs_examined": pair_count}
 
 
 # ------------------------------------------------------------------- motifs

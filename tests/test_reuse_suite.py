@@ -291,6 +291,46 @@ def test_longest_approximate_repeated_run_extends_beyond_exact():
     assert approx > 0
 
 
+def _repeating_tokens(paragraphs: int) -> list[str]:
+    adjectives = ("old", "tall", "broken", "white", "narrow", "mossy", "leaning", "lonely")
+    nouns = ("stone", "tower", "gate", "cross", "wall", "well", "mill", "barn")
+    pairs = [(a, n) for a in adjectives for n in nouns][:paragraphs]
+    return " ".join(
+        f"the {a} {n} stood beside the river where the long road bent toward the hills and "
+        f"every traveller who passed it in the grey light of the morning stopped to look at "
+        f"the {n} and wonder who had set it there so many years before the town was built"
+        for a, n in pairs).split()
+
+
+def test_approximate_run_cost_is_linear_on_text_that_repeats_throughout(monkeypatch):
+    """Rescoring the whole run on every extension step made this cubic on
+    exactly the text it exists to catch: 80 near-identical paragraphs took
+    over ten minutes.  Scorer calls must now grow in step with the text."""
+
+    real = ra._scorer()
+    calls = {"n": 0}
+
+    def counting():
+        def score(a, b):
+            calls["n"] += 1
+            return real(a, b)
+        return score
+
+    monkeypatch.setattr(ra, "_scorer", counting)
+    counts, results = [], []
+    for paragraphs in (16, 32, 64):
+        calls["n"] = 0
+        tokens = _repeating_tokens(paragraphs)
+        results.append((len(tokens), ra.longest_approximate_repeated_run(tokens)))
+        counts.append(calls["n"])
+    assert counts[1] < 2.6 * counts[0] and counts[2] < 2.6 * counts[1], counts
+    for total, found in results:
+        # Two non-overlapping copies of a text that repeats throughout can
+        # cover at most half of it each, and should come close.
+        assert total // 2 - 16 <= found["length"] <= total // 2
+        assert found["similarity"] >= 80.0
+
+
 # --------------------------------------------------------------- degradation
 
 def test_graceful_degradation_without_any_optional_package(monkeypatch):

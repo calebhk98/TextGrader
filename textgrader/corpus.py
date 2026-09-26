@@ -45,7 +45,11 @@ PARSER_VERSION = "2"
 #: 3: run lengths, word lengths in characters, commas per sentence and
 #: sentences per paragraph headline the mean instead of the median.
 #: 4: core_metrics.syllables counts silent -ed/-es, silent e and hiatus vowels
-#: correctly, which moves the core fk (Flesch-Kincaid) value.
+#: correctly, which moves the core fk (Flesch-Kincaid) value.  In the same
+#: version, both nlp.readability_syllable_disagreement_rate_* ids count only
+#: words CMUdict knows, and repetition.reuse_longest_approximate_repeated_run
+#: stops where its trailing window stops matching instead of carrying an
+#: unrelated tail on the strength of a verbatim start.
 METRIC_DEFINITION_VERSION = "4"
 
 from .core_metrics import measure as core_measure
