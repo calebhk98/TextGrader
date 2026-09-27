@@ -68,6 +68,22 @@ Branch on `action`:
 | `unavailable` | the measurement did not happen; `warning` says why |
 | `error` | the metric crashed; the run continued and the count is visible |
 
+Every result compared with a corpus also carries a `priority`, which the text
+output prints in place of the action:
+
+| `priority` | meaning |
+| --- | --- |
+| `critical` | past the robust outlier distance, or a value that misses a corpus constant |
+| `high` | outside the corpus's own range: lower or higher than every corpus text |
+| `review` | outside the corpus p10-p90 band |
+| `in range` | inside the p10-p90 band |
+
+`review` is a direction to move, not a sign that a text does not belong: a
+text drawn from the corpus itself lands outside p10-p90 on about a fifth of
+its measurements by definition. `high` and `critical` are the tiers that
+separate texts; a held-out chapter of the corpus author scored 6 critical and
+7 high where a same-genre chapter by another author scored 28 and 52.
+
 `severity` is a robust distance from the corpus centre, so findings in different
 units rank against each other. `distribution` carries the shape of the
 underlying sample, because a mean is rarely the interesting fact: `14 14 14 14`

@@ -1156,9 +1156,11 @@ def render(report):
                  if isinstance(result.value, float) else str(result.value))
         value = value if len(value) <= 10 else value[:9] + "…"
         unit = f" {result.unit}" if result.unit else ""
-        marker = {"review": "!", "rule_violation": "!", "error": "E"}.get(result.action.value, " ")
-        print(f" {marker} {result.metric_id:<44} {value:>10}{unit:<22} "
-              f"[{result.action.value}]")
+        tier = result.priority()
+        label = tier or result.action.value
+        flagged = tier in ("critical", "high", "review") or result.action.value == "rule_violation"
+        marker = "E" if result.action.value == "error" else "!" if flagged else " "
+        print(f" {marker} {result.metric_id:<44} {value:>10}{unit:<22} [{label}]")
         reference = _reference_line(result.corpus)
         if reference:
             print(f"      {reference}")
@@ -1167,7 +1169,11 @@ def render(report):
         if result.error:
             print(f"      ERROR: {result.error}")
     summary = report.summary()
-    print(f"\n{summary['total']} structured results; "
+    tiers = summary["by_priority"]
+    print(f"\nAgainst the corpus: {tiers['critical']} critical (past the outlier distance), "
+          f"{tiers['high']} high (outside the corpus range), "
+          f"{tiers['review']} review (outside p10-p90), {tiers['in range']} in range.")
+    print(f"{summary['total']} structured results; "
           f"{summary['by_action']['review']} to review; "
           f"{summary['by_action']['rule_violation']} project-rule violations; "
           f"{summary['by_action']['insufficient_data']} without enough data; "
