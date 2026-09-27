@@ -248,12 +248,20 @@ def test_a_custom_config_reaches_the_bundled_reports(tmp_path, monkeypatch):
 
 
 def test_text_output_states_the_corpus_target_beside_each_compared_value():
-    corpus = {"corpus_median": 4.23, "corpus_p10": 4.07, "corpus_p90": 4.45,
+    corpus = {"corpus_min": 3.9, "corpus_p10": 4.07, "corpus_p25": 4.15, "corpus_median": 4.23,
+              "corpus_p75": 4.33, "corpus_p90": 4.45, "corpus_max": 4.6,
               "percentile": 98.7, "direction": "high"}
     assert grade._reference_line(corpus) == (
-        "corpus median 4.23, corpus p10-p90 4.07 to 4.45; "
+        "corpus min 3.90 | p10 4.07 | p25 4.15 | median 4.23 | p75 4.33 | p90 4.45 | max 4.60; "
         "this text is at the 99th percentile (high)")
     # Withheld comparisons still show where the corpus sits, without a percentile.
     assert grade._reference_line({"corpus_median": 4446.0}) == "corpus median 4446.00"
     assert grade._reference_line(None) == ""
     assert grade._reference_line({"corpus_median": None}) == ""
+
+
+def test_comparison_reports_the_corpus_quartiles_and_extremes():
+    from textgrader.stats import compare
+    corpus = compare(5.0, list(range(1, 101))).to_dict()
+    assert corpus["corpus_min"] == 1 and corpus["corpus_max"] == 100
+    assert corpus["corpus_p25"] < corpus["corpus_median"] < corpus["corpus_p75"]

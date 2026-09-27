@@ -444,8 +444,12 @@ class Comparison:
     value: float | None = None
     corpus_count: int = 0
     corpus_median: float | None = None
+    corpus_min: float | None = None
     corpus_p10: float | None = None
+    corpus_p25: float | None = None
+    corpus_p75: float | None = None
     corpus_p90: float | None = None
+    corpus_max: float | None = None
     percentile: float | None = None
     robust_distance: float | None = None
     #: The robust scale the distance was divided by, in the metric's own unit.
@@ -460,7 +464,9 @@ class Comparison:
     def to_dict(self) -> dict[str, Any]:
         return {
             "corpus_count": self.corpus_count, "corpus_median": self.corpus_median,
-            "corpus_p10": self.corpus_p10, "corpus_p90": self.corpus_p90,
+            "corpus_min": self.corpus_min, "corpus_p10": self.corpus_p10,
+            "corpus_p25": self.corpus_p25, "corpus_p75": self.corpus_p75,
+            "corpus_p90": self.corpus_p90, "corpus_max": self.corpus_max,
             "percentile": self.percentile, "robust_distance": self.robust_distance,
             "scale": self.scale, "severity": self.severity, "direction": self.direction,
             "method": self.method, "outlier": self.outlier,
@@ -505,7 +511,10 @@ def compare(value: float | None, reference: Sequence[float], *,
         return result
     median = statistics.median(numbers)
     result.corpus_median = median
+    result.corpus_min, result.corpus_max = numbers[0], numbers[-1]
     result.corpus_p10 = quantile(numbers, .10)
+    result.corpus_p25 = quantile(numbers, .25)
+    result.corpus_p75 = quantile(numbers, .75)
     result.corpus_p90 = quantile(numbers, .90)
     result.percentile = 100 * (sum(1 for item in numbers if item < value)
                                + .5 * sum(1 for item in numbers if item == value)) / len(numbers)

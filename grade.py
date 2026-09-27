@@ -1195,14 +1195,17 @@ def _reference_line(corpus):
     The value column alone says how far off a text is only to someone who
     already knows the corpus: ``4.63 characters [review]`` does not say whether
     to move up or down, or how far.  An agent revising against it has been seen
-    to overshoot to the opposite tail.  The median, the 10th-90th percentile
-    band and the text's own percentile answer both questions.
+    to overshoot to the opposite tail.  The corpus's spread (min, p10, p25,
+    median, p75, p90, max) and the text's own percentile answer both questions;
+    p10-p90 is the band the outlier flags are read against.
     """
     if not corpus or corpus.get("corpus_median") is None:
         return ""
-    line = f"corpus median {_number(corpus['corpus_median'])}"
-    if corpus.get("corpus_p10") is not None and corpus.get("corpus_p90") is not None:
-        line += f", corpus p10-p90 {_number(corpus['corpus_p10'])} to {_number(corpus['corpus_p90'])}"
+    points = [("min", "corpus_min"), ("p10", "corpus_p10"), ("p25", "corpus_p25"),
+              ("median", "corpus_median"), ("p75", "corpus_p75"), ("p90", "corpus_p90"),
+              ("max", "corpus_max")]
+    line = "corpus " + " | ".join(f"{label} {_number(corpus[key])}" for label, key in points
+                                  if corpus.get(key) is not None)
     if corpus.get("percentile") is not None:
         line += f"; this text is at the {corpus['percentile']:.0f}th percentile"
         if corpus.get("direction") in ("high", "low"):
