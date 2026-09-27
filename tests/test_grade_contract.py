@@ -245,3 +245,15 @@ def test_a_custom_config_reaches_the_bundled_reports(tmp_path, monkeypatch):
     config = {"_config_dir": str(tmp_path), "_config_path": str(tmp_path / "mine.json")}
     grade.run_bundled_measure("register", tmp_path / "draft.md", config)
     assert recorded["config"] == str(tmp_path / "mine.json")
+
+
+def test_text_output_states_the_corpus_target_beside_each_compared_value():
+    corpus = {"corpus_median": 4.23, "corpus_p10": 4.07, "corpus_p90": 4.45,
+              "percentile": 98.7, "direction": "high"}
+    assert grade._reference_line(corpus) == (
+        "corpus median 4.23, corpus p10-p90 4.07 to 4.45; "
+        "this text is at the 99th percentile (high)")
+    # Withheld comparisons still show where the corpus sits, without a percentile.
+    assert grade._reference_line({"corpus_median": 4446.0}) == "corpus median 4446.00"
+    assert grade._reference_line(None) == ""
+    assert grade._reference_line({"corpus_median": None}) == ""

@@ -1159,6 +1159,9 @@ def render(report):
         marker = {"review": "!", "rule_violation": "!", "error": "E"}.get(result.action.value, " ")
         print(f" {marker} {result.metric_id:<44} {value:>10}{unit:<22} "
               f"[{result.action.value}]")
+        reference = _reference_line(result.corpus)
+        if reference:
+            print(f"      {reference}")
         if result.warning:
             print(f"      warning: {result.warning}")
         if result.error:
@@ -1175,7 +1178,36 @@ def render(report):
         print("\nFurthest from the corpus, most distant first:")
         for item in summary["top_findings"][:8]:
             severity = "-" if item["severity"] is None else f"{item['severity']:.1f}"
-            print(f"  {item['metric_id']:<44} {item['direction']:<8} severity {severity}")
+            print(f"  {item['metric_id']:<44} {item['direction']:<8} severity {severity}  "
+                  f"(this text {_number(item['value'])}, corpus median {_number(item['corpus_median'])})")
+
+
+def _number(value):
+    """A corpus figure at the same precision as the value column."""
+    if value is None:
+        return "-"
+    return f"{value:.2f}" if isinstance(value, float) else str(value)
+
+
+def _reference_line(corpus):
+    """Where the corpus sits for this measurement, so a reader can see the target.
+
+    The value column alone says how far off a text is only to someone who
+    already knows the corpus: ``4.63 characters [review]`` does not say whether
+    to move up or down, or how far.  An agent revising against it has been seen
+    to overshoot to the opposite tail.  The median, the 10th-90th percentile
+    band and the text's own percentile answer both questions.
+    """
+    if not corpus or corpus.get("corpus_median") is None:
+        return ""
+    line = f"corpus median {_number(corpus['corpus_median'])}"
+    if corpus.get("corpus_p10") is not None and corpus.get("corpus_p90") is not None:
+        line += f", corpus p10-p90 {_number(corpus['corpus_p10'])} to {_number(corpus['corpus_p90'])}"
+    if corpus.get("percentile") is not None:
+        line += f"; this text is at the {corpus['percentile']:.0f}th percentile"
+        if corpus.get("direction") in ("high", "low"):
+            line += f" ({corpus['direction']})"
+    return line
 
 
 def print_maturity(maturity):
