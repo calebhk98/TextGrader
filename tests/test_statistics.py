@@ -38,11 +38,22 @@ def test_zero_mad_falls_back_to_the_interquartile_range():
     assert any("MAD was zero" in note for note in result.notes)
 
 
-def test_no_variation_makes_no_outlier_claim():
-    result = stats.compare(9, [4] * 30)
-    assert result.method == "insufficient variation"
-    assert result.outlier is None
-    assert result.severity is None
+def test_a_constant_corpus_makes_the_constant_the_target():
+    missed = stats.compare(9, [4] * 30)
+    assert missed.method == "constant"
+    assert missed.outlier is True
+    assert missed.severity == stats.SEVERITY_CAP
+    assert missed.direction == "high"
+    assert any("target" in note for note in missed.notes)
+
+    matched = stats.compare(4, [4] * 30)
+    assert matched.method == "constant"
+    assert matched.outlier is False
+    assert matched.direction == "typical"
+
+
+def test_a_small_constant_corpus_still_withholds_the_outlier_claim():
+    assert stats.compare(9, [4] * 5).outlier is None
 
 
 def test_small_corpus_withholds_the_outlier_claim():

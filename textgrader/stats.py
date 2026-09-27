@@ -493,8 +493,10 @@ def compare(value: float | None, reference: Sequence[float], *,
         every non-3 an infinitely distant outlier.
     ``empirical percentile``
         when even the IQR is zero but the sample is not constant.
-    ``insufficient variation``
-        when every observation is identical.  No outlier claim is made.
+    ``constant``
+        when every observation is identical.  The constant is the target:
+        a text that matches it is typical, and one that does not is an outlier
+        at the severity cap.
 
     A corpus below ``min_corpus`` observations yields ``outlier=None`` and a
     note, so five books never carry the authority of fifty.
@@ -558,13 +560,22 @@ def compare(value: float | None, reference: Sequence[float], *,
             result.severity = abs(result.percentile - 50) / 50 * (threshold - 0.01)
         result.notes.append("MAD and IQR were both zero; empirical range used instead")
     else:
-        result.method = "insufficient variation"
-        result.severity = None
-        result.outlier = None
-        result.confidence = "none"
-        result.notes.append(
-            f"every corpus observation equals {numbers[0]:g}; no outlier claim is possible")
-        return result
+        # Every observation is identical.  That is not a lack of information:
+        # an author whose every text has exactly this value has made it a
+        # signature, and it is the target.  Matching it is typical; missing it
+        # is as far from the corpus as a measurement can be.
+        result.method = "constant"
+        constant = numbers[0]
+        if math.isclose(value, constant, rel_tol=1e-9, abs_tol=1e-12):
+            result.severity = 0.0
+            result.direction = "typical"
+            result.notes.append(
+                f"every corpus observation equals {constant:g}, and so does this text")
+        else:
+            result.severity = SEVERITY_CAP
+            result.notes.append(
+                f"every corpus observation equals {constant:g}; that exact value is the "
+                f"target, and this text is {value:g}")
 
     if result.severity is not None and result.severity > SEVERITY_CAP:
         result.notes.append(

@@ -50,7 +50,11 @@ PARSER_VERSION = "2"
 #: words CMUdict knows, and repetition.reuse_longest_approximate_repeated_run
 #: stops where its trailing window stops matching instead of carrying an
 #: unrelated tail on the strength of a verbatim start.
-METRIC_DEFINITION_VERSION = "4"
+#: 5: style.punctuation_em_dash and style.punctuation_ellipsis, and the
+#: dialogue/narration punctuation rates, count the typewriter forms ``--`` and
+#: ``...`` as well as the Unicode characters, so plain-text books no longer
+#: read as using neither.
+METRIC_DEFINITION_VERSION = "5"
 
 from .core_metrics import measure as core_measure
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing
