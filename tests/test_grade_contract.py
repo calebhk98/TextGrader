@@ -265,3 +265,11 @@ def test_comparison_reports_the_corpus_quartiles_and_extremes():
     corpus = compare(5.0, list(range(1, 101))).to_dict()
     assert corpus["corpus_min"] == 1 and corpus["corpus_max"] == 100
     assert corpus["corpus_p25"] < corpus["corpus_median"] < corpus["corpus_p75"]
+
+
+def test_text_output_names_a_constant_corpus_value_as_the_target():
+    from textgrader.stats import compare
+    missed = grade._reference_line(compare(2.0, [1.0] * 30).to_dict())
+    assert missed == "corpus: every observation is exactly 1.00, so 1.00 is the target; this text is high"
+    matched = grade._reference_line(compare(1.0, [1.0] * 30).to_dict())
+    assert matched.endswith("this text matches it")

@@ -1201,6 +1201,11 @@ def _reference_line(corpus):
     """
     if not corpus or corpus.get("corpus_median") is None:
         return ""
+    if corpus.get("method") == "constant":
+        target = _number(corpus["corpus_median"])
+        verdict = ("this text matches it" if corpus.get("direction") == "typical"
+                   else f"this text is {corpus.get('direction')}")
+        return f"corpus: every observation is exactly {target}, so {target} is the target; {verdict}"
     points = [("min", "corpus_min"), ("p10", "corpus_p10"), ("p25", "corpus_p25"),
               ("median", "corpus_median"), ("p75", "corpus_p75"), ("p90", "corpus_p90"),
               ("max", "corpus_max")]
