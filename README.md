@@ -8,7 +8,100 @@ There is no quality score and a run never fails. Readability and surface-style
 measures are correlated, unusual prose is not bad prose, and a value far from a
 reference corpus is often a deliberate choice. What you get is a structured
 list of measurements, each saying how far from the reference it sits, how sure
-that is, and how much text it was measured from.
+that is, and how much text it was measured from, plus one authorship score for
+how typical the text is of the corpus overall (a match to the corpus, not a
+grade for quality).
+
+## For writers and writing agents
+
+**What it does.** You give it a set of example texts (the corpus: chapters of
+the books whose style you want, or 500 wiki pages, or a stack of reports) and a
+draft. It measures the draft on hundreds of style features (sentence length and
+rhythm, punctuation, vocabulary, dialogue, readability, syntax, and more) and
+shows, for each one, where the draft sits against the corpus's own range. You
+revise the draft, run it again, and see what moved.
+
+**What it does not do.** Grading never reads or quotes the example texts. It
+uses only statistics taken from them (measurements and word counts), and it
+does not tell you what to write.
+The plot, the characters and the content are yours; the report is about how
+the prose is built.
+
+**Step 1: build a profile from your examples, once.** Put the example texts in
+a folder as `.txt` or `.md` files, one observation per file: one chapter, one
+page, one article. Then:
+
+```console
+python3 -m textgrader.corpus my_examples/ -o my_profile.json --config config.json \
+    --comparison-unit chapter --metric-selection all --parse-metrics --model-metrics
+```
+
+Use `--comparison-unit` for whatever one file is (`chapter`, `book`,
+`passage`...). If your files are whole books with chapter headings, add
+`--split-sections` so each chapter becomes one observation. Leave off
+`--parse-metrics --model-metrics` for a faster build with fewer metrics. You
+need at least 20 files for confident comparisons, and more is better. See
+"What one observation should be" below for why the unit matters.
+
+**Step 2: point the config at it.** The config file is `config.json` in this
+folder (or pass `--config path/to/yours.json`, or set the `TEXTGRADER_CONFIG`
+environment variable). Set:
+
+```json
+"corpus_profile": "my_profile.json",
+"analysis": {"comparison_unit": "chapter"}
+```
+
+Without this it compares against the bundled profile of 50 public-domain
+novels, which is only useful if that is the style you want.
+
+**Step 3: grade a draft.**
+
+```console
+python3 grade.py draft.md --enable-all
+```
+
+Grade one unit at a time, the same kind as the corpus files: one chapter
+against a chapter corpus. A whole book split into chapters can go through
+`python3 chapter_report.py book.md --corpus my_profile.json`. Match the metric
+set to the profile: a profile built with `--metric-selection all` pairs with
+`--enable-all`, and any metric the profile lacks is listed as "not compared".
+
+**Step 4: read the report, top down.**
+
+1. **Authorship score**, 0 to 100: the percent of the corpus's own texts that
+   are at least as far from the corpus as your draft is. About 50 is as
+   typical as an average example text; near 0 is less typical than all of
+   them. The line under it gives the same score per family, least typical
+   first. That tells you where to start.
+2. **Families**, least typical first, such as `sentence_rhythm (41 agree, 65
+   outside p10-p90: ...)`. Each measurement outside the corpus's middle 80%
+   gets a table row: its value, how far out it is, its percentile, and the
+   corpus's min, 10%, 25%, median, 75%, 90% and max. The target is the corpus
+   band, not the median exactly.
+3. **Tiers.** `critical` is far outside the corpus (or misses a value every
+   example text shares exactly). `high` is outside the corpus's whole range.
+   `review` is outside the middle 80%, which even a genuine example text is on
+   about a fifth of its measurements. Fix critical and high first.
+4. **`means:` lines** explain measurements whose names are technical.
+5. **Over-used words** (`lexical.keyness_overused`) lists the words the draft
+   uses far more than the corpus. Names and the story's own subject will be on
+   it, and that is fine. Look for habits: "just", "because", "suddenly".
+
+**Tips for revising against it.**
+
+- Make line edits and re-grade. Many measurements move together (shorter
+  sentences change readability, rhythm and syntax at once), so change a few
+  things per round rather than chasing every row.
+- Watch for overshoot. The table shows the corpus range so you can see when a
+  fix went past the target to the other side.
+- Two measurements can pull in opposite directions. Then the corpus's typical
+  combination is the target, and the authorship score shows whether a change
+  helped overall.
+- A draft much shorter than the example texts is noisier and scores lower.
+  Grade units of similar size to the corpus's.
+- `--json` (or `--json-out report.json`) gives everything in machine-readable
+  form. `--detailed` lists every measurement, including those in range.
 
 ## Install
 
