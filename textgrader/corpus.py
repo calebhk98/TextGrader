@@ -204,6 +204,41 @@ def _metric_names(include_parse: bool, include_model: bool,
             and (selection == "all" or is_enabled(metric_config, name))]
 
 
+#: Metric-id prefix of a per-word rate, e.g. ``lexical.word_rate.said``.
+WORD_RATE_PREFIX = "lexical.word_rate."
+#: How many words the per-word rates cover, and the share of observations a
+#: word must occur in to be one of them.
+WORD_RATE_VOCABULARY = 300
+WORD_RATE_MIN_SHARE = 0.5
+
+
+def _word_rate_tables(book_tokens: Sequence[Counter[str]], frequency: Counter[str]
+                      ) -> tuple[dict[str, Any], dict[str, int]]:
+    """Per-observation rates of the corpus's everyday vocabulary, and document frequency.
+
+    The vocabulary is the ``WORD_RATE_VOCABULARY`` most frequent words that
+    occur in at least ``WORD_RATE_MIN_SHARE`` of the observations, so names
+    and one-book topics fall out by dispersion rather than by a rule about
+    what a name looks like.  Ties in frequency break alphabetically, so the
+    vocabulary does not depend on file order.
+    """
+    document_frequency: Counter[str] = Counter()
+    for tokens in book_tokens:
+        document_frequency.update(tokens.keys())
+    needed = math.ceil(WORD_RATE_MIN_SHARE * len(book_tokens)) if book_tokens else 1
+    ranked = sorted((word for word in frequency if document_frequency[word] >= needed),
+                    key=lambda word: (-frequency[word], word))
+    vocabulary = ranked[:WORD_RATE_VOCABULARY]
+    rows = []
+    for tokens in book_tokens:
+        total = sum(tokens.values())
+        rows.append([_stable(1000.0 * tokens[word] / total) if total else 0.0
+                     for word in vocabulary])
+    return ({"vocabulary": vocabulary, "per_book": rows, "unit": "per 1,000 words",
+             "min_share": WORD_RATE_MIN_SHARE},
+            {word: document_frequency[word] for word in sorted(document_frequency)})
+
+
 def _measure_source(path_name: str, relative_name: str, task: Mapping[str, Any]
                     ) -> dict[str, Any]:
     """Everything a profile needs from one source file, in a picklable form.
@@ -408,6 +443,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     metric_errors: dict[str, str] = {}
     skipped: list[str] = []
     pooled: dict[str, list[float]] = {name: [] for name in ITEM_SOURCES}
+    book_tokens: list[Counter[str]] = []
 
     task = {"text_processing": settings, "nlp": nlp, "comparison_unit": comparison_unit,
             "split_sections": split_sections, "min_section_words": min_section_words,
@@ -456,6 +492,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                 pooled[name].extend(values)
             feature_profiles["function_words"].append(part["function_words"])
             books.append(book)
+            book_tokens.append(part["tokens"])
         if progress and book is not None:
             progress(relative_name, book)
 
@@ -505,6 +542,10 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                        and not isinstance(book.get(key), bool)})
     distributions.update({key: _distribution([book[key] for book in books if key in book])
                           for key in measured})
+    word_rates, word_document_frequency = _word_rate_tables(book_tokens, frequency)
+    distributions.update({f"{WORD_RATE_PREFIX}{word}": _distribution([row[i] for row in
+                                                                      word_rates["per_book"]])
+                          for i, word in enumerate(word_rates["vocabulary"])})
     effective = {name: {**REGISTRY[name].defaults,
                         **{key: value for key, value in
                            (metric_settings.get(name) or {}).items() if key != "enabled"}}
@@ -560,6 +601,16 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "author_word_frequency_total": {
             author: sum(counter.values()) for author, counter in sorted(author_frequency.items())},
         "feature_profiles": feature_profiles,
+        # The author's everyday vocabulary: the most frequent words that occur
+        # in at least half of the observations, with each observation's rate
+        # per 1,000 tokens, row i describing books[i].  Kept out of the book
+        # rows because every consumer that scans a book row's keys
+        # (metric_relationships, feature_matrix, reference_fit) would
+        # otherwise take on hundreds of word columns it was never built for.
+        "word_rates": word_rates,
+        # How many observations each word occurs in: a word in 3 of 75
+        # chapters is a name or a topic, one in 70 is a habit.
+        "word_document_frequency": word_document_frequency,
     }
 
 
@@ -594,6 +645,16 @@ def without_source(profile: dict, source_id: str) -> dict:
         summary["values"] = sorted(values)
         distributions[key] = summary
     out["distributions"] = distributions
+
+    rates = profile.get("word_rates")
+    if rates and rates.get("per_book"):
+        rows = [row for position, row in enumerate(rates["per_book"]) if position != index]
+        out["word_rates"] = {**rates, "per_book": rows}
+        for i, word in enumerate(rates["vocabulary"]):
+            values = sorted(row[i] for row in rows)
+            summary = summarize(values)
+            summary["values"] = values
+            distributions[f"{WORD_RATE_PREFIX}{word}"] = summary
 
     features = profile.get("feature_profiles", {})
     out["feature_profiles"] = {

@@ -190,11 +190,15 @@ class Report:
     #: Set by ``grade.py`` when a benchmark text is configured: which corpus
     #: text this document was measured against, and where it loses.
     benchmark: Optional[Dict[str, Any]] = None
+    #: Set by ``grade.py``: the calibrated authorship score over every
+    #: compared measurement (see ``textgrader.authorship``).
+    authorship: Optional[Dict[str, Any]] = None
 
     def to_dict(self):
         return {"schema_version": self.schema_version, "source": self.source,
                 "corpus_profile": self.corpus_profile,
                 "benchmark": self.benchmark,
+                "authorship": self.authorship,
                 "document": self.document,
                 "results": [result.to_dict() for result in self.results],
                 "summary": self.summary()}

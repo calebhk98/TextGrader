@@ -76,6 +76,10 @@ REGISTRY: dict[str, MetricSpec] = dict([
           summary="Moving-average type-token ratio, length-resistant lexical diversity."),
     _spec("punctuation", "punctuation", "punctuation",
           summary="Rate of each punctuation mark per 1,000 words."),
+    _spec("word_rates", "word_rates", "vocabulary", defaults={"overuse_limit": 25},
+          summary="The corpus's everyday vocabulary: this text's rate of each of its 300 most "
+                  "frequent widely-used words, compared per word with the corpus, plus the "
+                  "words this text over-uses by log-likelihood (keyness)."),
     _spec("length_quantiles", "length_quantiles", "sentence_rhythm",
           summary="Sentence and paragraph length quantiles."),
     _spec("pov_pronouns", "pov_pronouns", "pov", defaults={"block_words": 500},

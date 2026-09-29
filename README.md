@@ -27,14 +27,15 @@ install command, never a crash.
 ## Use
 
 ```console
-python3 grade.py draft.md                       # human-readable
+python3 grade.py draft.md                       # human-readable, grouped by family
+python3 grade.py draft.md --detailed            # every result in full, one by one
 python3 grade.py draft.md --json                # machine-readable
 python3 grade.py chapter_07.md --comparison-unit chapter
 python3 grade.py draft.md --enable mtld --enable-family sentence_rhythm
 python3 grade.py --list-metrics                 # everything available, and its cost
 ```
 
-Nine metrics are on by default: the fast, dependency-free, generic ones.
+Eleven metrics are on by default: the fast, dependency-free, generic ones.
 Everything else is opt-in.
 
 ## Reading a result
@@ -88,6 +89,51 @@ text drawn from the corpus itself lands outside p10-p90 on about a fifth of
 its measurements by definition. `high` and `critical` are the tiers that
 separate texts; a held-out chapter of the corpus author scored 6 critical and
 7 high where a same-genre chapter by another author scored 28 and 52.
+
+The text output groups results by family, least typical family first:
+
+```text
+sentence_rhythm (41 agree, 65 outside p10-p90: 23 critical, 5 high, 37 review; 8 not compared)
+  tier | metric | measurement | robust SDs | percentile | min | 10% | 25% | median | 75% | 90% | max
+  critical | prose.wps | 22.67 words/sentence | 5.6 | 99 | 8.397 | 9.857 | 11.48 | 13.23 | 14.38 | 16.75 | 30.35
+  ...
+```
+
+Every measurement outside p10-p90 gets a row with all its numbers, a `means:`
+line where its name needs one, and any warning (including how long the metric
+took). Measurements inside the band are counted, not listed. Measurements that
+were not compared are listed under their family, grouped by the reason.
+`--detailed` prints every result one by one instead, and `--json` has all of it.
+
+### Authorship score
+
+The first line of the text output, and `authorship` in the JSON, is one number
+for how typical the text is of the corpus, over every measurement that was
+compared. Each measurement's atypicality is `|percentile - 50| / 50` (0 at the
+corpus median, 1 at or past its min or max). These are averaged within each
+family and then across families, so a family is one vote however many
+measurements it has: 300 word rates count as much as 3 paragraph measures.
+
+That average is then calibrated on the corpus itself. Every corpus
+observation is scored the same way against the others (leave-one-out) over
+exactly the same measurements, and the score is the percent of the corpus's
+own observations at least as atypical as the text. 50 is a typical corpus
+chapter; 0 is less typical than every one. Turning metrics on or off changes
+which measurements go in, on both sides, so the scale holds for any set,
+including one cut down to 50 measurements. A per-family score says where the
+distance is.
+
+Checked against the 75-chapter Doctorow profile, with every metric on: 17
+held-out Doctorow chapters scored 20 to 89 (mean 57, as a calibrated score
+should), 9 chapters of Peter Watts scored 1 to 29 (mean 13), and the two
+separate with AUC 0.97. Short texts score lower: the five Watts chapters of
+1,100 words or fewer scored 1 to 8, the four of 1,450 to 2,100 words 19 to 29,
+and the one held-out Doctorow chapter under 1,000 words scored 20.
+
+A text sitting at the corpus median on everything would score 100, above
+every real chapter, because real chapters vary. Measurements with only a
+pooled corpus distribution (the item-level shapes) cannot be scored
+leave-one-out and are left out and counted as `uncalibrated`.
 
 `severity` is a robust distance from the corpus centre, so findings in different
 units rank against each other. `distribution` carries the shape of the
@@ -227,6 +273,34 @@ your manuscript is reported rather than assumed. `data/absolutes_reference.json`
 is the same 50 books. Rebuild both from a shelf that matches what you write:
 percentiles are only as relevant as the corpus they come from, and this one is
 general English-language fiction weighted to the 19th and early 20th century.
+
+### What one observation should be
+
+Every corpus text (or section, with `--split-sections`) is one observation,
+and a measurement's corpus range is the spread across observations. So the
+unit you split the corpus into is the unit you can grade, and it matters even
+though the words are the same:
+
+- **One merged file** is one observation. There is no spread to take a
+  percentile from, and every comparison is withheld (the minimum is 8
+  observations, and below 20 a comparison is marked low confidence).
+- **Whole books** give a few dozen observations whose values are averages over
+  100,000 words, so their spread is narrow. A 3,000-word chapter measured
+  against that band reads as an outlier on anything that varies scene to scene
+  (dialogue share, sentence rhythm, tense), because a chapter really does vary
+  more than a book.
+- **Chapters** give hundreds of observations with the spread chapters really
+  have, which is right for grading chapters. The bands are wider, since each
+  observation is noisier.
+- **Many tiny pieces** (a few hundred words) are mostly noise: rates of rare
+  marks and words are 0 in most of them, and the bands widen until little
+  falls outside.
+
+Match the unit to what you will grade: chapters for a novel graded chapter by
+chapter, one page per observation for wiki pages, one article for articles.
+Corpus-wide totals (the word frequencies behind keyness) are the same however
+the corpus is split; the everyday-vocabulary list is not quite, because
+"occurs in at least half the observations" is stricter for short ones.
 
 ### Several reference profiles
 
@@ -393,6 +467,25 @@ of it, so a slow run always says what was slow.
 | `narration_pov` | fast | - | no | Person-marking rates measured in narration only, free of dialogue. |
 | `pov_block_confidence` | fast | - | no | Per-block POV call with an explicit evidence count; no evidence means no call. |
 | `pov_pronouns` | fast | - | yes | Person-marking pronoun rates and block-by-block POV evidence. |
+
+### vocabulary
+
+| switch | cost | needs | on by default | what it measures |
+| --- | --- | --- | --- | --- |
+| `word_rates` | fast | - | yes | The corpus's everyday vocabulary: this text's rate of each of its 300 most frequent widely-used words, compared per word with the corpus, plus the words this text over-uses by log-likelihood (keyness). |
+
+The profile keeps the corpus's 300 most frequent words that occur in at least
+half of its observations, with every observation's rate per 1,000 words, so
+each word is compared like any other measurement (`lexical.word_rate.said`).
+The dispersion rule is what keeps character names and one-book topics out: a
+name used in 3 of 75 chapters is not a habit of the author's. No list of names
+is involved, so it works the same for fiction, wiki pages or reports.
+
+`lexical.keyness_overused` counts the words this text uses more than the
+corpus at Dunning log-likelihood G2 >= 10.83 (p < 0.001) and lists the top 25
+with both rates and how many corpus observations use the word at all. It is
+not compared with the corpus: a story's own names and subject are over-used by
+design, and the list is there for the writer to tell those from habits.
 
 ### punctuation
 
