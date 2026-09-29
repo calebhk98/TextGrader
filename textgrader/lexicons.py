@@ -923,13 +923,102 @@ def reference_quantiles(name: str, dimension: str, path: str | Path | None = Non
     return (metadata.get("dimension_reference") or {}).get(dimension)
 
 
+#: Irregular inflections, mapped to the headword norm tables list.  Regular
+#: suffixes are handled by :func:`_base_forms`; these are the ones no suffix
+#: rule reaches.
+IRREGULAR_FORMS = {
+    **{form: "be" for form in ("am", "is", "are", "was", "were", "been", "being")},
+    "has": "have", "had": "have", "does": "do", "did": "do", "done": "do",
+    "goes": "go", "went": "go", "gone": "go", "said": "say", "made": "make",
+    "knew": "know", "known": "know", "thought": "think", "took": "take", "taken": "take",
+    "saw": "see", "seen": "see", "came": "come", "got": "get", "gotten": "get",
+    "gave": "give", "given": "give", "found": "find", "told": "tell", "became": "become",
+    "left": "leave", "felt": "feel", "brought": "bring", "began": "begin", "begun": "begin",
+    "kept": "keep", "held": "hold", "wrote": "write", "written": "write", "stood": "stand",
+    "heard": "hear", "meant": "mean", "met": "meet", "ran": "run", "paid": "pay",
+    "sat": "sit", "spoke": "speak", "spoken": "speak", "led": "lead", "grew": "grow",
+    "grown": "grow", "lost": "lose", "fell": "fall", "fallen": "fall", "sent": "send",
+    "built": "build", "understood": "understand", "drew": "draw", "drawn": "draw",
+    "broke": "break", "broken": "break", "spent": "spend", "rose": "rise", "risen": "rise",
+    "drove": "drive", "driven": "drive", "bought": "buy", "wore": "wear", "worn": "wear",
+    "chose": "choose", "chosen": "choose", "sought": "seek", "threw": "throw",
+    "thrown": "throw", "caught": "catch", "dealt": "deal", "won": "win", "forgot": "forget",
+    "forgotten": "forget", "shook": "shake", "shaken": "shake", "fought": "fight",
+    "taught": "teach", "sold": "sell", "ate": "eat", "eaten": "eat", "slept": "sleep",
+    "flew": "fly", "flown": "fly", "hid": "hide", "hidden": "hide", "rode": "ride",
+    "ridden": "ride", "shot": "shoot", "sang": "sing", "sung": "sing", "swam": "swim",
+    "swum": "swim", "bit": "bite", "bitten": "bite", "blew": "blow", "blown": "blow",
+    "froze": "freeze", "frozen": "freeze", "hung": "hang", "stole": "steal",
+    "stolen": "steal", "struck": "strike", "swung": "swing", "woke": "wake",
+    "woken": "wake", "bled": "bleed", "fed": "feed", "fled": "flee", "forgave": "forgive",
+    "forgiven": "forgive", "dug": "dig", "lit": "light", "slid": "slide", "spun": "spin",
+    "stuck": "stick", "stung": "sting", "swore": "swear", "sworn": "swear", "tore": "tear",
+    "torn": "tear", "wept": "weep", "crept": "creep", "knelt": "kneel", "leapt": "leap",
+    "shone": "shine", "shrank": "shrink", "shrunk": "shrink", "sank": "sink",
+    "sunk": "sink", "spat": "spit", "stank": "stink", "bent": "bend", "beaten": "beat",
+    "men": "man", "women": "woman", "children": "child", "feet": "foot", "teeth": "tooth",
+    "mice": "mouse", "geese": "goose", "better": "good", "best": "good", "worse": "bad",
+    "worst": "bad", "lives": "life", "wives": "wife", "knives": "knife", "wolves": "wolf",
+    "leaves": "leaf", "halves": "half", "selves": "self", "thieves": "thief",
+}
+
+
+def _base_forms(word: str) -> list[str]:
+    """Candidate headwords for an inflected ``word``, most likely first."""
+    out: list[str] = []
+    if word in IRREGULAR_FORMS:
+        out.append(IRREGULAR_FORMS[word])
+    if word.endswith("'s"):
+        out.append(word[:-2])
+    for suffix in ("ing", "ed", "er", "est"):
+        if word.endswith(suffix) and len(word) > len(suffix) + 2:
+            stem = word[: -len(suffix)]
+            out.append(stem)                                   # walked -> walk
+            out.append(stem + "e")                             # shaking -> shake
+            if len(stem) > 2 and stem[-1] == stem[-2]:
+                out.append(stem[:-1])                          # grabbed -> grab
+            if stem.endswith("i"):
+                out.append(stem[:-1] + "y")                    # cried -> cry
+    if word.endswith("ies") and len(word) > 4:
+        out.append(word[:-3] + "y")                            # cries -> cry
+    if word.endswith("es") and len(word) > 3:
+        out.append(word[:-2])                                  # boxes -> box
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+        out.append(word[:-1])                                  # hearts -> heart
+    if word.endswith("d") and len(word) > 3:
+        out.append(word[:-1])                                  # smiled -> smile
+    return out
+
+
+def lookup(table: Mapping[str, Mapping[str, float]], word: str) -> Mapping[str, float] | None:
+    """The norm-table entry for ``word``, falling back to its headword.
+
+    Norm tables list headwords.  Looked up only as written, a past-tense story
+    loses most of its verbs ("grabbed", "shook", "screamed", "ran" are not
+    headwords), so a token-weighted mean over it reflects nouns, adjectives
+    and bare verbs alone; one 2,195-word draft had 467 tokens rated where
+    lemma-normalized lookup rated 648.  An exact entry always wins; otherwise
+    the first candidate from :func:`_base_forms` that the table itself lists
+    is used, so the table validates every guess.  No parse is needed, which
+    keeps the lookup's cost and its values the same on every machine.
+    """
+    entry = table.get(word)
+    if entry is not None:
+        return entry
+    for candidate in _base_forms(word):
+        entry = table.get(candidate)
+        if entry is not None:
+            return entry
+    return None
+
+
 def score_tokens(name: str, tokens: Sequence[str], dimension: str | None = None,
                  path: str | Path | None = None) -> list[float | None]:
     """One score per token (aligned positionally), or all ``None`` if unavailable.
 
-    ``tokens`` are looked up exactly as given (already lower-cased the way
-    :attr:`DocumentAnalysis.tokens` lower-cases and apostrophe-folds them);
-    this function does no further normalization. Intended for a sibling
+    ``tokens`` are expected lower-cased and apostrophe-folded the way
+    :attr:`DocumentAnalysis.tokens` gives them, and are looked up with
+    :func:`lookup`, so an inflected form falls back to its headword. Intended for a sibling
     module (e.g. sentence-level VAD scoring) that wants one resource's
     numbers without touching parsing or caching itself.
     """
@@ -944,7 +1033,7 @@ def score_tokens(name: str, tokens: Sequence[str], dimension: str | None = None,
             raise ValueError(
                 f"resource {name!r} has {len(dims)} dimensions ({dims}); pass dimension=...")
         dimension = dims[0]
-    return [table.get(token, {}).get(dimension) for token in tokens]
+    return [(lookup(table, token) or {}).get(dimension) for token in tokens]
 
 
 # ------------------------------------------------------------------------- CLI

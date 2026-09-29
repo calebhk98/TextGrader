@@ -444,8 +444,12 @@ class Comparison:
     value: float | None = None
     corpus_count: int = 0
     corpus_median: float | None = None
+    corpus_min: float | None = None
     corpus_p10: float | None = None
+    corpus_p25: float | None = None
+    corpus_p75: float | None = None
     corpus_p90: float | None = None
+    corpus_max: float | None = None
     percentile: float | None = None
     robust_distance: float | None = None
     #: The robust scale the distance was divided by, in the metric's own unit.
@@ -460,7 +464,9 @@ class Comparison:
     def to_dict(self) -> dict[str, Any]:
         return {
             "corpus_count": self.corpus_count, "corpus_median": self.corpus_median,
-            "corpus_p10": self.corpus_p10, "corpus_p90": self.corpus_p90,
+            "corpus_min": self.corpus_min, "corpus_p10": self.corpus_p10,
+            "corpus_p25": self.corpus_p25, "corpus_p75": self.corpus_p75,
+            "corpus_p90": self.corpus_p90, "corpus_max": self.corpus_max,
             "percentile": self.percentile, "robust_distance": self.robust_distance,
             "scale": self.scale, "severity": self.severity, "direction": self.direction,
             "method": self.method, "outlier": self.outlier,
@@ -487,8 +493,10 @@ def compare(value: float | None, reference: Sequence[float], *,
         every non-3 an infinitely distant outlier.
     ``empirical percentile``
         when even the IQR is zero but the sample is not constant.
-    ``insufficient variation``
-        when every observation is identical.  No outlier claim is made.
+    ``constant``
+        when every observation is identical.  The constant is the target:
+        a text that matches it is typical, and one that does not is an outlier
+        at the severity cap.
 
     A corpus below ``min_corpus`` observations yields ``outlier=None`` and a
     note, so five books never carry the authority of fifty.
@@ -505,7 +513,10 @@ def compare(value: float | None, reference: Sequence[float], *,
         return result
     median = statistics.median(numbers)
     result.corpus_median = median
+    result.corpus_min, result.corpus_max = numbers[0], numbers[-1]
     result.corpus_p10 = quantile(numbers, .10)
+    result.corpus_p25 = quantile(numbers, .25)
+    result.corpus_p75 = quantile(numbers, .75)
     result.corpus_p90 = quantile(numbers, .90)
     result.percentile = 100 * (sum(1 for item in numbers if item < value)
                                + .5 * sum(1 for item in numbers if item == value)) / len(numbers)
@@ -549,13 +560,22 @@ def compare(value: float | None, reference: Sequence[float], *,
             result.severity = abs(result.percentile - 50) / 50 * (threshold - 0.01)
         result.notes.append("MAD and IQR were both zero; empirical range used instead")
     else:
-        result.method = "insufficient variation"
-        result.severity = None
-        result.outlier = None
-        result.confidence = "none"
-        result.notes.append(
-            f"every corpus observation equals {numbers[0]:g}; no outlier claim is possible")
-        return result
+        # Every observation is identical.  That is not a lack of information:
+        # an author whose every text has exactly this value has made it a
+        # signature, and it is the target.  Matching it is typical; missing it
+        # is as far from the corpus as a measurement can be.
+        result.method = "constant"
+        constant = numbers[0]
+        if math.isclose(value, constant, rel_tol=1e-9, abs_tol=1e-12):
+            result.severity = 0.0
+            result.direction = "typical"
+            result.notes.append(
+                f"every corpus observation equals {constant:g}, and so does this text")
+        else:
+            result.severity = SEVERITY_CAP
+            result.notes.append(
+                f"every corpus observation equals {constant:g}; that exact value is the "
+                f"target, and this text is {value:g}")
 
     if result.severity is not None and result.severity > SEVERITY_CAP:
         result.notes.append(

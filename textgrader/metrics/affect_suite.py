@@ -1256,7 +1256,7 @@ def _vad_scorer_factory(resource: str, dimension: str):
             # The same tokens DocumentAnalysis.tokens gives lexical_norms_suite:
             # lower-cased words with curly apostrophes folded.
             values = [entry[dimension] for word in textlib.words(sentence)
-                      if (entry := table.get(word.lower().replace("\u2019", "'")))
+                      if (entry := lexicons.lookup(table, word.lower().replace("\u2019", "'")))
                       and dimension in entry]
             return sum(values) / len(values) if values else None
 

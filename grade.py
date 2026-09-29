@@ -33,8 +33,9 @@ from textgrader.core_metrics import measure as core_measure
 from textgrader.metrics import REGISTRY, is_enabled
 from textgrader.reports import REPORTS, VIA_GRADE_ENV_VAR
 from textgrader.results import Action, MetricResult, Polarity, Report, StatusType
+from textgrader.plain_names import describe
 from textgrader.rules import compile_rules
-from textgrader import stats
+from textgrader import authorship, stats
 
 ROOT = Path(__file__).resolve().parent
 
@@ -836,6 +837,10 @@ def _analyze(config, report, path=None, text=None):
     report.results.extend(_relationship_results(report.results, analysis, config, profile,
                                                 comparator))
     apply_reference_profiles(analysis, config, report, extra_profiles)
+    report.authorship = authorship.score(
+        [(item.metric_id, _reference_fit_source_key(item.metric_id), item.family,
+          item.corpus["percentile"]) for item in report.results if item.priority() is not None],
+        profile)
     if path is not None:
         report.results.extend(_external_results(path, config))
         report.results.extend(_bundled_results(path, config))
@@ -1140,7 +1145,7 @@ def _bundled_results(path, config):
 
 # ---------------------------------------------------------------------- output
 
-def render(report):
+def render(report, detailed=False):
     print(f"TextGrader: {report.source}")
     document = report.document or {}
     if document:
@@ -1150,21 +1155,20 @@ def render(report):
               f"{document.get('paragraphs', 0):,} paragraphs; "
               f"segmenter={document.get('segmenter')}; "
               f"unit={document.get('comparison_unit')}")
-    print("Metrics are evidence and diagnostics, not rewriting instructions.\n")
-    for result in report.results:
-        value = ("-" if result.value is None else f"{result.value:.2f}"
-                 if isinstance(result.value, float) else str(result.value))
-        value = value if len(value) <= 10 else value[:9] + "…"
-        unit = f" {result.unit}" if result.unit else ""
-        marker = {"review": "!", "rule_violation": "!", "error": "E"}.get(result.action.value, " ")
-        print(f" {marker} {result.metric_id:<44} {value:>10}{unit:<22} "
-              f"[{result.action.value}]")
-        if result.warning:
-            print(f"      warning: {result.warning}")
-        if result.error:
-            print(f"      ERROR: {result.error}")
+    print("Metrics are evidence and diagnostics, not rewriting instructions.")
+    print_authorship(report.authorship)
+    print()
+    if detailed:
+        for result in report.results:
+            _render_result(result)
+    else:
+        _render_grouped(report.results)
     summary = report.summary()
-    print(f"\n{summary['total']} structured results; "
+    tiers = summary["by_priority"]
+    print(f"\nAgainst the corpus: {tiers['critical']} critical (past the outlier distance), "
+          f"{tiers['high']} high (outside the corpus range), "
+          f"{tiers['review']} review (outside p10-p90), {tiers['in range']} in range.")
+    print(f"{summary['total']} structured results; "
           f"{summary['by_action']['review']} to review; "
           f"{summary['by_action']['rule_violation']} project-rule violations; "
           f"{summary['by_action']['insufficient_data']} without enough data; "
@@ -1175,7 +1179,215 @@ def render(report):
         print("\nFurthest from the corpus, most distant first:")
         for item in summary["top_findings"][:8]:
             severity = "-" if item["severity"] is None else f"{item['severity']:.1f}"
-            print(f"  {item['metric_id']:<44} {item['direction']:<8} severity {severity}")
+            print(f"  {item['metric_id']:<44} {item['direction']:<8} severity {severity}  "
+                  f"(this text {_number(item['value'])}, corpus median {_number(item['corpus_median'])})")
+
+
+def _render_result(result):
+    """One result in full: the ``--detailed`` listing, and anything not in a table."""
+    value = ("-" if result.value is None else f"{result.value:.2f}"
+             if isinstance(result.value, float) else str(result.value))
+    value = value if len(value) <= 10 else value[:9] + "…"
+    unit = f" {result.unit}" if result.unit else ""
+    tier = result.priority()
+    label = tier or result.action.value
+    flagged = tier in ("critical", "high", "review") or result.action.value == "rule_violation"
+    marker = "E" if result.action.value == "error" else "!" if flagged else " "
+    print(f" {marker} {result.metric_id:<44} {value:>10}{unit:<22} [{label}]")
+    plain = describe(result.metric_id)
+    if plain:
+        print(f"      means: {plain}")
+    reference = _reference_line(result.corpus)
+    if reference:
+        print(f"      {reference}")
+    if result.warning:
+        print(f"      warning: {result.warning}")
+    if result.error:
+        print(f"      ERROR: {result.error}")
+
+
+#: Order of the tiers in a family's table.
+_TIER_ORDER = {"critical": 0, "high": 1, "review": 2}
+_TABLE_HEADER = ("tier | metric | measurement | robust SDs | percentile | "
+                 "min | 10% | 25% | median | 75% | 90% | max")
+
+
+def _cell(value):
+    """A table number: four significant figures, so small rates do not print as 0.00."""
+    if value is None:
+        return "-"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, int) or float(value).is_integer() and abs(value) < 1e15:
+        return f"{int(value):,}" if abs(value) >= 10_000 else str(int(value))
+    return f"{value:,.0f}" if abs(value) >= 10_000 else f"{value:.4g}"
+
+
+def _table_row(result):
+    corpus = result.corpus or {}
+    unit = f" {result.unit}" if result.unit else ""
+    severity = "-" if result.severity is None else f"{result.severity:.1f}"
+    cells = [result.priority(), result.metric_id, f"{_cell(result.value)}{unit}", severity,
+             f"{corpus['percentile']:.0f}"]
+    cells += [_cell(corpus.get(key)) for key in ("corpus_min", "corpus_p10", "corpus_p25",
+                                                 "corpus_median", "corpus_p75", "corpus_p90",
+                                                 "corpus_max")]
+    return " | ".join(cells)
+
+
+def _render_grouped(results):
+    """Results by family: counts for the whole family, a row for each one outside p10-p90.
+
+    Rows inside the corpus's p10-p90 band are counted, not listed; ``--detailed``
+    or ``--json`` has every one.  A row keeps every number the detailed listing
+    has (value, robust distance, percentile and the corpus spread), plus what
+    the measurement means and any warning on it, including how long it took.
+    Results that were not compared (unavailable, too little data, no corpus
+    distribution, errors, rule violations) are listed under their family with
+    the reason, since a measurement that did not happen is not a pass.
+    """
+    families = {}
+    for result in results:
+        families.setdefault(result.family or "other", []).append(result)
+    order = []
+    for family, items in families.items():
+        tiers = [item.priority() for item in items]
+        outside = sum(1 for tier in tiers if tier in _TIER_ORDER)
+        worst = min((_TIER_ORDER[tier] for tier in tiers if tier in _TIER_ORDER), default=3)
+        order.append((worst, -outside, family))
+    for _, _, family in sorted(order):
+        items = families[family]
+        tiers = [item.priority() for item in items]
+        failing = sorted((item for item in items if item.priority() in _TIER_ORDER),
+                         key=lambda item: (_TIER_ORDER[item.priority()], -(item.severity or 0),
+                                           item.metric_id))
+        agree = tiers.count("in range")
+        counts = ", ".join(f"{tiers.count(tier)} {tier}" for tier in _TIER_ORDER
+                           if tiers.count(tier))
+        other = [item for item in items if item.priority() is None]
+        header = f"{family} ({agree} agree, {len(failing)} outside p10-p90"
+        header += f": {counts})" if counts else ")"
+        if other:
+            header = header[:-1] + f"; {len(other)} not compared)"
+        print(header)
+        if failing:
+            print(f"  {_TABLE_HEADER}")
+            for item in failing:
+                print(f"  {_table_row(item)}")
+                plain = describe(item.metric_id)
+                if plain:
+                    print(f"      means: {plain}")
+                if (item.corpus or {}).get("method") == "constant":
+                    print(f"      {_reference_line(item.corpus)}")
+                if item.warning:
+                    print(f"      warning: {item.warning}")
+        _render_uncompared(other)
+        print()
+
+
+def _render_uncompared(items):
+    """Results with no corpus comparison, one line per shared reason.
+
+    Errors and project-rule violations get a line each, since each is its own
+    problem; the rest share reasons ("measured from 4 units, below the 200
+    this metric needs") often enough that listing the ids under one reason
+    keeps every value visible in a fraction of the lines.
+    """
+    grouped = {}
+    for item in items:
+        if item.action.value in ("error", "rule_violation"):
+            marker = "E" if item.action.value == "error" else "!"
+            print(f"  {marker} {item.metric_id} {_uncompared_value(item)} "
+                  f"[{item.action.value}]: {item.error or item.warning or ''}")
+            continue
+        reason = item.warning or ("no corpus distribution for this measurement"
+                                  if item.value is not None else "no value")
+        grouped.setdefault((item.action.value, reason), []).append(item)
+    for (action, reason), members in grouped.items():
+        listed = ", ".join(f"{item.metric_id} {_uncompared_value(item)}" for item in members)
+        print(f"  - not compared [{action}], {reason}: {listed}")
+        for item in members:
+            evidence = _keyness_evidence(item)
+            if evidence:
+                print(f"      {evidence}")
+
+
+def _uncompared_value(result):
+    if result.value is None:
+        return "-"
+    unit = f" {result.unit}" if result.unit else ""
+    return f"= {_cell(result.value)}{unit}"
+
+
+def _keyness_evidence(result):
+    """The over-used words themselves, which are the point of the keyness count."""
+    if result.metric_id != "lexical.keyness_overused" or not result.evidence:
+        return ""
+    words = [f"{row['word']} {_cell(row['this_text_per_1000'])} vs "
+             f"{_cell(row['corpus_per_1000'])} ({row['corpus_observations_using_it']})"
+             for row in result.evidence]
+    return ("most over-used first (this text vs corpus per 1,000 words; corpus observations "
+            "using the word): " + ", ".join(words))
+
+
+def print_authorship(authorship):
+    """The calibrated one-number summary; see ``textgrader.authorship``."""
+    if not authorship:
+        return
+    if authorship.get("score") is None:
+        print(f"Authorship score: not available ({authorship.get('note')})")
+        return
+    spread = authorship["corpus_atypicality"]
+    print(f"Authorship score: {authorship['score']:.0f} of 100 - this text is at least as "
+          f"typical of the corpus as {authorship['score']:.0f}% of the corpus's own "
+          f"observations (each scored against the others). Mean atypicality "
+          f"{authorship['atypicality']:.3f} against the corpus's own {spread['min']:.3f} "
+          f"(min) / {spread['median']:.3f} (median) / {spread['max']:.3f} (max), over "
+          f"{authorship['measurements']} measurements in {len(authorship['families'])} "
+          f"families, each family weighted equally"
+          + (f"; {authorship['uncalibrated']} compared measurements have no per-observation "
+             f"corpus values and are left out" if authorship.get("uncalibrated") else "")
+          + ".")
+    worst = sorted(authorship["families"].items(), key=lambda kv: kv[1]["score"])
+    print("  by family, least typical first (family score, measurements): "
+          + ", ".join(f"{name} {entry['score']:.0f} ({entry['measurements']})"
+                      for name, entry in worst))
+
+
+def _number(value):
+    """A corpus figure at the same precision as the value column."""
+    if value is None:
+        return "-"
+    return f"{value:.2f}" if isinstance(value, float) else str(value)
+
+
+def _reference_line(corpus):
+    """Where the corpus sits for this measurement, so a reader can see the target.
+
+    The value column alone says how far off a text is only to someone who
+    already knows the corpus: ``4.63 characters [review]`` does not say whether
+    to move up or down, or how far.  An agent revising against it has been seen
+    to overshoot to the opposite tail.  The corpus's spread (min, p10, p25,
+    median, p75, p90, max) and the text's own percentile answer both questions;
+    p10-p90 is the band the outlier flags are read against.
+    """
+    if not corpus or corpus.get("corpus_median") is None:
+        return ""
+    if corpus.get("method") == "constant":
+        target = _number(corpus["corpus_median"])
+        verdict = ("this text matches it" if corpus.get("direction") == "typical"
+                   else f"this text is {corpus.get('direction')}")
+        return f"corpus: every observation is exactly {target}, so {target} is the target; {verdict}"
+    points = [("min", "corpus_min"), ("p10", "corpus_p10"), ("p25", "corpus_p25"),
+              ("median", "corpus_median"), ("p75", "corpus_p75"), ("p90", "corpus_p90"),
+              ("max", "corpus_max")]
+    line = "corpus " + " | ".join(f"{label} {_number(corpus[key])}" for label, key in points
+                                  if corpus.get(key) is not None)
+    if corpus.get("percentile") is not None:
+        line += f"; this text is at the {corpus['percentile']:.0f}th percentile"
+        if corpus.get("direction") in ("high", "low"):
+            line += f" ({corpus['direction']})"
+    return line
 
 
 def print_maturity(maturity):
@@ -1299,6 +1511,8 @@ def main(argv=None):
     parser.add_argument("--comparison-unit", choices=COMPARISON_UNITS,
                         help="what the input is, so scale-dependent comparisons are honest")
     parser.add_argument("--list-metrics", action="store_true")
+    parser.add_argument("--detailed", action="store_true",
+                        help="list every result in full rather than grouping by family")
     args = parser.parse_args(argv)
 
     if args.list_metrics:
@@ -1318,7 +1532,7 @@ def main(argv=None):
     if args.json:
         print(output)
     else:
-        render(report)
+        render(report, detailed=args.detailed)
     return 2 if report.summary()["has_internal_errors"] else 0
 
 

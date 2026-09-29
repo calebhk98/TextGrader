@@ -986,7 +986,7 @@ def _adjacent_finding(rep: str, kind: str, units: Sequence[str], raw: list[float
     if not values:
         return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=0,
                        min_sample=min_sample,
-                       warning=f"{note}; no comparable pair (every unit vector was missing)")
+                       warning="no comparable pair (every unit vector was missing)", details=[{"method": note}])
     summary = summarize(values)
     ranked = sorted(range(len(values)), key=lambda k: values[k])[:10]
     evidence = [{"index": idxs[k], "value": values[k],
@@ -1003,7 +1003,7 @@ def _adjacent_finding(rep: str, kind: str, units: Sequence[str], raw: list[float
         distribution["overlaps_existing_metric_id"] = overlap
     return finding(metric_id, name, headline, unit_label, family=FAMILY,
                   sample_size=len(values), min_sample=min_sample, distribution=distribution,
-                  evidence=evidence, warning=note)
+                  evidence=evidence, details=[{"method": note}])
 
 
 def _centroid_finding(rep: str, sentences: Sequence[str], ok: bool,
@@ -1040,7 +1040,7 @@ def _centroid_finding(rep: str, sentences: Sequence[str], ok: bool,
             means.append(statistics.fmean(values))
     if not means:
         return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=0,
-                       min_sample=3, warning=f"{note}; no comparable pair")
+                       min_sample=3, warning="no comparable pair", details=[{"method": note}])
     summary = summarize(means)
     headline, method = _resolve_headline(means, summary)
     distribution = dict(summary)
@@ -1053,7 +1053,7 @@ def _centroid_finding(rep: str, sentences: Sequence[str], ok: bool,
     if overlap:
         distribution["overlaps_existing_metric_id"] = overlap
     return finding(metric_id, name, headline, unit_label, family=FAMILY,
-                  sample_size=len(means), min_sample=3, distribution=distribution, warning=note)
+                  sample_size=len(means), min_sample=3, distribution=distribution, details=[{"method": note}])
 
 
 def _window_drift_finding(rep: str, sentences: Sequence[str], ok: bool,
@@ -1076,7 +1076,7 @@ def _window_drift_finding(rep: str, sentences: Sequence[str], ok: bool,
     values = [value for value in (sim_fn(i, i + 1) for i in range(pairs)) if value is not None]
     if len(values) < window * 2:
         return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=len(values),
-                       min_sample=window * 2, warning=f"{note}; too few comparable pairs")
+                       min_sample=window * 2, warning="too few comparable pairs", details=[{"method": note}])
     blocks = [values[i:i + window] for i in range(0, len(values), window)]
     block_means = [statistics.fmean(block) for block in blocks if block]
     if len(block_means) < 2:
@@ -1092,7 +1092,7 @@ def _window_drift_finding(rep: str, sentences: Sequence[str], ok: bool,
         "aggregation": f"headline is the {method} of the block-to-block absolute mean change",
     })
     return finding(metric_id, name, headline, unit_label, family=FAMILY,
-                  sample_size=len(deltas), min_sample=1, distribution=distribution, warning=note)
+                  sample_size=len(deltas), min_sample=1, distribution=distribution, details=[{"method": note}])
 
 
 def _dispersion_finding(rep: str, sentences: Sequence[str], ok: bool,
@@ -1118,7 +1118,7 @@ def _dispersion_finding(rep: str, sentences: Sequence[str], ok: bool,
     values = [value for value in (sim_fn(i, j) for i, j in sample) if value is not None]
     if not values:
         return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=0,
-                       min_sample=4, warning=f"{note}; no comparable pair")
+                       min_sample=4, warning="no comparable pair", details=[{"method": note}])
     summary = summarize(values)
     distribution = dict(summary)
     distribution.update({
@@ -1131,7 +1131,7 @@ def _dispersion_finding(rep: str, sentences: Sequence[str], ok: bool,
                        "the sampled similarities themselves, not the dispersion",
     })
     return finding(metric_id, name, summary.get("std"), unit_label, family=FAMILY,
-                  sample_size=len(values), min_sample=4, distribution=distribution, warning=note)
+                  sample_size=len(values), min_sample=4, distribution=distribution, details=[{"method": note}])
 
 
 def _intro_conclusion_finding(rep: str, sentences: Sequence[str], ok: bool,
@@ -1159,7 +1159,7 @@ def _intro_conclusion_finding(rep: str, sentences: Sequence[str], ok: bool,
     if value is None:
         return finding(metric_id, name, None, unit_label, family=FAMILY, sample_size=0,
                        min_sample=2 * k,
-                       warning=f"{note}; no comparable pair (every unit vector was missing)")
+                       warning="no comparable pair (every unit vector was missing)", details=[{"method": note}])
     return finding(
         metric_id, name, value, unit_label, family=FAMILY, sample_size=2 * k, min_sample=2 * k,
         distribution={
@@ -1170,7 +1170,7 @@ def _intro_conclusion_finding(rep: str, sentences: Sequence[str], ok: bool,
                           "representation already produced for every other metric -- never a "
                           "fresh, separate fit on just the two snippets, which degenerates (see "
                           "the module docstring)",
-        }, warning=note)
+        }, details=[{"method": note}])
 
 
 def _representation_findings(rep: str, analysis: DocumentAnalysis, config: Mapping[str, Any]

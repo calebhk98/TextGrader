@@ -575,3 +575,14 @@ def test_a_coupling_correlation_needs_enough_pairs_and_carries_its_interval():
     assert low == pytest.approx(0.3392, abs=1e-3)
     assert high == pytest.approx(0.6323, abs=1e-3)
     assert cs._pearson_interval(1.0, 50) is None
+
+
+def test_the_shuffle_control_is_exact_and_stable_for_a_short_story():
+    from textgrader.metrics.conversation_suite import _shuffle_contrast
+    pairs = [(f"prior {i} alpha", f"reply {i} alpha") for i in range(12)]
+    score = lambda a, b: len(set(a.split()) & set(b.split()))
+    first = _shuffle_contrast(pairs, score, seed=1)
+    assert first["control_method"] == "all other priors"
+    # The seed no longer changes the control when every partner is scored.
+    assert _shuffle_contrast(pairs, score, seed=99)["control_rate"] == first["control_rate"]
+    assert first["real_rate"] == 2.0 and first["control_rate"] == 1.0  # adjacency adds the shared number

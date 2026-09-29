@@ -398,6 +398,27 @@ def betweenness_centralization(module: Any, graph: Any, *, seed: int,
     return centralization, settings
 
 
+def _canonical_order(graph: Any) -> Any:
+    """The same graph with nodes and edges inserted in sorted order.
+
+    Louvain is seeded, but its result also depends on the order it visits
+    nodes, which is insertion order.  Graphs built from sets of strings
+    (entities, names, lemmas) insert in hash order, which changes with
+    ``PYTHONHASHSEED``: the same chapter's entity-graph modularity read 0.193
+    under one seed and 0.200 under another, so neither a rebuilt profile nor a
+    parallel build could reproduce it.
+    """
+    canonical = graph.__class__()
+    canonical.add_nodes_from(sorted(graph.nodes(data=True), key=lambda item: repr(item[0])))
+    edges = []
+    for a, b, data in graph.edges(data=True):
+        if not graph.is_directed() and repr(b) < repr(a):
+            a, b = b, a
+        edges.append((a, b, data))
+    canonical.add_edges_from(sorted(edges, key=lambda item: (repr(item[0]), repr(item[1]))))
+    return canonical
+
+
 def community_detection(module: Any, graph: Any, *, seed: int = DEFAULT_COMMUNITY_SEED,
                         weighted: bool = True) -> dict[str, Any]:
     """Louvain communities, modularity, and community-size entropy, seeded.
@@ -419,7 +440,7 @@ def community_detection(module: Any, graph: Any, *, seed: int = DEFAULT_COMMUNIT
                "algorithm": algorithm, "seed": seed}
     weight_key = "weight" if weighted else None
     communities = module.algorithms.community.louvain_communities(
-        graph, weight=weight_key, seed=seed)
+        _canonical_order(graph), weight=weight_key, seed=seed)
     modularity = module.algorithms.community.modularity(graph, communities, weight=weight_key)
     sizes = [len(c) for c in communities]
     total = sum(sizes)

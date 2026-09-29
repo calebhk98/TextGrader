@@ -91,6 +91,10 @@
     "punctuation": {
       "enabled": true
     },
+    "word_rates": {
+      "enabled": true,
+      "overuse_limit": 25
+    },
     "length_quantiles": {
       "enabled": true
     },

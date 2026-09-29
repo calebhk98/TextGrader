@@ -279,7 +279,10 @@ def test_bm25_is_never_reported_as_cosine():
     adjacent = by_id[f"{PREFIX}bm25_adjacent_sentence"]
     assert adjacent["unit"] == "bm25_score"
     assert adjacent["distribution"]["scale"] == "unbounded"
-    assert "UNBOUNDED" in adjacent["warning"]
+    # The scale note describes the method, not a problem with the text, so it
+    # travels in details rather than as a warning on every successful run.
+    assert any("UNBOUNDED" in item.get("method", "") for item in adjacent["details"])
+    assert adjacent["warning"] is None
 
 
 # --------------------------------------------------------------------- overlap

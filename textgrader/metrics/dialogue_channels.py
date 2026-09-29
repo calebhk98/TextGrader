@@ -39,12 +39,12 @@ sentences separately from the whole text.
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any, Mapping
 
 from ..document import DocumentAnalysis
 from ..stats import summarize
 from .common import FAST, finding, option
+from .punctuation import MARKS, mark_counts
 
 FAMILY = "dialogue"
 COST = FAST
@@ -57,10 +57,9 @@ UNIT_SENSITIVE = False
 TTR_MIN_SAMPLE = 3
 DEFAULT_TTR_WINDOW = 200
 
-PUNCTUATION_MARKS = {
-    ";": "semicolon", ":": "colon", "(": "parenthesis", "…": "ellipsis",
-    "!": "exclamation", "?": "question", "—": "em_dash", "–": "en_dash",
-}
+#: The same marks as ``punctuation``, counted the same way (``--`` is a dash,
+#: ``...`` an ellipsis), so the two channels and the whole-text rate agree.
+PUNCTUATION_MARKS = MARKS
 
 
 def _window_ttr(tokens: list[str], window: int) -> list[float]:
@@ -88,8 +87,7 @@ def _punctuation_rate(view: DocumentAnalysis) -> tuple[float | None, dict[str, f
     words = view.word_count
     if not words:
         return None, {}
-    counts = Counter(view.text)
-    per_mark = {name: 1000.0 * counts.get(char, 0) / words for char, name in PUNCTUATION_MARKS.items()}
+    per_mark = {name: 1000.0 * count / words for name, count in mark_counts(view.text).items()}
     return sum(per_mark.values()), per_mark
 
 

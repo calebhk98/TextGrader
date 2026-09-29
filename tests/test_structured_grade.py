@@ -51,7 +51,8 @@ def test_missing_profile_does_not_use_an_implicit_fallback(tmp_path, base_config
 def test_zero_mad_corpus_does_not_make_every_difference_an_outlier(tmp_path, base_config):
     # A discrete metric over a small corpus has MAD 0. Calling any difference
     # an outlier there produced confident nonsense; the IQR, then the empirical
-    # range, then an explicit refusal, are the fallbacks.
+    # range, are the fallbacks. A corpus with no variation at all makes its
+    # constant the target, and this document matches it.
     profile = {"corpus_name": "flat", "comparison_unit": "book",
                "distributions": {"wps": {"values": [10.0] * 20}}}
     (tmp_path / "flat.json").write_text(json.dumps(profile), encoding="utf-8")
@@ -61,7 +62,7 @@ def test_zero_mad_corpus_does_not_make_every_difference_an_outlier(tmp_path, bas
     report = grade.analyze(source, {**base_config, "corpus_profile": "flat.json"})
     item = next(item for item in report.results if item.metric_id == "prose.wps")
     assert item.status_type is not StatusType.CORPUS_OUTLIER
-    assert item.corpus["method"] == "insufficient variation"
+    assert item.corpus["method"] == "constant"
 
 
 def test_crashed_child_is_counted_as_internal_error():

@@ -245,3 +245,31 @@ def test_a_custom_config_reaches_the_bundled_reports(tmp_path, monkeypatch):
     config = {"_config_dir": str(tmp_path), "_config_path": str(tmp_path / "mine.json")}
     grade.run_bundled_measure("register", tmp_path / "draft.md", config)
     assert recorded["config"] == str(tmp_path / "mine.json")
+
+
+def test_text_output_states_the_corpus_target_beside_each_compared_value():
+    corpus = {"corpus_min": 3.9, "corpus_p10": 4.07, "corpus_p25": 4.15, "corpus_median": 4.23,
+              "corpus_p75": 4.33, "corpus_p90": 4.45, "corpus_max": 4.6,
+              "percentile": 98.7, "direction": "high"}
+    assert grade._reference_line(corpus) == (
+        "corpus min 3.90 | p10 4.07 | p25 4.15 | median 4.23 | p75 4.33 | p90 4.45 | max 4.60; "
+        "this text is at the 99th percentile (high)")
+    # Withheld comparisons still show where the corpus sits, without a percentile.
+    assert grade._reference_line({"corpus_median": 4446.0}) == "corpus median 4446.00"
+    assert grade._reference_line(None) == ""
+    assert grade._reference_line({"corpus_median": None}) == ""
+
+
+def test_comparison_reports_the_corpus_quartiles_and_extremes():
+    from textgrader.stats import compare
+    corpus = compare(5.0, list(range(1, 101))).to_dict()
+    assert corpus["corpus_min"] == 1 and corpus["corpus_max"] == 100
+    assert corpus["corpus_p25"] < corpus["corpus_median"] < corpus["corpus_p75"]
+
+
+def test_text_output_names_a_constant_corpus_value_as_the_target():
+    from textgrader.stats import compare
+    missed = grade._reference_line(compare(2.0, [1.0] * 30).to_dict())
+    assert missed == "corpus: every observation is exactly 1.00, so 1.00 is the target; this text is high"
+    matched = grade._reference_line(compare(1.0, [1.0] * 30).to_dict())
+    assert matched.endswith("this text matches it")

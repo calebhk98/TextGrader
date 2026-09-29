@@ -31,9 +31,11 @@ import hashlib
 import importlib
 import json
 import math
+import multiprocessing
 import os
 import statistics
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -50,9 +52,20 @@ PARSER_VERSION = "2"
 #: words CMUdict knows, and repetition.reuse_longest_approximate_repeated_run
 #: stops where its trailing window stops matching instead of carrying an
 #: unrelated tail on the strength of a verbatim start.
-METRIC_DEFINITION_VERSION = "4"
+#: 5: style.punctuation_em_dash and style.punctuation_ellipsis, and the
+#: dialogue/narration punctuation rates, count the typewriter forms ``--`` and
+#: ``...`` as well as the Unicode characters, so plain-text books no longer
+#: read as using neither.
+#: 6: every lexical.norm_* channel and the affect suite's NRC/Warriner VAD
+#: engines fall back from an inflected token to its headword ("grabbed" ->
+#: "grab"), and the conversation suite's lexical/rare-word entrainment and
+#: response relevance compare against the exact mean over every other
+#: partner (or 32 seeded shuffles on long texts) instead of one shuffle.
+METRIC_DEFINITION_VERSION = "6"
 
 from .core_metrics import measure as core_measure
+from .parallel import (MODEL_WORKER_MEMORY_BYTES, WORKER_MEMORY_BYTES, limit_worker_threads,
+                       resolve_jobs)
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing
 from .metrics import MODEL_METRICS, REGISTRY, is_enabled
 from .stats import quantile_curve, summarize
@@ -191,6 +204,146 @@ def _metric_names(include_parse: bool, include_model: bool,
             and (selection == "all" or is_enabled(metric_config, name))]
 
 
+#: Metric-id prefix of a per-word rate, e.g. ``lexical.word_rate.said``.
+WORD_RATE_PREFIX = "lexical.word_rate."
+#: How many words the per-word rates cover, and the share of observations a
+#: word must occur in to be one of them.
+WORD_RATE_VOCABULARY = 300
+WORD_RATE_MIN_SHARE = 0.5
+
+
+def _word_rate_tables(book_tokens: Sequence[Counter[str]], frequency: Counter[str]
+                      ) -> tuple[dict[str, Any], dict[str, int]]:
+    """Per-observation rates of the corpus's everyday vocabulary, and document frequency.
+
+    The vocabulary is the ``WORD_RATE_VOCABULARY`` most frequent words that
+    occur in at least ``WORD_RATE_MIN_SHARE`` of the observations, so names
+    and one-book topics fall out by dispersion rather than by a rule about
+    what a name looks like.  Ties in frequency break alphabetically, so the
+    vocabulary does not depend on file order.
+    """
+    document_frequency: Counter[str] = Counter()
+    for tokens in book_tokens:
+        document_frequency.update(tokens.keys())
+    needed = math.ceil(WORD_RATE_MIN_SHARE * len(book_tokens)) if book_tokens else 1
+    ranked = sorted((word for word in frequency if document_frequency[word] >= needed),
+                    key=lambda word: (-frequency[word], word))
+    vocabulary = ranked[:WORD_RATE_VOCABULARY]
+    rows = []
+    for tokens in book_tokens:
+        total = sum(tokens.values())
+        rows.append([_stable(1000.0 * tokens[word] / total) if total else 0.0
+                     for word in vocabulary])
+    return ({"vocabulary": vocabulary, "per_book": rows, "unit": "per 1,000 words",
+             "min_share": WORD_RATE_MIN_SHARE},
+            {word: document_frequency[word] for word in sorted(document_frequency)})
+
+
+def _measure_source(path_name: str, relative_name: str, task: Mapping[str, Any]
+                    ) -> dict[str, Any]:
+    """Everything a profile needs from one source file, in a picklable form.
+
+    Runs in a worker process when the build is parallel, and inline when it is
+    not, so both paths compute the same thing.  Anything that depends on the
+    order files are visited in (source ids, frequency totals, feature-profile
+    row alignment) is left to the caller's merge.
+    """
+    path = Path(path_name)
+    raw_bytes = path.read_bytes()
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"corpus source is not UTF-8: {path}") from exc
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    processing = TextProcessing.from_config(task["text_processing"])
+    nlp_settings = NlpSettings.from_config(task["nlp"])
+    document = DocumentAnalysis.from_text(raw, processing=processing,
+                                          nlp_settings=nlp_settings,
+                                          source=relative_name,
+                                          comparison_unit=task["comparison_unit"])
+    # One observation per section rather than per file, so a chapter can be
+    # compared with chapters.  Comparing a 4,000-word chapter against whole
+    # novels measures how books are divided rather than how they are
+    # written, which ``units_comparable`` refuses; splitting is how you
+    # build a corpus it will accept.
+    parts = [(relative_name, document)]
+    if task["split_sections"]:
+        parts = [(f"{relative_name}#{title or index + 1}", view)
+                 for index, (title, view) in enumerate(document.sections)
+                 if view.word_count >= task["min_section_words"]]
+        # A file with no detectable chapter heading must be skipped, not
+        # fall back to itself: adding a whole novel to a corpus of chapters
+        # is the unit contamination this option exists to avoid, and it is
+        # invisible afterwards because the profile records one unit name.
+        if len(parts) < 2:
+            return {"skipped": relative_name, "digest": digest, "parts": []}
+    function_words = importlib.import_module("textgrader.metrics.function_words")
+    measured = []
+    for part_name, analysis in parts:
+        book: dict[str, Any] = {
+            "source_filename": path.name,
+            "source_path": part_name, "source_hash": f"sha256:{digest}",
+            "word_count": analysis.word_count,
+            "sentence_count": analysis.sentence_count,
+            "paragraph_count": analysis.paragraph_count,
+            "mean_sentence_words": (statistics.fmean(analysis.sentence_lengths)
+                                    if analysis.sentence_lengths else None),
+            "mean_paragraph_words": (statistics.fmean(analysis.paragraph_lengths)
+                                     if analysis.paragraph_lengths else None),
+            "mean_word_characters": (statistics.fmean(map(len, analysis.words))
+                                     if analysis.words else None),
+        }
+        if task["include_core_metrics"]:
+            core = core_measure(analysis, floor=1,
+                                lexile_source=task["lexile_frequency_source"])
+            if core:
+                book.update({key: _stable(core[key]) for key in CORE_METRIC_KEYS
+                             if core.get(key) is not None})
+                # Lexile is off unless a frequency source is configured, so
+                # it is written only when one was. Without this the metric
+                # could be enabled on a manuscript and never had a corpus
+                # to compare against: measurable, never comparable.
+                if core.get("lexile") is not None:
+                    book["lexile"] = core["lexile"]
+        errors: dict[str, str] = {}
+        vectors: list[tuple[str, Any]] = []
+        for name, module_name, defaults in task["wanted"]:
+            setting = task["metric_settings"].get(name, {})
+            options = dict(defaults)
+            if isinstance(setting, Mapping):
+                options.update({key: value for key, value in setting.items()
+                                if key != "enabled" and not key.startswith("_")})
+            try:
+                module = importlib.import_module(f"textgrader.metrics.{module_name}")
+                findings = module.measure(analysis, config=options, profile=None)
+            except Exception as exc:
+                errors[name] = f"{type(exc).__name__}: {exc}"
+                continue
+            for finding in findings or []:
+                value = finding.get("value")
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    book[finding["metric_id"]] = _stable(value)
+            # A metric that needs more than one number per book -- an
+            # embedding, a transition table, a frequency vector -- caches it
+            # by exposing profile_vector(analysis, config).  Only a scalar
+            # fits in a book row, which is what kept those measurements
+            # out of the profile and forced them to be within-document.
+            builder = getattr(module, "profile_vector", None)
+            if callable(builder):
+                try:
+                    vector = builder(analysis, options)
+                except Exception as exc:
+                    errors[f"{name}.profile_vector"] = f"{type(exc).__name__}: {exc}"
+                    vector = None
+                if vector:
+                    vectors.append((name, vector))
+        measured.append({"relative_name": part_name, "book": book,
+                         "tokens": Counter(analysis.tokens), "metric_errors": errors,
+                         "vectors": vectors, "items": _item_values(analysis),
+                         "function_words": function_words.vector(analysis.text)})
+    return {"skipped": None, "digest": digest, "parts": measured}
+
+
 def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local corpus",
                   manifest: Mapping[str, Any] | None = None, built_at: str | None = None,
                   preprocessing: Mapping[str, Any] | None = None,
@@ -206,6 +359,8 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                   include_model_metrics: bool = False,
                   metric_selection: str = "auto",
                   progress=None,
+                  jobs: str | int | None = "auto",
+                  on_jobs=None,
                   # ---- Task 24: additive reference-profile metadata --------
                   # None of these change what is measured; they are recorded
                   # so a profile used as one alias of several under
@@ -245,6 +400,17 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     Building a profile to ship wants ``"all"``; a project profiling its own
     corpus for its own enabled metrics wants ``"enabled"`` and should not pay
     for suites it has switched off.
+
+    ``jobs`` sets how many worker processes measure files at once: ``"auto"``
+    (the default) takes the smallest of the CPUs this process may use, the
+    workers available memory can hold and the number of files (see
+    :mod:`textgrader.parallel`); ``1`` measures in this process.  Every
+    worker, and the serial path, runs its math single-threaded, and results
+    are merged in file order, so the profile is byte-identical whatever
+    ``jobs`` is.  Workers are spawned, which re-imports the calling script: a
+    script that calls this with more than one job needs the usual
+    ``if __name__ == "__main__":`` guard.  ``on_jobs(count, reason)`` is told
+    the worker count chosen.
     """
 
     files = _source_files(inputs)
@@ -257,8 +423,7 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     # working; ``text_processing`` is what the runtime configuration calls it.
     settings = dict(preprocessing or {})
     settings.update(text_processing or {})
-    processing = TextProcessing.from_config(settings)
-    nlp_settings = NlpSettings.from_config(nlp)
+    processing = TextProcessing.from_config(settings)  # validated here, before any worker starts
     metric_settings = dict(metrics or {})
     wanted = _metric_names(include_parse_metrics, include_model_metrics,
                            metrics, metric_selection)
@@ -278,119 +443,80 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
     metric_errors: dict[str, str] = {}
     skipped: list[str] = []
     pooled: dict[str, list[float]] = {name: [] for name in ITEM_SOURCES}
+    book_tokens: list[Counter[str]] = []
 
-    for _, path, relative_name in files:
-        raw_bytes = path.read_bytes()
-        try:
-            raw = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError(f"corpus source is not UTF-8: {path}") from exc
-        digest = hashlib.sha256(raw_bytes).hexdigest()
-        document = DocumentAnalysis.from_text(raw, processing=processing,
-                                              nlp_settings=nlp_settings,
-                                              source=relative_name,
-                                              comparison_unit=comparison_unit)
-        # One observation per section rather than per file, so a chapter can be
-        # compared with chapters.  Comparing a 4,000-word chapter against whole
-        # novels measures how books are divided rather than how they are
-        # written, which ``units_comparable`` refuses; splitting is how you
-        # build a corpus it will accept.
-        parts = [(relative_name, document)]
-        if split_sections:
-            parts = [(f"{relative_name}#{title or index + 1}", view)
-                     for index, (title, view) in enumerate(document.sections)
-                     if view.word_count >= min_section_words]
-            # A file with no detectable chapter heading must be skipped, not
-            # fall back to itself: adding a whole novel to a corpus of chapters
-            # is the unit contamination this option exists to avoid, and it is
-            # invisible afterwards because the profile records one unit name.
-            if len(parts) < 2:
-                skipped.append(relative_name)
-                continue
-        for relative_name, analysis in parts:
+    task = {"text_processing": settings, "nlp": nlp, "comparison_unit": comparison_unit,
+            "split_sections": split_sections, "min_section_words": min_section_words,
+            "include_core_metrics": include_core_metrics,
+            "lexile_frequency_source": lexile_frequency_source,
+            # Each metric's module and defaults travel with the task, so a
+            # worker needs no registry of its own: one registered at runtime
+            # by the caller is measured the same way in a worker as inline.
+            "wanted": [(name, REGISTRY[name].module, dict(REGISTRY[name].defaults))
+                       for name in wanted],
+            "metric_settings": metric_settings}
+
+    def merge(path: Path, measured: dict[str, Any]) -> None:
+        """Fold one file's measurements in, in file order, exactly as a serial build does."""
+        if measured["skipped"]:
+            skipped.append(measured["skipped"])
+            return
+        book = None
+        for part in measured["parts"]:
+            relative_name = part["relative_name"]
             item_meta = entries.get(relative_name, entries.get(path.name, {}))
             if not isinstance(item_meta, dict):
                 raise ValueError(f"manifest entry for {relative_name!r} must be an object")
-            base_id = str(item_meta.get("id") or f"{path.stem}-{digest[:12]}")
+            base_id = str(item_meta.get("id") or f"{path.stem}-{measured['digest'][:12]}")
             used_ids[base_id] += 1
             source_id = base_id if used_ids[base_id] == 1 else f"{base_id}-{used_ids[base_id]}"
-            frequency.update(analysis.tokens)
+            frequency.update(part["tokens"])
             author = item_meta.get("author")
             if author:
-                author_frequency.setdefault(str(author), Counter()).update(analysis.tokens)
-            book = {
-                "source_id": source_id, "source_filename": path.name,
-                "source_path": relative_name, "source_hash": f"sha256:{digest}",
-                "word_count": analysis.word_count,
-                "sentence_count": analysis.sentence_count,
-                "paragraph_count": analysis.paragraph_count,
-                "mean_sentence_words": (statistics.fmean(analysis.sentence_lengths)
-                                        if analysis.sentence_lengths else None),
-                "mean_paragraph_words": (statistics.fmean(analysis.paragraph_lengths)
-                                         if analysis.paragraph_lengths else None),
-                "mean_word_characters": (statistics.fmean(map(len, analysis.words))
-                                         if analysis.words else None),
-                "metadata": {key: value for key, value in item_meta.items()
-                             if key not in {"id", "filename", "path"}},
-            }
-            if include_core_metrics:
-                core = core_measure(analysis, floor=1,
-                                    lexile_source=lexile_frequency_source)
-                if core:
-                    book.update({key: _stable(core[key]) for key in CORE_METRIC_KEYS
-                                 if core.get(key) is not None})
-                    # Lexile is off unless a frequency source is configured, so
-                    # it is written only when one was. Without this the metric
-                    # could be enabled on a manuscript and never had a corpus
-                    # to compare against: measurable, never comparable.
-                    if core.get("lexile") is not None:
-                        book["lexile"] = core["lexile"]
-            for name in wanted:
-                spec = REGISTRY[name]
-                setting = metric_settings.get(name, {})
-                options = dict(spec.defaults)
-                if isinstance(setting, Mapping):
-                    options.update({key: value for key, value in setting.items()
-                                    if key != "enabled" and not key.startswith("_")})
-                try:
-                    module = importlib.import_module(f"textgrader.metrics.{spec.module}")
-                    findings = module.measure(analysis, config=options, profile=None)
-                except Exception as exc:
-                    metric_errors[name] = f"{type(exc).__name__}: {exc}"
-                    continue
-                for finding in findings or []:
-                    value = finding.get("value")
-                    if isinstance(value, (int, float)) and not isinstance(value, bool):
-                        book[finding["metric_id"]] = _stable(value)
-                # A metric that needs more than one number per book -- an
-                # embedding, a transition table, a frequency vector -- caches it
-                # by exposing profile_vector(analysis, config).  Only a scalar
-                # fits in a book row, which is what kept those measurements
-                # out of the profile and forced them to be within-document.
-                builder = getattr(module, "profile_vector", None)
-                if callable(builder):
-                    try:
-                        vector = builder(analysis, options)
-                    except Exception as exc:
-                        metric_errors[f"{name}.profile_vector"] = f"{type(exc).__name__}: {exc}"
-                        vector = None
-                    if vector:
-                        rows = feature_profiles.setdefault(name, [])
-                        # Row i must describe books[i].  A book whose vector was
-                        # skipped or failed gets an empty placeholder, because
-                        # appending only on success silently shifts every later
-                        # row and turns "nearest reference book" into a wrong
-                        # answer rather than a missing one.
-                        while len(rows) < len(books):
-                            rows.append({})
-                        rows.append(vector)
-            for name, values in _item_values(analysis).items():
+                author_frequency.setdefault(str(author), Counter()).update(part["tokens"])
+            book = {"source_id": source_id, **part["book"],
+                    "metadata": {key: value for key, value in item_meta.items()
+                                 if key not in {"id", "filename", "path"}}}
+            metric_errors.update(part["metric_errors"])
+            for name, vector in part["vectors"]:
+                rows = feature_profiles.setdefault(name, [])
+                # Row i must describe books[i].  A book whose vector was
+                # skipped or failed gets an empty placeholder, because
+                # appending only on success silently shifts every later
+                # row and turns "nearest reference book" into a wrong
+                # answer rather than a missing one.
+                while len(rows) < len(books):
+                    rows.append({})
+                rows.append(vector)
+            for name, values in part["items"].items():
                 pooled[name].extend(values)
-            function_words = importlib.import_module("textgrader.metrics.function_words")
-            feature_profiles["function_words"].append(function_words.vector(analysis.text))
+            feature_profiles["function_words"].append(part["function_words"])
             books.append(book)
-        if progress:
+            book_tokens.append(part["tokens"])
+        if progress and book is not None:
             progress(relative_name, book)
+
+    job_count, job_reason = resolve_jobs(jobs, len(files), per_worker=(
+        MODEL_WORKER_MEMORY_BYTES if include_model_metrics else WORKER_MEMORY_BYTES))
+    if on_jobs:
+        on_jobs(job_count, job_reason)
+    # One math thread per process in every mode; see limit_worker_threads.
+    limit_worker_threads(1)
+    if job_count == 1:
+        for _, path, relative_name in files:
+            merge(path, _measure_source(str(path), relative_name, task))
+    else:
+        # Spawned, not forked: a forked child inherits whatever threads the
+        # parent's libraries started, which can deadlock.  Results are merged
+        # in file order, so the profile does not depend on which worker
+        # finished first.
+        context = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=job_count, mp_context=context,
+                                 initializer=limit_worker_threads, initargs=(1,)) as pool:
+            futures = [pool.submit(_measure_source, str(path), relative_name, task)
+                       for _, path, relative_name in files]
+            for (_, path, _name), future in zip(files, futures):
+                merge(path, future.result())
 
     for name, rows in feature_profiles.items():
         while len(rows) < len(books):
@@ -416,6 +542,10 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
                        and not isinstance(book.get(key), bool)})
     distributions.update({key: _distribution([book[key] for book in books if key in book])
                           for key in measured})
+    word_rates, word_document_frequency = _word_rate_tables(book_tokens, frequency)
+    distributions.update({f"{WORD_RATE_PREFIX}{word}": _distribution([row[i] for row in
+                                                                      word_rates["per_book"]])
+                          for i, word in enumerate(word_rates["vocabulary"])})
     effective = {name: {**REGISTRY[name].defaults,
                         **{key: value for key, value in
                            (metric_settings.get(name) or {}).items() if key != "enabled"}}
@@ -471,6 +601,16 @@ def build_profile(inputs: Iterable[str | Path], *, corpus_name: str = "local cor
         "author_word_frequency_total": {
             author: sum(counter.values()) for author, counter in sorted(author_frequency.items())},
         "feature_profiles": feature_profiles,
+        # The author's everyday vocabulary: the most frequent words that occur
+        # in at least half of the observations, with each observation's rate
+        # per 1,000 tokens, row i describing books[i].  Kept out of the book
+        # rows because every consumer that scans a book row's keys
+        # (metric_relationships, feature_matrix, reference_fit) would
+        # otherwise take on hundreds of word columns it was never built for.
+        "word_rates": word_rates,
+        # How many observations each word occurs in: a word in 3 of 75
+        # chapters is a name or a topic, one in 70 is a habit.
+        "word_document_frequency": word_document_frequency,
     }
 
 
@@ -505,6 +645,16 @@ def without_source(profile: dict, source_id: str) -> dict:
         summary["values"] = sorted(values)
         distributions[key] = summary
     out["distributions"] = distributions
+
+    rates = profile.get("word_rates")
+    if rates and rates.get("per_book"):
+        rows = [row for position, row in enumerate(rates["per_book"]) if position != index]
+        out["word_rates"] = {**rates, "per_book": rows}
+        for i, word in enumerate(rates["vocabulary"]):
+            values = sorted(row[i] for row in rows)
+            summary = summarize(values)
+            summary["values"] = values
+            distributions[f"{WORD_RATE_PREFIX}{word}"] = summary
 
     features = profile.get("feature_profiles", {})
     out["feature_profiles"] = {
@@ -560,6 +710,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model-metrics", action="store_true",
                         help="also profile the semantic metrics, which download and run a "
                              "sentence-embedding model over every book")
+    parser.add_argument("--jobs", default="auto",
+                        help="worker processes: 'auto' (default) picks from the CPUs this "
+                             "process may use (affinity and container quota), available "
+                             "memory and the number of files; 1 builds serially")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--source", default=None,
                         help="Task 24: where this corpus came from, e.g. a dataset name/URL")
@@ -580,6 +734,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.quiet:
             print(f"  measured {name} ({book['word_count']:,} words)")
 
+    def on_jobs(count, reason):
+        if not args.quiet:
+            print(f"building with {count} worker process(es): {reason}")
+
     profile = build_profile(
         args.inputs, corpus_name=args.name, manifest=manifest,
         text_processing=config.get("text_processing"), nlp=config.get("nlp"),
@@ -592,6 +750,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         include_core_metrics=not args.no_core_metrics,
         include_parse_metrics=args.parse_metrics,
         include_model_metrics=args.model_metrics, progress=progress,
+        jobs=args.jobs, on_jobs=on_jobs,
         source=args.source, license_note=args.license_note, language=args.language,
         date_range=args.date_range, genre=args.genre, domain=args.domain,
         dataset_revision=args.dataset_revision)

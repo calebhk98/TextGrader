@@ -29,6 +29,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from .plain_names import describe
+
 
 class StatusType(str, Enum):
     INFORMATIONAL = "informational"
@@ -87,6 +89,11 @@ _ACTION_BY_STATUS = {
 }
 
 
+PRIORITY_CRITICAL, PRIORITY_HIGH, PRIORITY_REVIEW, PRIORITY_IN_RANGE = (
+    "critical", "high", "review", "in range")
+PRIORITIES = (PRIORITY_CRITICAL, PRIORITY_HIGH, PRIORITY_REVIEW, PRIORITY_IN_RANGE)
+
+
 @dataclass
 class MetricResult:
     metric_id: str
@@ -134,11 +141,41 @@ class MetricResult:
         elif not isinstance(self.action, Action):
             self.action = Action(self.action)
 
+    def priority(self) -> Optional[str]:
+        """How far outside the corpus this value sits, for results compared with one.
+
+        ``critical``: past the robust outlier distance (or a missed constant).
+        ``high``: outside the corpus's own range, lower or higher than every
+        corpus text.  ``review``: outside the corpus p10-p90 band.
+        ``in range``: inside it.  ``None`` when there was no comparison.
+
+        ``action`` alone cannot carry this: its ``review`` is the robust
+        outlier test, so a value below every text in the corpus but within
+        3.5 robust spreads of the median read as ``informational``, which
+        hides the strongest sign that a text does not belong to the corpus.
+        """
+        corpus = self.corpus or {}
+        if (self.action not in (Action.REVIEW, Action.INFORMATIONAL)
+                or corpus.get("percentile") is None
+                or not isinstance(self.value, (int, float)) or isinstance(self.value, bool)):
+            return None
+        if corpus.get("outlier"):
+            return PRIORITY_CRITICAL
+        low, high = corpus.get("corpus_min"), corpus.get("corpus_max")
+        if low is not None and high is not None and not low <= self.value <= high:
+            return PRIORITY_HIGH
+        p10, p90 = corpus.get("corpus_p10"), corpus.get("corpus_p90")
+        if p10 is not None and p90 is not None and not p10 <= self.value <= p90:
+            return PRIORITY_REVIEW
+        return PRIORITY_IN_RANGE
+
     def to_dict(self):
         data = asdict(self)
         data["status_type"] = self.status_type.value
         data["action"] = self.action.value
         data["polarity"] = self.polarity.value
+        data["priority"] = self.priority()
+        data["plain_name"] = describe(self.metric_id)
         return data
 
 
@@ -153,11 +190,15 @@ class Report:
     #: Set by ``grade.py`` when a benchmark text is configured: which corpus
     #: text this document was measured against, and where it loses.
     benchmark: Optional[Dict[str, Any]] = None
+    #: Set by ``grade.py``: the calibrated authorship score over every
+    #: compared measurement (see ``textgrader.authorship``).
+    authorship: Optional[Dict[str, Any]] = None
 
     def to_dict(self):
         return {"schema_version": self.schema_version, "source": self.source,
                 "corpus_profile": self.corpus_profile,
                 "benchmark": self.benchmark,
+                "authorship": self.authorship,
                 "document": self.document,
                 "results": [result.to_dict() for result in self.results],
                 "summary": self.summary()}
@@ -273,9 +314,13 @@ class Report:
 
         counts = {kind.value: 0 for kind in StatusType}
         actions = {kind.value: 0 for kind in Action}
+        priorities = {tier: 0 for tier in PRIORITIES}
         for result in self.results:
             counts[result.status_type.value] += 1
             actions[result.action.value] += 1
+            tier = result.priority()
+            if tier:
+                priorities[tier] += 1
         review = [item for item in self.results if item.action is Action.REVIEW]
         review.sort(key=lambda item: -(item.severity or 0.0))
         families: dict[str, int] = {}
@@ -285,6 +330,7 @@ class Report:
             "total": len(self.results),
             "by_status_type": counts,
             "by_action": actions,
+            "by_priority": priorities,
             "scorecard": self.scorecard(),
             "maturity": self.maturity(),
             "has_internal_errors": bool(counts[StatusType.INTERNAL_ERROR.value]),
