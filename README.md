@@ -78,6 +78,11 @@ output prints in place of the action:
 | `review` | outside the corpus p10-p90 band |
 | `in range` | inside the p10-p90 band |
 
+Measurements whose names do not say what to change in the prose (spectral,
+recurrence, time-series, automatic-statistic and distribution-test features,
+readability-formula disagreements and a few others) carry a `plain_name`, printed
+as a `means:` line: what the number tracks in the text and which way it moves.
+
 `review` is a direction to move, not a sign that a text does not belong: a
 text drawn from the corpus itself lands outside p10-p90 on about a fifth of
 its measurements by definition. `high` and `critical` are the tiers that

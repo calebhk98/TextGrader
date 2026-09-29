@@ -29,6 +29,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from .plain_names import describe
+
 
 class StatusType(str, Enum):
     INFORMATIONAL = "informational"
@@ -173,6 +175,7 @@ class MetricResult:
         data["action"] = self.action.value
         data["polarity"] = self.polarity.value
         data["priority"] = self.priority()
+        data["plain_name"] = describe(self.metric_id)
         return data
 
 

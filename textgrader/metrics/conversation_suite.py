@@ -334,17 +334,28 @@ def _coordination(reply_pairs: Sequence[tuple[Mapping, Mapping]],
     return rows, len(reply_pairs)
 
 
+#: The control used to be a single seeded shuffle.  With the ten-to-twenty
+#: reply pairs of a short story, one draw is a noisy estimate, and every added
+#: or removed turn changes the draw: a revision that left every reply alone
+#: moved the control from 0.195 to 0.065.  Up to this many scores the control
+#: is the exact mean over every non-adjacent partner; past it, the mean of
+#: CONTROL_SHUFFLES seeded shuffles, which bounds the cost on a whole novel.
+EXACT_CONTROL_MAX_SCORES = 20_000
+CONTROL_SHUFFLES = 32
+
+
 def _shuffle_contrast(pairs: Sequence[tuple[Any, Any]],
                       score: Callable[[Any, Any], float], seed: int) -> dict[str, Any] | None:
     """Real adjacent-pair score minus the same score against a shuffled
     partner: how much of an apparent link is adjacency itself, versus two
     turns that would look alike wherever they sat in the book.
 
-    The shuffle is a seeded derangement-or-best-effort of the "prior turn"
-    side only (`items[i]` -- see call sites): every response keeps its own
-    text; only which OTHER turn it is compared against changes, so the
-    control condition asks exactly one question -- "how similar would this
-    reply be to a random other turn instead of the one right before it".
+    Only the "prior turn" side is re-paired (`items[i]` -- see call sites):
+    every response keeps its own text; only which OTHER turn it is compared
+    against changes, so the control condition asks exactly one question --
+    "how similar would this reply be to a random other turn instead of the one
+    right before it".  That expectation is computed exactly over every other
+    prior when affordable, and otherwise averaged over many seeded shuffles.
     """
 
     n = len(pairs)
@@ -353,16 +364,26 @@ def _shuffle_contrast(pairs: Sequence[tuple[Any, Any]],
     priors = [item[0] for item in pairs]
     replies = [item[1] for item in pairs]
     real = [score(priors[i], replies[i]) for i in range(n)]
-    rng = random.Random(seed)
-    order = list(range(n))
-    rng.shuffle(order)
-    for i in range(n):
-        if order[i] == i:
-            j = (i + 1) % n
-            order[i], order[j] = order[j], order[i]
-    control = [score(priors[order[i]], replies[i]) for i in range(n)]
+    if n * (n - 1) <= EXACT_CONTROL_MAX_SCORES:
+        # Every reply against every prior turn except its own: the exact mean
+        # a random re-pairing estimates, with no draw to vary.
+        control = [score(priors[j], replies[i]) for i in range(n) for j in range(n) if j != i]
+        method = "all other priors"
+    else:
+        rng = random.Random(seed)
+        control = []
+        for _ in range(CONTROL_SHUFFLES):
+            order = list(range(n))
+            rng.shuffle(order)
+            for i in range(n):
+                if order[i] == i:
+                    j = (i + 1) % n
+                    order[i], order[j] = order[j], order[i]
+            control.extend(score(priors[order[i]], replies[i]) for i in range(n))
+        method = f"mean of {CONTROL_SHUFFLES} seeded shuffles"
     return {"real_rate": statistics.fmean(real), "control_rate": statistics.fmean(control),
-           "contrast": statistics.fmean(real) - statistics.fmean(control), "n_pairs": n}
+           "contrast": statistics.fmean(real) - statistics.fmean(control), "n_pairs": n,
+           "control_method": method}
 
 
 # -------------------------------------------------------------- text markers

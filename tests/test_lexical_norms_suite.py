@@ -555,3 +555,17 @@ def test_real_books_children_vs_adult_aoa_and_concreteness():
     print(f"Concreteness: Alice={child_conc:.3f}  SecretAgent={adult_conc:.3f}")
     assert child_aoa is not None and adult_aoa is not None
     assert child_conc is not None and adult_conc is not None
+
+
+def test_inflected_forms_fall_back_to_the_headword_the_table_lists():
+    from textgrader.lexicons import lookup
+    table = {"grab": {"arousal": 5.4}, "shake": {"arousal": 5.6}, "run": {"arousal": 6.3},
+             "cry": {"arousal": 4.8}, "heart": {"arousal": 6.2}, "running": {"arousal": 9.0}}
+    assert lookup(table, "grabbed")["arousal"] == 5.4      # doubled consonant
+    assert lookup(table, "shaking")["arousal"] == 5.6      # restored silent e
+    assert lookup(table, "shook")["arousal"] == 5.6        # irregular
+    assert lookup(table, "ran")["arousal"] == 6.3          # irregular
+    assert lookup(table, "cried")["arousal"] == 4.8        # -ied
+    assert lookup(table, "hearts")["arousal"] == 6.2       # plural
+    assert lookup(table, "running")["arousal"] == 9.0      # an exact entry wins
+    assert lookup(table, "banana") is None                 # no guess the table does not list

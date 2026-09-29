@@ -86,7 +86,15 @@ word's dominant lemma; both are kept, as ``aoa`` and ``aoa_lemma``, per rule
 2. ``aoa_lemma`` is looked up by the *same* surface tokens as every other
 channel here, though -- it is the lemma-*aggregated rating value* attached to
 whichever surface form a word takes, not a rating reached by first
-lemmatizing this document's own tokens. A true lemma-normalized lookup (this
+lemmatizing this document's own tokens.
+
+Every channel looks a token up with :func:`textgrader.lexicons.lookup`: the
+surface form when the table lists it, otherwise its headword ("grabbed" ->
+"grab", "shook" -> "shake"), found by suffix rules and an irregular-forms
+table and accepted only if the table lists it.  Surface-only lookup rated
+about a fifth of a past-tense story's tokens and almost none of its verbs.
+
+A true lemma-normalized lookup (this
 document's tokens run through a lemmatizer before the table lookup) is kept
 behind ``features.lemma_lookup`` (off by default) for exactly the reason
 ``stylometry_suite``'s ``pos_dependency`` and ``coherence_suite``'s
@@ -294,7 +302,7 @@ def _covered(words: Sequence[str], table: Mapping[str, Mapping[str, float]], dim
             ) -> list[float]:
     out = []
     for word in words:
-        entry = table.get(word)
+        entry = lexicons.lookup(table, word)
         if entry is not None and dimension in entry:
             out.append(entry[dimension])
     return out
@@ -358,7 +366,7 @@ def _channel_findings(channel: Channel, tokens: Sequence[str], type_counts: Coun
     # earlier profiling bottleneck (this loop, called 300,000+ times over 28
     # channels' sentence/paragraph breakdowns, measured as this suite's
     # single largest cost on a 150,000-word novel before the fix).
-    scores: list[float | None] = [(table.get(word) or {}).get(channel.dimension)
+    scores: list[float | None] = [(lexicons.lookup(table, word) or {}).get(channel.dimension)
                                   for word in tokens]
     values = [value for value in scores if value is not None]
     matched = len(values)
@@ -437,7 +445,7 @@ def _channel_findings(channel: Channel, tokens: Sequence[str], type_counts: Coun
 
     type_values = []
     for word, _count in type_counts.items():
-        entry = table.get(word)
+        entry = lexicons.lookup(table, word)
         if entry is not None and channel.dimension in entry:
             type_values.append(entry[channel.dimension])
     type_total = len(type_counts)

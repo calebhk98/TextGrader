@@ -54,7 +54,12 @@ PARSER_VERSION = "2"
 #: dialogue/narration punctuation rates, count the typewriter forms ``--`` and
 #: ``...`` as well as the Unicode characters, so plain-text books no longer
 #: read as using neither.
-METRIC_DEFINITION_VERSION = "5"
+#: 6: every lexical.norm_* channel and the affect suite's NRC/Warriner VAD
+#: engines fall back from an inflected token to its headword ("grabbed" ->
+#: "grab"), and the conversation suite's lexical/rare-word entrainment and
+#: response relevance compare against the exact mean over every other
+#: partner (or 32 seeded shuffles on long texts) instead of one shuffle.
+METRIC_DEFINITION_VERSION = "6"
 
 from .core_metrics import measure as core_measure
 from .document import COMPARISON_UNITS, DocumentAnalysis, NlpSettings, TextProcessing

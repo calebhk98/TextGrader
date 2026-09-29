@@ -33,6 +33,7 @@ from textgrader.core_metrics import measure as core_measure
 from textgrader.metrics import REGISTRY, is_enabled
 from textgrader.reports import REPORTS, VIA_GRADE_ENV_VAR
 from textgrader.results import Action, MetricResult, Polarity, Report, StatusType
+from textgrader.plain_names import describe
 from textgrader.rules import compile_rules
 from textgrader import stats
 
@@ -1161,6 +1162,9 @@ def render(report):
         flagged = tier in ("critical", "high", "review") or result.action.value == "rule_violation"
         marker = "E" if result.action.value == "error" else "!" if flagged else " "
         print(f" {marker} {result.metric_id:<44} {value:>10}{unit:<22} [{label}]")
+        plain = describe(result.metric_id)
+        if plain:
+            print(f"      means: {plain}")
         reference = _reference_line(result.corpus)
         if reference:
             print(f"      {reference}")
