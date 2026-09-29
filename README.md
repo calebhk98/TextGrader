@@ -211,6 +211,15 @@ judged by a symmetric rule, so the whole upper tail read as outlying.
 `--parse-metrics` and `--model-metrics` also profile the spaCy and embedding
 metrics. They are opt-in because of what they cost per book.
 
+Profiles build in parallel. `--jobs auto` (the default) runs as many worker
+processes as the smallest of: the CPUs this process may use (its affinity mask
+and any container CPU quota, not the host's core count), the workers available
+memory can hold (about 2.5 GB each, 4 GB with `--model-metrics`), and the number
+of files. `--jobs 1` builds serially and `--jobs N` sets the count. Every worker
+runs its math single-threaded and results merge in file order, so the profile is
+byte-identical whatever the job count or machine; on a 4-CPU machine, 16 chapters
+with parse and embedding metrics built in 153 s against 312 s serially.
+
 The bundled `data/prose_reference.json` is 50 public-domain novels from
 Gutenberg and Standard Ebooks, built with the `text_processing` settings in
 this repository's `config.json` and recorded in the profile so a mismatch with
